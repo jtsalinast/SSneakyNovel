@@ -11,3 +11,4 @@ supersneakynovel
 dist/
 build/
 *.log
+.next/
