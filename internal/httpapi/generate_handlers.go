@@ -150,7 +150,7 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 			b.WriteString("【文学母题】" + m + "（请将其融入人物、情节与意象）\n")
 		}
 		b.WriteString("【故事简介】\n" + sc.Brief + "\n")
-		if t := strings.TrimSpace(sc.Type); t != "" {
+		if t := strings.TrimSpace(sc.EffectiveStoryType()); t != "" {
 			b.WriteString("【类型】" + t + "\n")
 		}
 		if t := strings.TrimSpace(sc.Title); t != "" {
@@ -204,7 +204,7 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 			b.WriteString("[LITERARY MOTIF] " + m + " (weave it into characters, plot and imagery)\n")
 		}
 		b.WriteString("[STORY BRIEF]\n" + sc.Brief + "\n")
-		if t := strings.TrimSpace(sc.Type); t != "" {
+		if t := strings.TrimSpace(sc.EffectiveStoryType()); t != "" {
 			b.WriteString("[GENRE] " + t + "\n")
 		}
 		if t := strings.TrimSpace(sc.Title); t != "" {
@@ -271,7 +271,7 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 		b.WriteString("You are a literary consultant. Based on the work parameters below, propose " + fmt.Sprint(motifSeedCount) + " distinct literary motifs suitable for this work.\n")
 	}
 	wroteParams := false
-	if t := strings.TrimSpace(sc.Type); t != "" {
+	if t := strings.TrimSpace(sc.EffectiveStoryType()); t != "" {
 		if zh {
 			b.WriteString("类型：" + t + "\n")
 		} else {
@@ -404,7 +404,7 @@ func (h *Handlers) generateBriefFromParams(ctx context.Context, sc *config.Story
 			b.WriteString(enLbl + ": " + v + "\n")
 		}
 	}
-	addPair("类型", "Genre", sc.Type)
+	addPair("类型", "Genre", sc.EffectiveStoryType())
 	addPair("子类型", "Subgenre", sc.Subgenre)
 	addPair("书名/工作名", "Working title", sc.Title)
 	addPair("主题/母题", "Theme / motif", sc.EffectiveTheme())
@@ -628,9 +628,9 @@ func (h *Handlers) generateCharacters(ctx context.Context, sc *config.StoryConfi
 		prompt += "\nDesign 4-7 core characters (protagonist, antagonist, key supporting roles). For each provide name, age, appearance, personality, background, motivation, abilities, notes (may be empty)."
 	}
 	arcsOn := sc.CharacterArcsEnabled
-	genreKey := config.MatchGenreKey(sc.Type + " " + sc.Subgenre) // composite keys (e.g. scifi:steampunk) supported by presets
+	genreKey := config.MatchGenreKey(sc.EffectiveStoryType() + " " + sc.Subgenre) // composite keys (e.g. scifi:steampunk) supported by presets
 	if genreKey == "" {
-		genreKey = config.MatchAnimeModifierKey(sc.Type + " " + sc.Subgenre) // anime/manhwa/game modifiers carry their own field presets
+		genreKey = config.MatchAnimeModifierKey(sc.EffectiveStoryType() + " " + sc.Subgenre) // anime/manhwa/game modifiers carry their own field presets
 	}
 	extraKeys, extraDesc := config.GenreCharacterExtraFields(genreKey, zh)
 	// Subgenre presets refine (and take precedence over) the parent-genre fields.
@@ -1102,19 +1102,21 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 		structureHints[k] = pick(v)
 	}
 	h.writeJSON(w, 200, map[string]any{
-		"conflict_scales":     config.GenreConflictScales,
-		"protagonist_types":   config.GenreProtagonistTypes,
-		"specific_settings":   config.GenreSpecificSettings,
-		"gender_bias_options": []string{"random", "balanced", "male", "female"},
-		"subgenre_presets":    config.SubgenrePresetKeys,
-		"subgenre_hints":      subgenreHints,
-		"structure_hints":     structureHints,
-		"parent_genres":       config.ParentGenreKeys,
-		"structure_keys":    config.LengthKeys,
+		"conflict_scales":              config.GenreConflictScales,
+		"protagonist_types":            config.GenreProtagonistTypes,
+		"specific_settings":            config.GenreSpecificSettings,
+		"gender_bias_options":          []string{"random", "balanced", "male", "female"},
+		"subgenre_presets":             config.SubgenrePresetKeys,
+		"subgenre_hints":               subgenreHints,
+		"structure_hints":              structureHints,
+		"parent_genres":                config.ParentGenreKeys,
+		"length_keys":                  config.LengthKeys,
 		"structural_options_by_length": config.StructureKeysByLength,
 		"setting_options_by_genre":     config.GenreSpecificSettingOptions,
 		"tone_options_by_genre":        config.GenreToneOptions,
-		"subgenres_by_genre":  config.SubgenresByParentGenre,
-		"audience_keys":       config.AudienceKeys,
+		"conflicts_by_parent_genre":    config.GenreConflictScales,
+		"protagonists_by_parent_genre": config.GenreProtagonistTypes,
+		"subgenres_by_genre":           config.SubgenresByParentGenre,
+		"audience_keys":                config.AudienceKeys,
 	})
 }

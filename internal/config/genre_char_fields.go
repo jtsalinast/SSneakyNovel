@@ -346,6 +346,21 @@ var ParentGenreKeys = []string{
 	"historical", "western", "adventure", "literary",
 }
 
+// EffectiveGenreType returns the story type string used by prompts and option
+// lookups: when the UI select picked a canonical parent-genre key, that key is
+// authoritative; otherwise fall back to the legacy free-form Type field.
+func EffectiveGenreType(parentGenre, freeType string) string {
+	p := strings.ToLower(strings.TrimSpace(parentGenre))
+	if p != "" && p != "other" {
+		for _, k := range ParentGenreKeys {
+			if k == p {
+				return k
+			}
+		}
+	}
+	return strings.TrimSpace(freeType)
+}
+
 // MatchParentGenreKey resolves a free-form story Type (or an explicit parent
 // genre key coming from the UI select) to one of ParentGenreKeys, or "" when
 // nothing matches. Exact key match wins first (the UI stores canonical keys),
@@ -417,16 +432,16 @@ func GenreListKey(storyType, parentKey string) string {
 // (adapted from NovelWriter's populate_subgenres). The UI adds a free-text
 // "other" escape hatch on top of these lists.
 var SubgenresByParentGenre = map[string][]string{
-	"fantasy":   {"High Fantasy", "Dark Fantasy", "Urban Fantasy", "Sword and Sorcery", "Mythic Fantasy", "Fairy Tale", "Epic Fantasy", "Progression Fantasy", "Portal Fantasy", "Romantasy", "Wuxia", "Xianxia", "Isekai", "LitRPG", "Dungeon Core"},
-	"scifi":     {"Space Opera", "Hard Sci-Fi", "Cyberpunk", "Time Travel", "Post-Apocalyptic", "Biopunk", "Solarpunk", "Steampunk", "Cli-Fi", "Afrofuturism", "Dystopian", "Superhero", "First Contact"},
-	"mystery":   {"Cozy Mystery", "Hard-boiled Detective", "Police Procedural", "Amateur Sleuth", "Legal Thriller", "Forensic Mystery", "Noir", "Cold Case", "Locked Room", "Historical Puzzle"},
-	"romance":   {"Contemporary Romance", "Historical Romance", "Paranormal Romance", "Romantic Suspense", "Regency Romance", "Romantic Comedy", "Sports Romance", "Mafia Romance", "Fantasy Romance"},
-	"thriller":  {"Espionage Thriller", "Psychological Thriller", "Action Thriller", "Techno-Thriller", "Medical Thriller", "Legal Thriller", "Domestic Thriller", "Political Thriller", "Heist"},
-	"horror":    {"Gothic Horror", "Psychological Horror", "Supernatural Horror", "Body Horror", "Cosmic Horror", "Slasher", "Folk Horror", "Haunted House", "Monster Horror"},
+	"fantasy":    {"High Fantasy", "Dark Fantasy", "Urban Fantasy", "Sword and Sorcery", "Mythic Fantasy", "Fairy Tale", "Epic Fantasy", "Progression Fantasy", "Portal Fantasy", "Romantasy", "Wuxia", "Xianxia", "Isekai", "LitRPG", "Dungeon Core"},
+	"scifi":      {"Space Opera", "Hard Sci-Fi", "Cyberpunk", "Time Travel", "Post-Apocalyptic", "Biopunk", "Solarpunk", "Steampunk", "Cli-Fi", "Afrofuturism", "Dystopian", "Superhero", "First Contact"},
+	"mystery":    {"Cozy Mystery", "Hard-boiled Detective", "Police Procedural", "Amateur Sleuth", "Legal Thriller", "Forensic Mystery", "Noir", "Cold Case", "Locked Room", "Historical Puzzle"},
+	"romance":    {"Contemporary Romance", "Historical Romance", "Paranormal Romance", "Romantic Suspense", "Regency Romance", "Romantic Comedy", "Sports Romance", "Mafia Romance", "Fantasy Romance"},
+	"thriller":   {"Espionage Thriller", "Psychological Thriller", "Action Thriller", "Techno-Thriller", "Medical Thriller", "Legal Thriller", "Domestic Thriller", "Political Thriller", "Heist"},
+	"horror":     {"Gothic Horror", "Psychological Horror", "Supernatural Horror", "Body Horror", "Cosmic Horror", "Slasher", "Folk Horror", "Haunted House", "Monster Horror"},
 	"historical": {"Ancient History", "Medieval", "Renaissance", "Colonial America", "Civil War Era", "World War Era", "Gold Rush", "Dynastic China"},
-	"western":   {"Traditional Western", "Weird Western", "Space Western", "Modern Western", "Outlaw Western", "Cattle Drive Western", "Frontier Romance"},
-	"adventure": {"Survival", "Expedition", "Swashbuckler", "Nautical", "Picaresque", "Tomb Raiding", "Man vs Nature", "Quest"},
-	"literary":  {"Family Saga", "Coming-of-age", "Historical Literary", "Psychorealism", "Metafiction", "Magical Realism"},
+	"western":    {"Traditional Western", "Weird Western", "Space Western", "Modern Western", "Outlaw Western", "Cattle Drive Western", "Frontier Romance"},
+	"adventure":  {"Survival", "Expedition", "Swashbuckler", "Nautical", "Picaresque", "Tomb Raiding", "Man vs Nature", "Quest"},
+	"literary":   {"Family Saga", "Coming-of-age", "Historical Literary", "Psychorealism", "Metafiction", "Magical Realism"},
 }
 
 // The "|" separators are stripped at init; every list ends with "other" so the

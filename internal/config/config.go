@@ -30,7 +30,7 @@ type Config struct {
 
 type StoryConfig struct {
 	Type                  string `json:"type"`
-	ParentGenre           string `json:"parent_genre,omitempty"`           // 父类型（UI select，取值为 ParentGenreKeys 之一或空；"other" 表示自定义）
+	ParentGenre           string `json:"parent_genre,omitempty"` // 父类型（UI select，取值为 ParentGenreKeys 之一或空；"other" 表示自定义）
 	Title                 string `json:"title"`
 	Subgenre              string `json:"subgenre,omitempty"`               // 子类型（受 Type 约束），借鉴 NovelWriter 的 Genre/Subgenre 参数
 	Theme                 string `json:"theme,omitempty"`                  // 主题
@@ -100,6 +100,13 @@ func (s *StoryConfig) SetCombinedTheme(v string) {
 	if v == "" {
 		s.Motif = ""
 	}
+}
+
+// EffectiveStoryType is the genre string prompts and option lookups should use:
+// the canonical parent-genre key when the UI select picked one, otherwise the
+// legacy free-form Type field.
+func (s *StoryConfig) EffectiveStoryType() string {
+	return EffectiveGenreType(s.ParentGenre, s.Type)
 }
 
 // SettingOptionsForGenre returns the checkbox options for the selected parent

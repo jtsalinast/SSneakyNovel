@@ -129,7 +129,7 @@ func GenerateOutlineBatch(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 		template += "\n\n" + np
 	}
 	data := map[string]string{
-		"Title": preferUserValue(cfg.Story.Title, state.Title), "StoryType": cfg.Story.Type,
+		"Title": preferUserValue(cfg.Story.Title, state.Title), "StoryType": cfg.Story.EffectiveStoryType(),
 		"CorePrompt": state.CorePrompt, "StorySynopsis": synopsis, "OutlineSynopsis": synopsis,
 		"WritingStyle": cfg.Story.WritingStyle, "WritingPOV": cfg.Story.WritingPOV,
 		"ExistingOutline": previous, "NewChapterCount": fmt.Sprint(req.ChapterCount),

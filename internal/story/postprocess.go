@@ -72,7 +72,7 @@ func IsBookFullyAccepted(state *Progress) bool {
 func buildAllSettingsText(cfg *config.Config, settings *ProjectSettings, state *Progress) string {
 	var sb strings.Builder
 	title := preferUserValue(cfg.Story.Title, state.Title)
-	fmt.Fprintf(&sb, "标题：%s\n类型：%s\n写作风格：%s\n", title, cfg.Story.Type, cfg.Story.WritingStyle)
+	fmt.Fprintf(&sb, "标题：%s\n类型：%s\n写作风格：%s\n", title, cfg.Story.EffectiveStoryType(), cfg.Story.WritingStyle)
 	if cfg.Story.WritingPOV != "" {
 		fmt.Fprintf(&sb, "叙述视角：%s\n", cfg.Story.WritingPOV)
 	}

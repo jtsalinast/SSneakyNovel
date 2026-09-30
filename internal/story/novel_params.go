@@ -170,7 +170,7 @@ func novelParametersBlock(cfg *config.Config) string {
 	// preset (isekai, mecha, slice of life, LitRPG-style system flows...) but no
 	// classic genre key resolved, still surface its signature conventions so the
 	// outline/writing honor them — as suggestions, never constraints.
-	if mod := config.MatchAnimeModifierKey(sc.Type + " " + sc.Subgenre); mod != "" {
+	if mod := config.MatchAnimeModifierKey(sc.EffectiveStoryType() + " " + sc.Subgenre); mod != "" {
 		if en {
 			lines = append(lines, "[GENRE MODIFIER] This story uses the \""+mod+"\" anime/manhwa/game convention set: honor its signature tropes, pacing and reader expectations (a suggestion, not a constraint).")
 		} else {
@@ -179,7 +179,7 @@ func novelParametersBlock(cfg *config.Config) string {
 	}
 	// Genre/subgenre flavor: derived from the free-form Type/Subgenre so it also
 	// works for genres without presets; suggestions, never constraints.
-	if g := strings.TrimSpace(sc.Type); g != "" || strings.TrimSpace(sc.Subgenre) != "" {
+	if g := strings.TrimSpace(sc.EffectiveStoryType()); g != "" || strings.TrimSpace(sc.Subgenre) != "" {
 		flavor := strings.TrimSpace(g + " " + sc.Subgenre)
 		if flavor != "" {
 			add("【类型风味】本作属于「"+flavor+"」：请采用该类型/子类型的典型惯例、读者预期与标志性元素（建议方向，不必强制）。",

@@ -118,10 +118,10 @@ func regeneratePendingOutlines(ctx context.Context, apiCfg *config.APIConfig, cf
 	var feedback string
 	if en {
 		feedback = fmt.Sprintf("Story settings updated to: type=%s, writing_style=%s, writing_pov=%s. Adjust the pending chapter outlines so they stay consistent with the new settings and the existing chapters.",
-			cfg.Story.Type, cfg.Story.WritingStyle, cfg.Story.WritingPOV)
+			cfg.Story.EffectiveStoryType(), cfg.Story.WritingStyle, cfg.Story.WritingPOV)
 	} else {
 		feedback = fmt.Sprintf("故事设定已更新为：类型=%s，写作风格=%s，叙述视角=%s。请根据新设定调整待定章节大纲，使其与新设定和已有章节保持一致。",
-			cfg.Story.Type, cfg.Story.WritingStyle, cfg.Story.WritingPOV)
+			cfg.Story.EffectiveStoryType(), cfg.Story.WritingStyle, cfg.Story.WritingPOV)
 	}
 
 	userPrompt := config.RenderPrompt(cfg.Prompts.OutlineRevision, map[string]string{
