@@ -29,30 +29,53 @@ type Config struct {
 }
 
 type StoryConfig struct {
-	Type                  string `json:"type"`
-	ParentGenre           string `json:"parent_genre,omitempty"` // 父类型（UI select，取值为 ParentGenreKeys 之一或空；"other" 表示自定义）
-	Title                 string `json:"title"`
-	Subgenre              string `json:"subgenre,omitempty"`               // 子类型（受 Type 约束），借鉴 NovelWriter 的 Genre/Subgenre 参数
-	Theme                 string `json:"theme,omitempty"`                  // 主题
-	Tone                  string `json:"tone,omitempty"`                   // 基调
-	Author                string `json:"author,omitempty"`                 // 作者名
-	StoryLength           string `json:"story_length,omitempty"`           // 篇幅：short/novella/novel/epic，联动章节数与结构选项
-	Structure             string `json:"structure,omitempty"`              // 故事结构框架（3幕/英雄之旅等，随篇幅变化）
-	Motif                 string `json:"motif,omitempty"`                  // 文学母题：可随机生成，注入大纲/写作/生成 prompts
-	Brief                 string `json:"brief,omitempty"`                  // 故事简介：作为 AI 生成风格/角色/组织/关系的依据
-	ConflictScale         string `json:"conflict_scale,omitempty"`         // 冲突规模（借鉴 NovelWriter conflict_scales；"other" 时使用 ConflictOther）
-	ConflictOther         string `json:"conflict_other,omitempty"`         // 自定义冲突规模
-	SpecificSettings      string `json:"specific_settings,omitempty"`      // 特定设定，每行一条（借鉴 implied_settings）
-	ProtagonistType       string `json:"protagonist_type,omitempty"`       // 主角类型（借鉴 protagonist_types；"other" 时使用 ProtagonistOther）
-	ProtagonistOther      string `json:"protagonist_other,omitempty"`      // 自定义主角类型
-	TargetAudience        string `json:"target_audience,omitempty"`        // 目标读者：kid/middle_grade/ya/new_adult/adult/all_ages；影响语言难度、尺度与题材处理（原 YA/儿童文学从类型层级移到这里）
-	GenderBias            string `json:"gender_bias,omitempty"`            // 人物性别倾向：empty/random/male/female/balanced；默认 random，不强制
-	LocationsEnabled      bool   `json:"locations_enabled,omitempty"`      // 启用地点/场景实体（借鉴 NovelWriter locations）：生成设定与大纲时纳入地点
-	CharacterArcsEnabled  bool   `json:"character_arcs_enabled,omitempty"` // 启用角色弧光字段（goals/flaws/strengths/arc，借鉴 NovelWriter lore）
-	ThemeMotifInput       string `json:"combined_theme,omitempty"`         // 仅前端提交用：合并后的"主题/母题"字段值；PutConfig 会拆回 Theme+Motif
-	TargetWordsPerChapter int    `json:"target_words_per_chapter"`
-	WritingStyle          string `json:"writing_style"`
-	WritingPOV            string `json:"writing_pov"` // 叙述视角，如第一人称女主、第三人称限知等
+	Type                 string `json:"type"`
+	ParentGenre          string `json:"parent_genre,omitempty"` // 父类型（UI select，取值为 ParentGenreKeys 之一或空；"other" 表示自定义）
+	Title                string `json:"title"`
+	Subgenre             string `json:"subgenre,omitempty"`               // 子类型（受 Type 约束），借鉴 NovelWriter 的 Genre/Subgenre 参数
+	Theme                string `json:"theme,omitempty"`                  // 主题
+	Tone                 string `json:"tone,omitempty"`                   // 基调
+	Author               string `json:"author,omitempty"`                 // 作者名
+	StoryLength          string `json:"story_length,omitempty"`           // 篇幅：short/novella/novel/epic，联动章节数与结构选项
+	Structure            string `json:"structure,omitempty"`              // 故事结构框架（3幕/英雄之旅等，随篇幅变化）
+	Motif                string `json:"motif,omitempty"`                  // 文学母题：可随机生成，注入大纲/写作/生成 prompts
+	Brief                string `json:"brief,omitempty"`                  // 故事简介：作为 AI 生成风格/角色/组织/关系的依据
+	ConflictScale        string `json:"conflict_scale,omitempty"`         // 冲突规模（借鉴 NovelWriter conflict_scales；"other" 时使用 ConflictOther）
+	ConflictOther        string `json:"conflict_other,omitempty"`         // 自定义冲突规模
+	SpecificSettings     string `json:"specific_settings,omitempty"`      // 特定设定，每行一条（借鉴 implied_settings）
+	ProtagonistType      string `json:"protagonist_type,omitempty"`       // 主角类型（借鉴 protagonist_types；"other" 时使用 ProtagonistOther）
+	ProtagonistOther     string `json:"protagonist_other,omitempty"`      // 自定义主角类型
+	TargetAudience       string `json:"target_audience,omitempty"`        // 目标读者：kid/middle_grade/ya/new_adult/adult/all_ages；影响语言难度、尺度与题材处理（原 YA/儿童文学从类型层级移到这里）
+	GenderBias           string `json:"gender_bias,omitempty"`            // 人物性别倾向：empty/random/male/female/balanced；默认 random，不强制
+	LocationsEnabled     bool   `json:"locations_enabled,omitempty"`      // 启用地点/场景实体（借鉴 NovelWriter locations）：生成设定与大纲时纳入地点
+	CharacterArcsEnabled bool   `json:"character_arcs_enabled,omitempty"` // 启用角色弧光字段（goals/flaws/strengths/arc，借鉴 NovelWriter lore）
+	ThemeMotifInput      string `json:"combined_theme,omitempty"`         // 仅前端提交用：合并后的"主题/母题"字段值；PutConfig 会拆回 Theme+Motif
+	// ThemeMotifInputPtr mirrors ThemeMotifInput but distinguishes "sent empty"
+	// from "not sent at all", so clearing the merged UI field also clears Motif.
+	ThemeMotifInputPtr    *string `json:"-"`
+	TargetWordsPerChapter int     `json:"target_words_per_chapter"`
+	WritingStyle          string  `json:"writing_style"`
+	WritingPOV            string  `json:"writing_pov"` // 叙述视角，如第一人称女主、第三人称限知等
+}
+
+// UnmarshalJSON decodes the story config and additionally records whether the
+// transient merged Theme/Motif UI field ("combined_theme") was present in the
+// payload at all (even if empty), via ThemeMotifInputPtr. This lets PutConfig
+// distinguish "user cleared the merged field" from "legacy client that never
+// sends it".
+func (s *StoryConfig) UnmarshalJSON(data []byte) error {
+	type alias StoryConfig
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	var probe struct {
+		Combined *string `json:"combined_theme"`
+	}
+	_ = json.Unmarshal(data, &probe)
+	*s = StoryConfig(a)
+	s.ThemeMotifInputPtr = probe.Combined
+	return nil
 }
 
 // EffectiveConflict returns the conflict scale, resolving the "other" option.

@@ -37,17 +37,41 @@
   $: cfgTimeout = $apiConfig?.http_timeout_seconds || 600;
 
   let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, max_tokens: 32768, context_budget_tokens: 900000 };
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', brief: '', conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', brief: '' };
+  let localStoryCfg = { type: '', parent_genre: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', brief: '', conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
+  // Merged Theme+Motif UI field (combined_theme). Derived from theme/motif while
+  // the server snapshot hasn't been echoed back yet; written through on edit.
+  let combinedTheme = '';
+  let combinedThemeDirty = false;
+  $: combinedThemeShown = combinedThemeDirty ? combinedTheme : [localStoryCfg.theme, localStoryCfg.motif].map(x => (x || '').trim()).filter(Boolean).join(' / ');
+  function onCombinedThemeInput(e) {
+    combinedTheme = e.target.value;
+    combinedThemeDirty = true;
+    const i = combinedTheme.indexOf(' / ');
+    if (i >= 0) {
+      localStoryCfg.theme = combinedTheme.slice(0, i);
+      localStoryCfg.motif = combinedTheme.slice(i + 3);
+    } else {
+      localStoryCfg.theme = combinedTheme;
+      localStoryCfg.motif = '';
+    }
+  }
 
-// Novel-parameter tooltips (subgenre/structure hints) fetched from /api/novel-params.
+// Novel-parameter data fetched from /api/novel-params (hints + parent-genre option maps).
 let SUBGENRE_HINTS = {};
 let STRUCTURE_HINTS = {};
-let SUBGENRE_PRESETS = [];
+let PARENT_GENRES = [];            // canonical parent genre keys (backend ParentGenreKeys)
+let SUBGENRES_BY_GENRE = {};       // parent key -> subgenre option list
+let SETTINGS_BY_GENRE = {};        // parent key -> specific-settings checkbox options
+let TONES_BY_GENRE = {};           // parent key -> tone suggestions (editable combobox)
+let CONFLICTS_BY_GENRE = {};       // parent key -> conflict-scale suggestions
+let PROTAGONISTS_BY_GENRE = {};    // parent key -> protagonist-type suggestions
+let AUDIENCE_KEYS = ['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages'];
 let novelParamsTick = 0;
 function subgenreHint(s) { return SUBGENRE_HINTS[(s || '').toLowerCase()] || ''; }
 function structHint(k) { return STRUCTURE_HINTS[k] || ''; }
 
-// Novel parameters: genre presets (mirror of backend config.Genre* maps; "other" is always available).
+// Novel parameters: fallback genre presets (mirror of backend config.Genre* maps).
+// /api/novel-params overrides these at runtime; "other" is always available in the UI.
 const GENRE_CONFLICTS = {
 fantasy: ['Personal Quest', 'Kingdom-wide', 'World-saving', 'Good vs Evil', 'Political Intrigue'],
 scifi: ['Personal', 'Planetary', 'Interstellar', 'Galactic'],
@@ -57,6 +81,8 @@ thriller: ['International Conspiracy', 'Government Secrets', 'Spy Networks', 'Na
 horror: ['Personal Haunting', 'Family Curse', 'Supernatural Threat', 'Psychological Terror', 'Ancient Evil'],
 historical: ['Tribal Warfare', 'Religious Conflicts', 'Ancient Politics', 'Survival Struggles', 'Civilization Building'],
 western: ['Personal Vendetta', 'Town Protection', 'Range War', 'Law vs Lawlessness', 'Civilization vs Wilderness'],
+adventure: ['Personal Survival', 'Group Expedition', 'Region-wide', 'Man vs Nature'],
+literary: ['Inner Conflict', 'Family Dynamics', 'Community & Society', 'Generational Change'],
 };
 const GENRE_PROTAGONISTS = {
 fantasy: ['Chosen One', 'Magic User', 'Knight/Warrior', 'Royal Heir', 'Common Hero', 'Prophesied One'],
@@ -67,6 +93,8 @@ thriller: ['Secret Agent', 'Intelligence Officer', 'Double Agent', 'Spy Handler'
 horror: ['Haunted Individual', 'Investigator', 'Innocent Victim', 'Cursed Person', 'Gothic Hero', 'Tormented Soul'],
 historical: ['Ancient Warrior', 'Priest/Priestess', 'Tribal Leader', 'Ancient Scholar', 'Slave', 'Ancient Ruler'],
 western: ['Sheriff/Marshal', 'Gunslinger', 'Rancher', 'Outlaw', 'Bounty Hunter', 'Frontier Doctor'],
+adventure: ['Seasoned Explorer', 'Reluctant Survivor', 'Optimistic Amateur', 'Grizzled Guide'],
+literary: ['Everyman/Everywoman', 'Unreliable Narrator', 'Returning Outsider', 'Observer of Family'],
 };
 const GENRE_SETTINGS = {
 fantasy: ['magic_system', 'medieval_setting', 'mythical_creatures', 'epic_scale'],
@@ -77,6 +105,17 @@ thriller: ['international_intrigue', 'spy_networks', 'government_secrets', 'doub
 horror: ['atmospheric_dread', 'isolated_setting', 'supernatural_elements', 'psychological_terror', 'dark_atmosphere'],
 historical: ['ancient_civilizations', 'mythological_elements', 'tribal_societies', 'ancient_religions', 'primitive_technology'],
 western: ['frontier_setting', 'lawlessness', 'honor_code', 'survival_focus', 'horse_culture'],
+};
+// Fallback parent-genre mapping (mirrors backend MatchParentGenreKey); used only
+// to preselect the dropdown for legacy configs before /api/novel-params arrives.
+const PARENT_FALLBACK = {
+fantasy: 'fantasy', wuxia: 'fantasy', xianxia: 'fantasy', romantasy: 'fantasy', urban: 'fantasy', cozy: 'mystery',
+scifi: 'scifi', cyberpunk: 'scifi', solarpunk: 'scifi', space_opera: 'scifi', dystopian: 'scifi', postapo: 'scifi',
+steampunk: 'scifi', time_travel: 'scifi', cli_fi: 'scifi', afrofuturism: 'scifi', hard_scifi: 'scifi', superhero: 'scifi', litrpg: 'scifi',
+mystery: 'mystery', mystery_police: 'mystery', romance: 'romance', thriller: 'thriller', heist: 'thriller',
+horror: 'horror', gothic: 'horror', dark_academia: 'horror', historical: 'historical', western: 'western',
+adventure: 'adventure', swashbuckler: 'adventure', nautical: 'adventure', picaresque: 'adventure', military: 'adventure',
+ya: 'literary', middle_grade: 'literary', graphic_novel: 'literary',
 };
 const GENRE_KEYWORDS = [
 ['fantasy', ['fantasy', '奇幻', '玄幻', '魔幻']],
@@ -126,15 +165,34 @@ if (words.some((w) => s.includes(w))) return key;
 }
 return '';
 }
+// Effective parent-genre key driving every dependent option list: an explicit
+// select choice wins; otherwise derive it from the legacy free-text Type field
+// (exact canonical key first, then keyword mapping, mirroring the backend).
 let genreKeyDerived = '';
-$: genreKeyDerived = matchGenreKey(localStoryCfg.type);
-// novelParamsTick is declared above; bump it after /api/novel-params loads to re-run these derivations.
-$: conflictOpts = (novelParamsTick, genreKeyDerived ? GENRE_CONFLICTS[genreKeyDerived] : []);
-$: protagonistOpts = (novelParamsTick, genreKeyDerived ? GENRE_PROTAGONISTS[genreKeyDerived] : []);
-$: settingSuggestions = (novelParamsTick, genreKeyDerived ? GENRE_SETTINGS[genreKeyDerived] : []);
-function addSetting(s) {
-const cur = (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
-if (!cur.includes(s)) localStoryCfg.specific_settings = [...cur, s].join('\n');
+$: genreKeyDerived = (() => {
+novelParamsTick; // re-run when /api/novel-params data lands
+const pg = (localStoryCfg.parent_genre || '').trim();
+if (pg && pg !== 'other') return pg;
+const t = (localStoryCfg.type || '').trim().toLowerCase();
+if (!t) return '';
+if (PARENT_GENRES.includes(t)) return t;
+const k = matchGenreKey(t);
+return k ? (PARENT_FALLBACK[k] || '') : '';
+})();
+// Option lists for the combobox/checkbox controls (parent-genre specific).
+$: subgenreOpts = (novelParamsTick, genreKeyDerived ? (SUBGENRES_BY_GENRE[genreKeyDerived] || []) : []);
+$: conflictOpts = (novelParamsTick, genreKeyDerived ? (CONFLICTS_BY_GENRE[genreKeyDerived] || GENRE_CONFLICTS[genreKeyDerived] || []) : []);
+$: protagonistOpts = (novelParamsTick, genreKeyDerived ? (PROTAGONISTS_BY_GENRE[genreKeyDerived] || GENRE_PROTAGONISTS[genreKeyDerived] || []) : []);
+$: toneOpts = (novelParamsTick, genreKeyDerived ? (TONES_BY_GENRE[genreKeyDerived] || []) : []);
+$: settingOptions = (novelParamsTick, genreKeyDerived ? (SETTINGS_BY_GENRE[genreKeyDerived] || GENRE_SETTINGS[genreKeyDerived] || []) : []);
+// Specific settings are stored as one entry per line; expose them as a set for checkboxes.
+$: settingLines = (localStoryCfg.specific_settings || '').split('\n').map(x => x.trim()).filter(Boolean);
+$: settingSet = new Set(settingLines);
+function toggleSetting(s, checked) {
+let cur = settingLines.slice();
+if (checked) { if (!settingSet.has(s)) cur.push(s); }
+else { cur = cur.filter(x => x !== s); }
+localStoryCfg.specific_settings = cur.join('\n');
 }
 async function fetchNovelParams() {
 try {
@@ -145,7 +203,13 @@ for (const k of Object.keys(p.protagonist_types)) GENRE_PROTAGONISTS[k] = p.prot
 if (p.specific_settings) for (const k of Object.keys(p.specific_settings)) GENRE_SETTINGS[k] = p.specific_settings[k];
 if (p.subgenre_hints) SUBGENRE_HINTS = p.subgenre_hints;
 if (p.structure_hints) STRUCTURE_HINTS = p.structure_hints;
-if (Array.isArray(p.subgenre_presets)) SUBGENRE_PRESETS = p.subgenre_presets;
+if (Array.isArray(p.parent_genres)) PARENT_GENRES = p.parent_genres;
+if (p.subgenres_by_genre) SUBGENRES_BY_GENRE = p.subgenres_by_genre;
+if (p.setting_options_by_genre) SETTINGS_BY_GENRE = p.setting_options_by_genre;
+if (p.tone_options_by_genre) TONES_BY_GENRE = p.tone_options_by_genre;
+if (p.conflicts_by_parent_genre) CONFLICTS_BY_GENRE = p.conflicts_by_parent_genre;
+if (p.protagonists_by_parent_genre) PROTAGONISTS_BY_GENRE = p.protagonists_by_parent_genre;
+if (Array.isArray(p.audience_keys) && p.audience_keys.length) AUDIENCE_KEYS = p.audience_keys;
 novelParamsTick++;
 }
 } catch (e) {}

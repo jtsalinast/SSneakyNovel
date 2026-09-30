@@ -433,7 +433,13 @@ func (h *Handlers) PutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Merged Theme/Motif UI field: the frontend sends combined_theme; split it
 	// back into Theme + Motif (a " / " separator keeps both halves distinct).
-	if newCfg.Story.ThemeMotifInput != "" {
+	// Always process when the key is present at all (pointer distinguishes
+	// "field sent empty" from "legacy client that never sends it").
+	if newCfg.Story.ThemeMotifInputPtr != nil {
+		newCfg.Story.SetCombinedTheme(*newCfg.Story.ThemeMotifInputPtr)
+		newCfg.Story.ThemeMotifInputPtr = nil
+		newCfg.Story.ThemeMotifInput = ""
+	} else if newCfg.Story.ThemeMotifInput != "" {
 		newCfg.Story.SetCombinedTheme(newCfg.Story.ThemeMotifInput)
 		newCfg.Story.ThemeMotifInput = ""
 	}
