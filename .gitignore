@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Build artifacts and binaries
+supersneakynovel
+
+# Environment files
+.env
+.env.local
+*.env.*.next/
+dist/
+build/
+*.log
