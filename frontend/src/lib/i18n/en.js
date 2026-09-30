@@ -96,7 +96,7 @@ export default {
   "outline.batch.replaceConfirm": "Replace the last unwritten batch using this synopsis and chapter count?",
 
   // Header / shell
-  'app.title': 'AI Novel Generator',
+  'app.title': 'Super Sneaky AI Nobel Writer',
   'app.newVersion': 'New version',
   'app.switchProject': 'Switch / new project',
   'app.switchProject.disabled': 'AI task in progress; cannot switch projects',
