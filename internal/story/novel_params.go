@@ -113,9 +113,6 @@ func novelParametersBlock(cfg *config.Config) string {
 			}
 		}
 	}
-	if m := strings.TrimSpace(sc.Motif); m != "" {
-		add("【文学母题】"+m+"（请将其作为贯穿全书的意象与主题线索，自然织入情节、人物与场景，不要生硬说教）", "[LITERARY MOTIF] "+m+" (weave it as a recurring image/thematic thread through plot, characters and scenes; never heavy-handed)")
-	}
 	if b := strings.TrimSpace(sc.Brief); b != "" {
 		if en {
 			lines = append(lines, "[STORY BRIEF - authoritative premise]\n"+b)
@@ -126,8 +123,8 @@ func novelParametersBlock(cfg *config.Config) string {
 	if v := strings.TrimSpace(sc.Subgenre); v != "" {
 		add("【子类型】"+v, "[SUBGENRE] "+v)
 	}
-	if v := strings.TrimSpace(sc.Theme); v != "" {
-		add("【主题】"+v, "[THEME] "+v)
+	if v := strings.TrimSpace(sc.EffectiveTheme()); v != "" {
+		add("【主题/母题】"+v+"（请将其作为贯穿全书的主题线索与意象，自然织入情节、人物与场景，不要生硬说教）", "[THEME / MOTIF] "+v+" (treat it as the work's through-line theme and imagery; weave it naturally into plot, characters and scenes, never heavy-handed)")
 	}
 	if v := strings.TrimSpace(sc.Tone); v != "" {
 		add("【基调】"+v, "[TONE] "+v)
@@ -166,7 +163,7 @@ func novelParametersBlock(cfg *config.Config) string {
 	if v := strings.TrimSpace(sc.SpecificSettings); v != "" {
 		add("【特定设定】\n"+v, "[SPECIFIC SETTINGS]\n"+v)
 	}
-	if v := config.AudienceGuidance(sc.TargetAudience, cfg.Language); v != "" {
+	if v := config.AudienceGuidanceOrText(sc.TargetAudience, cfg.Language); v != "" {
 		lines = append(lines, v)
 	}
 	// Anime/manhwa/game modifier conventions: when the text matches a modifier

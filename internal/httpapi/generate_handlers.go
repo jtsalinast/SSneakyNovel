@@ -159,8 +159,8 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 		if t := strings.TrimSpace(sc.Subgenre); t != "" {
 			b.WriteString("【子类型】" + t + "\n")
 		}
-		if t := strings.TrimSpace(sc.Theme); t != "" {
-			b.WriteString("【主题】" + t + "\n")
+		if t := strings.TrimSpace(sc.EffectiveTheme()); t != "" {
+			b.WriteString("【主题/母题】" + t + "\n")
 		}
 		if t := strings.TrimSpace(sc.Tone); t != "" {
 			b.WriteString("【基调】" + t + "\n")
@@ -185,7 +185,7 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 		if v := strings.TrimSpace(sc.SpecificSettings); v != "" {
 			b.WriteString("【特定设定】\n" + v + "\n")
 		}
-		if v := config.AudienceGuidance(sc.TargetAudience, "zh"); v != "" {
+		if v := config.AudienceGuidanceOrText(sc.TargetAudience, "zh"); v != "" {
 			b.WriteString(v + "\n")
 		}
 		switch bias := strings.TrimSpace(sc.GenderBias); bias {
@@ -213,8 +213,8 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 		if t := strings.TrimSpace(sc.Subgenre); t != "" {
 			b.WriteString("[SUBGENRE] " + t + "\n")
 		}
-		if t := strings.TrimSpace(sc.Theme); t != "" {
-			b.WriteString("[THEME] " + t + "\n")
+		if t := strings.TrimSpace(sc.EffectiveTheme()); t != "" {
+			b.WriteString("[THEME / MOTIF] " + t + "\n")
 		}
 		if t := strings.TrimSpace(sc.Tone); t != "" {
 			b.WriteString("[TONE] " + t + "\n")
@@ -239,7 +239,7 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 		if v := strings.TrimSpace(sc.SpecificSettings); v != "" {
 			b.WriteString("[SPECIFIC SETTINGS]\n" + v + "\n")
 		}
-		if v := config.AudienceGuidance(sc.TargetAudience, "en"); v != "" {
+		if v := config.AudienceGuidanceOrText(sc.TargetAudience, "en"); v != "" {
 			b.WriteString(v + "\n")
 		}
 		switch bias := strings.TrimSpace(sc.GenderBias); bias {
@@ -287,11 +287,11 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 		}
 		wroteParams = true
 	}
-	if t := strings.TrimSpace(sc.Theme); t != "" {
+	if t := strings.TrimSpace(sc.EffectiveTheme()); t != "" {
 		if zh {
-			b.WriteString("主题： " + t + "\n")
+			b.WriteString("主题/母题： " + t + "\n")
 		} else {
-			b.WriteString("Theme: " + t + "\n")
+			b.WriteString("Theme / motif: " + t + "\n")
 		}
 		wroteParams = true
 	}
@@ -407,8 +407,7 @@ func (h *Handlers) generateBriefFromParams(ctx context.Context, sc *config.Story
 	addPair("类型", "Genre", sc.Type)
 	addPair("子类型", "Subgenre", sc.Subgenre)
 	addPair("书名/工作名", "Working title", sc.Title)
-	addPair("文学母题", "Literary motif", sc.Motif)
-	addPair("主题", "Theme", sc.Theme)
+	addPair("主题/母题", "Theme / motif", sc.EffectiveTheme())
 	addPair("基调", "Tone", sc.Tone)
 	if lbl := lengthLabelZH(sc.StoryLength); lbl != "" {
 		chMin, chMax := config.SuggestedChaptersByLength(sc.StoryLength)
@@ -1111,6 +1110,10 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 		"subgenre_hints":      subgenreHints,
 		"structure_hints":     structureHints,
 		"parent_genres":       config.ParentGenreKeys,
+		"structure_keys":    config.LengthKeys,
+		"structural_options_by_length": config.StructureKeysByLength,
+		"setting_options_by_genre":     config.GenreSpecificSettingOptions,
+		"tone_options_by_genre":        config.GenreToneOptions,
 		"subgenres_by_genre":  config.SubgenresByParentGenre,
 		"audience_keys":       config.AudienceKeys,
 	})

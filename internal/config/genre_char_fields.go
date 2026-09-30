@@ -394,6 +394,25 @@ func MatchParentGenreKey(storyType string) string {
 	return ""
 }
 
+// GenreListKey resolves the story Type (+ optional explicit parent key coming
+// from the UI select) to the map key used by the per-genre option lists
+// (GenreConflictScales, GenreProtagonistTypes, GenreSpecificSettings). It
+// prefers the parent-genre key when one matches, then falls back to the
+// specific MatchGenreKey (litrpg, cyberpunk, ...) so legacy keys keep working.
+func GenreListKey(storyType, parentKey string) string {
+	if p := strings.TrimSpace(parentKey); p != "" {
+		for _, k := range ParentGenreKeys {
+			if k == strings.ToLower(p) {
+				return k
+			}
+		}
+	}
+	if k := MatchParentGenreKey(storyType); k != "" {
+		return k
+	}
+	return MatchGenreKey(storyType)
+}
+
 // SubgenresByParentGenre maps each parent genre key to its subgenre options
 // (adapted from NovelWriter's populate_subgenres). The UI adds a free-text
 // "other" escape hatch on top of these lists.

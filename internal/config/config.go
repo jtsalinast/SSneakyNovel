@@ -30,6 +30,7 @@ type Config struct {
 
 type StoryConfig struct {
 	Type                  string `json:"type"`
+	ParentGenre           string `json:"parent_genre,omitempty"`           // 父类型（UI select，取值为 ParentGenreKeys 之一或空；"other" 表示自定义）
 	Title                 string `json:"title"`
 	Subgenre              string `json:"subgenre,omitempty"`               // 子类型（受 Type 约束），借鉴 NovelWriter 的 Genre/Subgenre 参数
 	Theme                 string `json:"theme,omitempty"`                  // 主题
@@ -48,6 +49,7 @@ type StoryConfig struct {
 	GenderBias            string `json:"gender_bias,omitempty"`            // 人物性别倾向：empty/random/male/female/balanced；默认 random，不强制
 	LocationsEnabled      bool   `json:"locations_enabled,omitempty"`      // 启用地点/场景实体（借鉴 NovelWriter locations）：生成设定与大纲时纳入地点
 	CharacterArcsEnabled  bool   `json:"character_arcs_enabled,omitempty"` // 启用角色弧光字段（goals/flaws/strengths/arc，借鉴 NovelWriter lore）
+	ThemeMotifInput       string `json:"combined_theme,omitempty"`         // 仅前端提交用：合并后的"主题/母题"字段值；PutConfig 会拆回 Theme+Motif
 	TargetWordsPerChapter int    `json:"target_words_per_chapter"`
 	WritingStyle          string `json:"writing_style"`
 	WritingPOV            string `json:"writing_pov"` // 叙述视角，如第一人称女主、第三人称限知等
@@ -80,6 +82,23 @@ func (s *StoryConfig) EffectiveTheme() string {
 		return t + " / " + m
 	default:
 		return t + m
+	}
+}
+
+// SetCombinedTheme writes the merged Theme/Motif UI field back to storage.
+// A " / " separator splits the value into Theme and Motif again (the same
+// format EffectiveTheme produces); values without the separator are stored in
+// Theme, leaving any previous Motif untouched when empty.
+func (s *StoryConfig) SetCombinedTheme(v string) {
+	v = strings.TrimSpace(v)
+	if i := strings.Index(v, " / "); i >= 0 {
+		s.Theme = strings.TrimSpace(v[:i])
+		s.Motif = strings.TrimSpace(v[i+3:])
+		return
+	}
+	s.Theme = v
+	if v == "" {
+		s.Motif = ""
 	}
 }
 

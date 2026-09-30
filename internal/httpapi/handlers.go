@@ -431,6 +431,12 @@ func (h *Handlers) PutConfig(w http.ResponseWriter, r *http.Request) {
 	if newCfg.Language == "" {
 		newCfg.Language = h.cfg.Language
 	}
+	// Merged Theme/Motif UI field: the frontend sends combined_theme; split it
+	// back into Theme + Motif (a " / " separator keeps both halves distinct).
+	if newCfg.Story.ThemeMotifInput != "" {
+		newCfg.Story.SetCombinedTheme(newCfg.Story.ThemeMotifInput)
+		newCfg.Story.ThemeMotifInput = ""
+	}
 	newCfg.ProjectFormatVersion = config.ProjectFormatVersion
 	newCfg.CreatedWithVersion = h.cfg.CreatedWithVersion
 	newCfg.Prompts.ApplyDefaults(newCfg.Language)
