@@ -358,7 +358,13 @@ func EffectiveGenreType(parentGenre, freeType string) string {
 			}
 		}
 	}
-	return strings.TrimSpace(freeType)
+	ft := strings.TrimSpace(freeType)
+	// Legacy configs stored a canonical key directly in Type; honor it when the
+	// new parent-genre select was never touched.
+	if ft != "" && MatchParentGenreKey(ft) == strings.ToLower(ft) {
+		return strings.ToLower(ft)
+	}
+	return ft
 }
 
 // MatchParentGenreKey resolves a free-form story Type (or an explicit parent
