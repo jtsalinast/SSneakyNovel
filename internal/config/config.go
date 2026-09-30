@@ -69,6 +69,51 @@ func (s *StoryConfig) EffectiveProtagonist() string {
 	return s.ProtagonistType
 }
 
+// EffectiveTheme returns the theme field with the literary motif appended when
+// both are set — Theme and Motif were merged into a single UI field; the two
+// storage fields remain so old projects keep their data and prompts stay rich.
+func (s *StoryConfig) EffectiveTheme() string {
+	t := strings.TrimSpace(s.Theme)
+	m := strings.TrimSpace(s.Motif)
+	switch {
+	case t != "" && m != "":
+		return t + " / " + m
+	default:
+		return t + m
+	}
+}
+
+// SettingOptionsForGenre returns the checkbox options for the selected parent
+// genre (NovelWriter-style implied_settings). When no preset matches the free-
+// form Type, it falls back to the legacy per-genre suggestion map so older
+// genre keys (litrpg, cyberpunk, ...) keep working.
+func SettingOptionsForGenre(storyType string) []string {
+	for _, key := range ParentGenreKeys {
+		if MatchParentGenreKey(storyType) == key {
+			if opts, ok := GenreSpecificSettingOptions[key]; ok && len(opts) > 0 {
+				return opts
+			}
+		}
+	}
+	if k := MatchGenreKey(storyType); k != "" {
+		if opts, ok := GenreSpecificSettings[k]; ok && len(opts) > 0 {
+			return append([]string{}, opts...)
+		}
+	}
+	return nil
+}
+
+// ToneOptionsForGenre returns tone suggestions for the selected parent genre
+// (adapted from NovelWriter tones); empty when there is no preset match.
+func ToneOptionsForGenre(storyType string) []string {
+	if k := MatchParentGenreKey(storyType); k != "" {
+		if opts, ok := GenreToneOptions[k]; ok {
+			return append([]string{}, opts...)
+		}
+	}
+	return nil
+}
+
 // —— Novel parameters: length & structure options (borrowed from NovelWriter) —
 
 const (

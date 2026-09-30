@@ -346,6 +346,54 @@ var ParentGenreKeys = []string{
 	"historical", "western", "adventure", "literary",
 }
 
+// MatchParentGenreKey resolves a free-form story Type (or an explicit parent
+// genre key coming from the UI select) to one of ParentGenreKeys, or "" when
+// nothing matches. Exact key match wins first (the UI stores canonical keys),
+// then keyword matching via MatchGenreKey mapped back to a parent.
+func MatchParentGenreKey(storyType string) string {
+	t := strings.ToLower(strings.TrimSpace(storyType))
+	if t == "" {
+		return ""
+	}
+	for _, k := range ParentGenreKeys {
+		if t == k {
+			return k
+		}
+	}
+	// "literary fiction" style aliases and legacy composite keys ("scifi:hard")
+	if i := strings.Index(t, ":"); i > 0 {
+		t = t[:i]
+	}
+	for _, k := range ParentGenreKeys {
+		if t == k {
+			return k
+		}
+	}
+	switch k := MatchGenreKey(storyType); k {
+	case "fantasy", "wuxia", "xianxia", "romantasy", "urban", "cozy":
+		return "fantasy"
+	case "scifi", "cyberpunk", "solarpunk", "space_opera", "dystopian", "postapo", "steampunk", "time_travel", "cli_fi", "afrofuturism", "hard_scifi", "superhero", "litrpg":
+		return "scifi"
+	case "mystery", "mystery_police":
+		return "mystery"
+	case "romance":
+		return "romance"
+	case "thriller", "heist", "spy":
+		return "thriller"
+	case "horror", "gothic", "dark_academia":
+		return "horror"
+	case "historical":
+		return "historical"
+	case "western":
+		return "western"
+	case "adventure", "swashbuckler", "nautical", "picaresque", "military":
+		return "adventure"
+	case "ya", "middle_grade", "graphic_novel":
+		return "literary"
+	}
+	return ""
+}
+
 // SubgenresByParentGenre maps each parent genre key to its subgenre options
 // (adapted from NovelWriter's populate_subgenres). The UI adds a free-text
 // "other" escape hatch on top of these lists.
