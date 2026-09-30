@@ -1,15 +1,18 @@
-# Releases
+# Builds
 
-Compilados del proyecto SSneakyNovel (Super Sneaky AI Nobel Writer).
+| Archivo | Plataforma |
+|---|---|
+| SSneakyNovel-linux-amd64.zip | Linux x86_64 (build antiguo, sin frontend nuevo) |
+| SSneakyNovel-macos-arm64-20260930-1951.zip | macOS Apple Silicon (M1–M4) — build 2026-09-30 19:51 UTC |
+| SSneakyNovel-macos-x64-20260930-1951.zip | macOS Intel — build 2026-09-30 19:51 UTC |
 
-## SSneakyNovel-linux-amd64.zip
-- Binario único para **Linux x86_64** (Go, frontend embebido — no requiere carpeta `frontend/dist`).
-- Compilado con `-trimpath -ldflags="-s -w"`.
+Los builds de macOS incluyen el frontend completo con la pestaña "Novel parameters", selects de género padre/subgénero, checkboxes de specific settings, campo Theme+Motif integrado, comboboxes editables y chips de audiencia.
 
-### Uso
+## Uso (macOS)
 ```bash
-unzip SSneakyNovel-linux-amd64.zip
-chmod +x SSneakyNovel-linux-amd64
-./SSneakyNovel-linux-amd64
-# abrir http://localhost:48090
+unzip SSneakyNovel-macos-<arch>-<fecha>.zip
+chmod +x SSneakyNovel-macos-*
+xattr -d com.apple.quarantine SSneakyNovel-macos-*   # evita bloqueo de Gatekeeper
+./SSneakyNovel-macos-*
 ```
+Abrir http://localhost:48090
