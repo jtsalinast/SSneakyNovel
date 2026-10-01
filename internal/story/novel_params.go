@@ -113,7 +113,7 @@ func novelParametersBlock(cfg *config.Config) string {
 			}
 		}
 	}
-	if m := strings.TrimSpace(sc.Motif); m != "" {
+	if m := sc.EffectiveMotif(); m != "" {
 		add("【文学母题】"+m+"（请将其作为贯穿全书的意象与主题线索，自然织入情节、人物与场景，不要生硬说教）", "[LITERARY MOTIF] "+m+" (weave it as a recurring image/thematic thread through plot, characters and scenes; never heavy-handed)")
 	}
 	if b := strings.TrimSpace(sc.Brief); b != "" {

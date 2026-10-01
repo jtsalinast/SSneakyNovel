@@ -113,6 +113,7 @@ export default {
 
   // Navigation
   'nav.config': '配置',
+  'nav.novelParams': '小说参数',
   'nav.outline': '大纲',
   'nav.writing': '写作',
   'nav.proofread': '校订',
@@ -425,6 +426,8 @@ export default {
 
   'config.story.title': '故事配置',
   'config.story.acceptedHint': '已有已确认章节，修改关键设定后建议执行设定协调。',
+  'config.theme.title': '主题与母题',
+  'config.theme.hint': '主题与文学母题已合并：核心主题加上贯穿性意象写在同一栏（逗号分隔）。点击生成会把母题写入这一栏。',
   'config.story.type': '故事类型',
   'config.story.type.placeholder': '奇幻/都市/科幻...',
   'config.story.titleField': '小说标题（留空由 AI 生成）',
@@ -476,6 +479,7 @@ export default {
   'config.story.targetAudience.all_ages': '全年龄向',
   'config.story.specificSettings': '特定设定',
   'config.story.specificSettings.placeholder': '每行一条，如：硬魔法体系、超光速航行……',
+  'config.tip.genre': '选择父类型后，子类型、冲突、主角、基调与设定项会随之调整；选择“其他”可自定义类型。',
   'config.tip.subgenre': '选择预设可查看释义，也可直接输入自定义子类型。',
   'config.tip.length': '影响建议总章数以及可选的叙事结构。',
   'config.tip.conflict': '主线冲突的建议规模，仅引导生成、不强制。',
