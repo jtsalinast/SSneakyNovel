@@ -1,10 +1,2 @@
 # Dependencies
 node_modules/
-
-# Build Artifacts
-dist/
-build/
-
-# Environment & Config
-.env
-.env.local

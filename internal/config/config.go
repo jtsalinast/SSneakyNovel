@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"showmethestory/internal/fsutil"
 	"showmethestory/internal/i18n"
@@ -45,6 +46,11 @@ type StoryConfig struct {
 	ProtagonistType       string `json:"protagonist_type,omitempty"`       // 主角类型（借鉴 protagonist_types；"other" 时使用 ProtagonistOther）
 	ProtagonistOther      string `json:"protagonist_other,omitempty"`      // 自定义主角类型
 	TargetAudience        string `json:"target_audience,omitempty"`        // 目标读者：kid/middle_grade/ya/new_adult/adult/all_ages；影响语言难度、尺度与题材处理（原 YA/儿童文学从类型层级移到这里）
+	AudienceProfile       string `json:"audience_profile,omitempty"`       // 目标读者画像：自由文本，描述理想读者的阅读偏好；可由 LLM 根据已填参数生成
+	RomanceLevel          string `json:"romance_level,omitempty"`          // 恋爱线比重：random/none/subplot/moderate/central
+	SexualContent         string `json:"sexual_content,omitempty"`         // 性描写尺度：random/clean/fade_to_black/explicit
+	GoreLevel             string `json:"gore_level,omitempty"`             // 暴力血腥尺度：random/none/mid/explicit
+	WorldDarkness         string `json:"world_darkness,omitempty"`         // 世界黑暗与残酷度：idyllic/temperate/gritty/grim/abyssal
 	GenderBias            string `json:"gender_bias,omitempty"`            // 人物性别倾向：empty/random/male/female/balanced；默认 random，不强制
 	LocationsEnabled      bool   `json:"locations_enabled,omitempty"`      // 启用地点/场景实体（借鉴 NovelWriter locations）：生成设定与大纲时纳入地点
 	CharacterArcsEnabled  bool   `json:"character_arcs_enabled,omitempty"` // 启用角色弧光字段（goals/flaws/strengths/arc，借鉴 NovelWriter lore）
@@ -676,6 +682,231 @@ func AudienceGuidance(audience, lang string) string {
 			"[TARGET AUDIENCE] All ages: readable by every age group—no explicit or traumatic content, layered so children and adults each get something.")
 	}
 	return ""
+}
+
+// —— Content rating parameters: romance / sexual content / gore / world darkness ——
+
+var (
+	// RomanceLevelKeys lists the selectable romance-line weights ("random" rolls a fresh one).
+	RomanceLevelKeys = []string{"random", "none", "subplot", "moderate", "central"}
+	// SexualContentKeys lists the selectable sexual-content scales.
+	SexualContentKeys = []string{"random", "clean", "fade_to_black", "explicit"}
+	// GoreLevelKeys lists the selectable gore/violence scales.
+	GoreLevelKeys = []string{"random", "none", "mid", "explicit"}
+	// WorldDarknessKeys lists the selectable world cruelty levels.
+	WorldDarknessKeys = []string{"idyllic", "temperate", "gritty", "grim", "abyssal"}
+)
+
+// RomanceLevelLabel returns a short human label for a romance-level key.
+func RomanceLevelLabel(key, lang string) string {
+	switch strings.TrimSpace(key) {
+	case "random":
+		return pickLang(lang, "随机", "Random")
+	case "none":
+		return pickLang(lang, "无恋爱线", "None")
+	case "subplot":
+		return pickLang(lang, "支线感情", "Subplot")
+	case "moderate":
+		return pickLang(lang, "中等比重", "Moderate")
+	case "central":
+		return pickLang(lang, "核心主线", "Central")
+	}
+	return strings.TrimSpace(key)
+}
+
+// SexualContentLabel returns a short human label for a sexual-content key.
+func SexualContentLabel(key, lang string) string {
+	switch strings.TrimSpace(key) {
+	case "random":
+		return pickLang(lang, "随机", "Random")
+	case "clean":
+		return pickLang(lang, "全年龄干净", "Clean")
+	case "fade_to_black":
+		return pickLang(lang, "渐黑留白", "Fade to Black")
+	case "explicit":
+		return pickLang(lang, "露骨直写", "Explicit")
+	}
+	return strings.TrimSpace(key)
+}
+
+// GoreLevelLabel returns a short human label for a gore-level key.
+func GoreLevelLabel(key, lang string) string {
+	switch strings.TrimSpace(key) {
+	case "random":
+		return pickLang(lang, "随机", "Random")
+	case "none":
+		return pickLang(lang, "无血腥", "None")
+	case "mid":
+		return pickLang(lang, "中度血腥", "Mid")
+	case "explicit":
+		return pickLang(lang, "非常露骨", "Very Explicit")
+	}
+	return strings.TrimSpace(key)
+}
+
+// WorldDarknessLabel returns a short human label for a world-darkness key.
+func WorldDarknessLabel(key, lang string) string {
+	switch strings.TrimSpace(key) {
+	case "idyllic":
+		return pickLang(lang, "田园牧歌", "Idyllic")
+	case "temperate":
+		return pickLang(lang, "温和写实", "Temperate")
+	case "gritty":
+		return pickLang(lang, "粗粝黑暗", "Gritty")
+	case "grim":
+		return pickLang(lang, "阴暗残酷", "Grim")
+	case "abyssal":
+		return pickLang(lang, "深渊绝望", "Abyssal")
+	}
+	return strings.TrimSpace(key)
+}
+
+// EffectiveRomanceLevel resolves "random" by rolling a concrete level.
+func (s *StoryConfig) EffectiveRomanceLevel() string {
+	k := strings.TrimSpace(s.RomanceLevel)
+	if k == "" || k == "random" {
+		return RomanceLevelKeys[1+rand.Intn(len(RomanceLevelKeys)-1)]
+	}
+	return k
+}
+
+// EffectiveSexualContent resolves "random" by rolling a concrete scale.
+func (s *StoryConfig) EffectiveSexualContent() string {
+	k := strings.TrimSpace(s.SexualContent)
+	if k == "" || k == "random" {
+		return SexualContentKeys[1+rand.Intn(len(SexualContentKeys)-1)]
+	}
+	return k
+}
+
+// EffectiveGoreLevel resolves "random" by rolling a concrete scale.
+func (s *StoryConfig) EffectiveGoreLevel() string {
+	k := strings.TrimSpace(s.GoreLevel)
+	if k == "" || k == "random" {
+		return GoreLevelKeys[1+rand.Intn(len(GoreLevelKeys)-1)]
+	}
+	return k
+}
+
+// ContentGuidance returns prompt lines constraining romance weight, sexual
+// content, gore and world cruelty according to the story config. The audience
+// age acts as a hard ceiling: explicit material is downgraded for young or
+// all-ages readers no matter what the selects say. Returns "" when nothing is set.
+func ContentGuidance(sc *StoryConfig, lang string) string {
+	var lines []string
+	add := func(zh, english string) {
+		if strings.TrimSpace(english) != "" || strings.TrimSpace(zh) != "" {
+			if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+				lines = append(lines, english)
+			} else {
+				lines = append(lines, zh)
+			}
+		}
+	}
+	aud := strings.TrimSpace(sc.TargetAudience)
+	young := aud == "kid" || aud == "middle_grade" || aud == "all_ages"
+
+	if v := strings.TrimSpace(sc.RomanceLevel); v != "" {
+		switch sc.EffectiveRomanceLevel() {
+		case "none":
+			add("【恋爱线】本作不发展恋爱关系：人物之间可有深厚情谊，但不要写成恋情或表白。",
+				"[ROMANCE] No romance line in this book: deep bonds between characters are fine, but do not turn them into love stories or confessions.")
+		case "subplot":
+			add("【恋爱线】恋爱只作为支线/暗线存在：点缀人物关系、服务主线，不占用主要篇幅，不喧宾夺主。",
+				"[ROMANCE] Romance stays a subplot/backstory thread: it colors relationships and serves the main plot without taking over screen time.")
+		case "moderate":
+			add("【恋爱线】恋爱是重要副线：有完整的相识-发展-波折-进展弧线，与主线交织并互相推动，约占故事的三到四成。",
+				"[ROMANCE] Romance is a significant secondary line with its own meet-develop-setback-progress arc, interwoven with and feeding the main plot (roughly 30-40% of the story).")
+		case "central":
+			add("【恋爱线】恋爱关系是故事核心主线：情感推进、关系变化驱动情节，即使有其他冲突也服务于感情主线。",
+				"[ROMANCE] The romance itself is the central spine: emotional progression and relationship changes drive the plot; other conflicts serve the love story.")
+		}
+	}
+
+	if v := strings.TrimSpace(sc.SexualContent); v != "" {
+		switch sc.EffectiveSexualContent() {
+		case "clean":
+			add("【性描写尺度】干净向（类似全年龄）：不出现任何性暗示场景的具体展开，亲密止步于牵手、拥抱级别的表达。",
+				"[SEXUAL CONTENT] Clean (all-ages style): no sexual situations depicted even implicitly; intimacy stops at hand-holding/hug-level expression.")
+		case "fade_to_black":
+			add("【性描写尺度】渐黑留白：亲密场景可被提及或以一句氛围带过，随后镜头移开，绝不描写过程与细节。",
+				"[SEXUAL CONTENT] Fade to black: intimate scenes may be acknowledged or bridged with a single atmospheric line, then the camera turns away—never depict process or detail.")
+			if young {
+				add("【性描写尺度·读者上限】目标读者为儿童/低龄或全年龄：即便设定允许，也只保留最轻微的浪漫暗示。",
+					"[SEXUAL CONTENT · AUDIENCE CEILING] The target audience is children or all-ages: keep at most the faintest romantic hint even where the setting would allow more.")
+			}
+		case "explicit":
+			if young {
+				add("【性描写尺度·读者上限】目标读者为儿童/低龄或全年龄：露骨内容一律禁止，自动降级为渐黑留白处理。",
+					"[SEXUAL CONTENT · AUDIENCE CEILING] Explicit content is forbidden for this child/all-ages audience: downgrade automatically to fade-to-black treatment.")
+			} else if aud == "ya" {
+				add("【性描写尺度·读者上限】目标读者为青少年：可承认角色间的亲密关系，但一切露骨细节必须回避，止于暗示与留白。",
+					"[SEXUAL CONTENT · AUDIENCE CEILING] Young-adult audience: acknowledge off-page intimacy between characters, but avoid all explicit detail—suggest, don't depict.")
+			} else {
+				add("【性描写尺度】露骨向：成人之间的亲密场景可直接、具体地描写，服务于人物与情节而非单纯猎奇；须保持知情、自愿的基调。",
+					"[SEXUAL CONTENT] Explicit: adult intimate scenes may be written directly and concretely, serving character and plot rather than shock value; keep an informed, consensual register.")
+			}
+		}
+	}
+
+	if v := strings.TrimSpace(sc.GoreLevel); v != "" {
+		switch sc.EffectiveGoreLevel() {
+		case "none":
+			add("【血腥尺度】无血腥：暴力不发生在地面上——战斗点到为止，伤亡用概述带过，不描写伤口与痛苦细节。",
+				"[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.")
+		case "mid":
+			add("【血腥尺度】中度血腥：战斗后果可见（血、伤口、疼痛），但不堆砌残肢内脏等极端意象，感官描写克制。",
+				"[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.")
+			if young {
+				add("【血腥尺度·读者上限】目标读者为儿童/低龄或全年龄：血腥自动降级为几乎不可见，仅以结果一笔带过。",
+					"[GORE · AUDIENCE CEILING] Child/all-ages audience: gore drops to nearly invisible—mention outcomes only.")
+			}
+		case "explicit":
+			if young {
+				add("【血腥尺度·读者上限】目标读者为儿童/低龄或全年龄：禁止细致血腥，自动降级为中度以下处理。",
+					"[GORE · AUDIENCE CEILING] Child/all-ages audience: graphic gore is prohibited—downgrade automatically below moderate.")
+			} else if aud == "ya" {
+				add("【血腥尺度·读者上限】目标读者为青少年：暴力可以沉重，但避免细致入微的残虐描写，重在情绪冲击而非生理细节。",
+					"[GORE · AUDIENCE CEILING] Young-adult audience: violence can be heavy, but skip meticulous torture-level detail—prioritize emotional impact over physiological description.")
+			} else {
+				add("【血腥尺度】非常露骨：可直面描写创伤、尸体与痛苦的生理细节，用于营造真实感与冲击力；不为猎奇而滥用。",
+					"[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.")
+			}
+		}
+	}
+
+	if v := strings.TrimSpace(sc.WorldDarkness); v != "" {
+		switch v {
+		case "idyllic":
+			add("【世界残酷度】田园世界：社会总体善良可信，威胁多来自外部或误会，恶意罕见且容易被化解，读完应感到温暖。",
+				"[WORLD DARKNESS] Idyllic: society is fundamentally kind and trustworthy; threats come from outside or from misunderstandings; malice is rare and easily resolved—the book should leave readers warm.")
+		case "temperate":
+			add("【世界残酷度】温和写实：好人多但也有自私者，代价真实存在但世界总体讲理，黑暗存在于个体命运而非世界本质。",
+				"[WORLD DARKNESS] Temperate: mostly decent people with some selfish ones; real costs but a fundamentally fair world—darkness lives in individual fates, not in the world's nature.")
+		case "gritty":
+			add("【世界残酷度】粗粝黑暗：资源紧张、制度腐败、背叛常见，主角每前进一步都要付出可见代价，善意常常没有好报。",
+				"[WORLD DARKNESS] Gritty: scarce resources, corrupt institutions, frequent betrayal; every step forward costs something visible; kindness often goes unrewarded.")
+		case "grim":
+			add("【世界残酷度】阴暗残酷：系统性压迫与暴力常态化，无辜者会惨死，希望稀薄且需以巨大牺牲换取，胜利往往残缺。",
+				"[WORLD DARKNESS] Grim: systemic oppression and normalized violence; innocents die horribly; hope is thin and bought with enormous sacrifice; victories remain partial.")
+		case "abyssal":
+			add("【世界残酷度】深渊绝望：世界本身充满敌意甚至恶意，道德在生存面前普遍崩塌，角色面对的往往是坏选择与更坏选择，主题直面苦难的意义本身。",
+				"[WORLD DARKNESS] Abyssal: the world itself is hostile or outright malicious; morality collapses under survival; characters face bad choices and worse ones; the story confronts the meaning of suffering itself.")
+		}
+	}
+
+	if p := strings.TrimSpace(sc.AudienceProfile); p != "" {
+		add("【目标读者画像】理想读者素描（写作时想象 TA 在阅读，贴合其口味与雷点）：\n"+p,
+			"[IDEAL READER PROFILE] Sketch of the ideal reader (write as if they are reading; match their tastes and avoid their deal-breakers):\n"+p)
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		return "CONTENT RATING & MATURITY SETTINGS (hard constraints unless overridden above):\n" + strings.Join(lines, "\n")
+	}
+	return "内容与尺度设定（除上文另有说明外均为硬性约束）：\n" + strings.Join(lines, "\n")
 }
 
 func pickLang(lang, zh, en string) string {

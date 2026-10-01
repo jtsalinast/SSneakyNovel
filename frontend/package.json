@@ -19,7 +19,12 @@
     "tailwindcss": "^4",
     "vite": "^5.3.1"
   },
+  "optionalDependencies": {
+    "@rollup/rollup-darwin-arm64": "4.61.1",
+    "@rollup/rollup-darwin-x64": "4.61.1"
+  },
   "dependencies": {
+    "@types/node": "^26.6.3",
     "@xianii/design-system": "^2.2.0",
     "dompurify": "^3.4.9",
     "marked": "^18.0.5"

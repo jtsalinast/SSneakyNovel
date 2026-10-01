@@ -27,7 +27,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	section := r.PathValue("section")
 	switch section {
-	case "style", "characters", "organizations", "relations", "locations", "motif", "brief":
+	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "brief", "audience_profile":
 	default:
 		h.writeErrorReq(w, r, http.StatusBadRequest, "unknown_section", section)
 		return
@@ -38,18 +38,39 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Brief string `json:"brief"`
+		Brief    string              `json:"brief"`
+		Story    *config.StoryConfig `json:"story"`
+		Name     string              `json:"name"`
+		Category string              `json:"category"`
+		EntryID  string              `json:"entry_id"` // worldview: update an existing entry by id
+		SourceID string              `json:"source_id"`
+		TargetID string              `json:"target_id"`
+		// Single-entry generation (characters/organizations forms): when set, the
+		// LLM fills in only this existing entry's empty fields instead of doing a
+		// whole-section batch generation.
+		CharacterID string `json:"character_id"`
+		OrgID       string `json:"org_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.endTask()
 		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
+	// The frontend sends its current (possibly unsaved) story parameters so the
+	// generation reflects exactly what the author just entered.
+	storyCfg := h.cfg.Story
+	if body.Story != nil {
+		storyCfg = *body.Story
+	}
 	brief := strings.TrimSpace(body.Brief)
+	if brief == "" {
+		brief = strings.TrimSpace(storyCfg.Brief)
+	}
 	if brief == "" {
 		brief = strings.TrimSpace(h.cfg.Story.Brief)
 	}
-	if brief == "" && section != "motif" && section != "brief" {
+	storyCfg.Brief = brief
+	if brief == "" && section != "motif" && section != "brief" && section != "audience_profile" {
 		h.endTask()
 		h.writeErrorReq(w, r, http.StatusBadRequest, "brief_required")
 		return
@@ -62,25 +83,26 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		ctx := h.taskCtx
 		h.logger.InfoKey("log.section_generating", sectionLabel(section, h.cfg.Language))
 
-		storyCfg := h.cfg.Story
-		storyCfg.Brief = brief
-
 		var err error
 		switch section {
 		case "style":
 			err = h.generateStyle(ctx, &storyCfg)
 		case "characters":
-			err = h.generateCharacters(ctx, &storyCfg)
+			err = h.generateCharactersEntryOrBatch(ctx, &storyCfg, body.CharacterID)
 		case "organizations":
-			err = h.generateOrganizations(ctx, &storyCfg)
+			err = h.generateOrganizationsEntryOrBatch(ctx, &storyCfg, body.OrgID)
 		case "relations":
-			err = h.generateRelations(ctx, &storyCfg)
+			err = h.generateRelations(ctx, &storyCfg, body.SourceID, body.TargetID)
 		case "locations":
 			err = h.generateLocations(ctx, &storyCfg)
+		case "worldview":
+			err = h.generateWorldview(ctx, &storyCfg, body.Name, body.Category, body.EntryID)
 		case "motif":
 			err = h.generateMotif(ctx, &storyCfg)
 		case "brief":
 			err = h.generateBriefFromParams(ctx, &storyCfg)
+		case "audience_profile":
+			err = h.generateAudienceProfile(ctx, &storyCfg)
 		}
 
 		if err != nil {
@@ -123,6 +145,11 @@ func sectionLabel(section, lang string) string {
 			return "地点"
 		}
 		return "locations"
+	case "worldview":
+		if zh {
+			return "世界观条目"
+		}
+		return "worldview entry"
 	case "motif":
 		if zh {
 			return "文学母题"
@@ -133,6 +160,11 @@ func sectionLabel(section, lang string) string {
 			return "故事简介"
 		}
 		return "story brief"
+	case "audience_profile":
+		if zh {
+			return "目标读者画像"
+		}
+		return "ideal reader profile"
 	default:
 		if zh {
 			return "关系"
@@ -188,6 +220,9 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 		if v := config.AudienceGuidance(sc.TargetAudience, "zh"); v != "" {
 			b.WriteString(v + "\n")
 		}
+		if v := config.ContentGuidance(sc, "zh"); v != "" {
+			b.WriteString(v + "\n")
+		}
 		switch bias := strings.TrimSpace(sc.GenderBias); bias {
 		case "", "random":
 			b.WriteString("【人物性别】随机自然即可，不要刻意偏向任何性别。\n")
@@ -240,6 +275,9 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 			b.WriteString("[SPECIFIC SETTINGS]\n" + v + "\n")
 		}
 		if v := config.AudienceGuidance(sc.TargetAudience, "en"); v != "" {
+			b.WriteString(v + "\n")
+		}
+		if v := config.ContentGuidance(sc, "en"); v != "" {
 			b.WriteString(v + "\n")
 		}
 		switch bias := strings.TrimSpace(sc.GenderBias); bias {
@@ -316,6 +354,22 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 			b.WriteString("目标读者：" + config.AudienceLabel(v, "zh") + "\n")
 		} else {
 			b.WriteString("Target audience: " + config.AudienceLabel(v, "en") + "\n")
+		}
+		wroteParams = true
+	}
+	if p := strings.TrimSpace(sc.AudienceProfile); p != "" {
+		if zh {
+			b.WriteString("目标读者画像：\n" + p + "\n")
+		} else {
+			b.WriteString("Ideal reader profile:\n" + p + "\n")
+		}
+		wroteParams = true
+	}
+	if v := strings.TrimSpace(sc.WorldDarkness); v != "" {
+		if zh {
+			b.WriteString("世界残酷度：" + config.WorldDarknessLabel(v, "zh") + "\n")
+		} else {
+			b.WriteString("World darkness: " + config.WorldDarknessLabel(v, "en") + "\n")
 		}
 		wroteParams = true
 	}
@@ -435,6 +489,25 @@ func (h *Handlers) generateBriefFromParams(ctx context.Context, sc *config.Story
 		} else {
 			b.WriteString("Target audience: " + config.AudienceLabel(v, "en") + "\n")
 		}
+	}
+	if v := strings.TrimSpace(sc.RomanceLevel); v != "" {
+		lbl := sc.EffectiveRomanceLevel()
+		if lbl == "random" {
+			lbl = config.RomanceLevelKeys[1] // brief should read concretely, not "random"
+		}
+		addPair("恋爱线比重", "Romance level", config.RomanceLevelLabel(lbl, h.cfg.Language))
+	}
+	if v := strings.TrimSpace(sc.SexualContent); v != "" {
+		addPair("性描写尺度", "Sexual content", config.SexualContentLabel(sc.EffectiveSexualContent(), h.cfg.Language))
+	}
+	if v := strings.TrimSpace(sc.GoreLevel); v != "" {
+		addPair("血腥尺度", "Gore level", config.GoreLevelLabel(sc.EffectiveGoreLevel(), h.cfg.Language))
+	}
+	if v := strings.TrimSpace(sc.WorldDarkness); v != "" {
+		addPair("世界残酷度", "World darkness", config.WorldDarknessLabel(v, h.cfg.Language))
+	}
+	if p := strings.TrimSpace(sc.AudienceProfile); p != "" {
+		addPair("目标读者画像", "Ideal reader profile", p)
 	}
 	switch bias := strings.TrimSpace(sc.GenderBias); bias {
 	case "male":
@@ -559,6 +632,46 @@ func (h *Handlers) llmJSON(ctx context.Context, prompt string, out any) error {
 		return errEmptyGeneration
 	}
 	return json.Unmarshal([]byte(extracted), out)
+}
+
+// —— audience_profile: free-text ideal-reader description (Theme & Motif block) ——
+
+func (h *Handlers) generateAudienceProfile(ctx context.Context, sc *config.StoryConfig) error {
+	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
+	prompt := briefContext(sc, h.cfg.Language)
+	if zh {
+		prompt += "\n基于以上作品参数与目标读者年龄段，为这部作品撰写一段“理想读者画像”：这位读者的年龄与身份、阅读习惯、偏好的题材与雷区、为什么会被本书吸引（4-6 句可执行的中文描述）。"
+	} else {
+		prompt += "\nBased on the work parameters and target-age band above, write an \"ideal reader profile\" for this work: the reader's age and identity, reading habits, preferred genres and deal-breakers, and why this book would attract them (4-6 actionable sentences)."
+	}
+	prompt += jsonRule(h.cfg.Language, `{"audience_profile": "..."}`)
+
+	var out struct {
+		AudienceProfile string `json:"audience_profile"`
+	}
+	if err := h.llmJSON(ctx, prompt, &out); err != nil {
+		return err
+	}
+	profile := strings.TrimSpace(out.AudienceProfile)
+	if profile == "" {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	newCfg.Story.AudienceProfile = profile
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
 }
 
 // —— style：写作风格与叙事视角（写入 config.json 的故事配置）——
@@ -877,6 +990,362 @@ func nextOrganizationIDFor(list *[]story.Organization) string {
 	return id
 }
 
+// —— single-entry generation (characters / organizations forms) ——
+
+// generateCharactersEntryOrBatch dispatches between filling one existing
+// character form (when charID is set — the per-entry "generate" button) and
+// the whole-section batch generation.
+func (h *Handlers) generateCharactersEntryOrBatch(ctx context.Context, sc *config.StoryConfig, charID string) error {
+	if strings.TrimSpace(charID) != "" {
+		return h.generateCharacterEntry(ctx, sc, strings.TrimSpace(charID))
+	}
+	return h.generateCharacters(ctx, sc)
+}
+
+// generateCharacterEntry fills the empty fields of one saved character with
+// LLM output derived from the story parameters and the character's own name.
+func (h *Handlers) generateCharacterEntry(ctx context.Context, sc *config.StoryConfig, charID string) error {
+	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
+	var target *story.Character
+	for i := range h.settings.Characters {
+		if h.settings.Characters[i].ID == charID {
+			target = &h.settings.Characters[i]
+			break
+		}
+	}
+	if target == nil {
+		if zh {
+			return errors.New("找不到该角色，请先保存后再点击生成")
+		}
+		return errors.New("character not found; save it before generating")
+	}
+
+	prompt := briefContext(sc, h.cfg.Language)
+	others := make([]string, 0, len(h.settings.Characters))
+	for _, c := range h.settings.Characters {
+		if c.ID == charID {
+			continue
+		}
+		line := c.Name
+		if p := strings.TrimSpace(c.Personality); p != "" {
+			if zh {
+				line += "（" + p + "）"
+			} else {
+				line += " (" + p + ")"
+			}
+		}
+		others = append(others, "- "+line)
+	}
+	if len(others) > 0 {
+		if zh {
+			prompt += "\n【其他已有角色】\n" + strings.Join(others, "\n") + "\n请让新设定与其他角色互补、不冲突。"
+		} else {
+			prompt += "\n[OTHER EXISTING CHARACTERS]\n" + strings.Join(others, "\n") + "\nMake this character complement the others without contradicting them."
+		}
+	}
+
+	fieldLines := []string{}
+	addField := func(key, label, val string) {
+		val = strings.TrimSpace(val)
+		if val == "" {
+			return
+		}
+		if zh {
+			fieldLines = append(fieldLines, fmt.Sprintf("- %s：%s", label, val))
+		} else {
+			fieldLines = append(fieldLines, fmt.Sprintf("- %s: %s", key, val))
+		}
+	}
+	addField("age", "年龄", target.Age)
+	addField("appearance", "外貌", target.Appearance)
+	addField("personality", "性格", target.Personality)
+	addField("background", "背景", target.Background)
+	addField("motivation", "动机", target.Motivation)
+	addField("abilities", "能力", target.Abilities)
+	addField("notes", "备注", target.Notes)
+	if zh {
+		prompt += fmt.Sprintf("\n请完善角色「%s」。以下字段作者已填写，必须原样保留、不得改写：\n%s\n", target.Name, strings.Join(fieldLines, "\n"))
+		prompt += "只为空缺的字段（age/appearance/personality/background/motivation/abilities/notes，以及 goals/flaws/strengths/arc 若启用）生成与故事简介一致的内容；name 字段返回原值。"
+	} else {
+		prompt += fmt.Sprintf("\nComplete the character \"%s\". The author already filled these fields — keep them verbatim, never rewrite them:\n%s\n", target.Name, strings.Join(fieldLines, "\n"))
+		prompt += "Generate content ONLY for the empty fields (age/appearance/personality/background/motivation/abilities/notes, plus goals/flaws/strengths/arc when enabled), consistent with the brief; return name unchanged."
+	}
+	if sc.CharacterArcsEnabled {
+		if zh {
+			prompt += "并补充 goals、flaws、strengths、arc。"
+		} else {
+			prompt += " Also fill goals, flaws, strengths and arc."
+		}
+	}
+	prompt += jsonRule(h.cfg.Language, `{"character":{"name":"...","age":"...","appearance":"...","personality":"...","background":"...","motivation":"...","abilities":"...","notes":"..."}}`)
+
+	var out struct {
+		Character story.Character `json:"character"`
+	}
+	if err := h.llmJSON(ctx, prompt, &out); err != nil {
+		return err
+	}
+	g := out.Character
+	changed := false
+	next := *h.settings
+	next.Characters = append([]story.Character{}, h.settings.Characters...)
+	for i := range next.Characters {
+		if next.Characters[i].ID != charID {
+			continue
+		}
+		c := next.Characters[i]
+		fillIfEmpty := func(dst *string, src string) {
+			src = strings.TrimSpace(src)
+			if *dst == "" && src != "" {
+				*dst = src
+				changed = true
+			}
+		}
+		fillIfEmpty(&c.Age, g.Age)
+		fillIfEmpty(&c.Appearance, g.Appearance)
+		fillIfEmpty(&c.Personality, g.Personality)
+		fillIfEmpty(&c.Background, g.Background)
+		fillIfEmpty(&c.Motivation, g.Motivation)
+		fillIfEmpty(&c.Abilities, g.Abilities)
+		fillIfEmpty(&c.Notes, g.Notes)
+		if sc.CharacterArcsEnabled {
+			fillIfEmpty(&c.Goals, g.Goals)
+			fillIfEmpty(&c.Flaws, g.Flaws)
+			fillIfEmpty(&c.Strengths, g.Strengths)
+			fillIfEmpty(&c.Arc, g.Arc)
+		}
+		next.Characters[i] = c
+		break
+	}
+	if !changed {
+		return errEmptyGeneration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := story.SaveProjectSettings(h.settingsPath, &next); err != nil {
+		return err
+	}
+	h.settings = &next
+	return nil
+}
+
+// generateOrganizationsEntryOrBatch dispatches between filling one existing
+// organization form (when orgID is set) and the whole-section batch generation.
+func (h *Handlers) generateOrganizationsEntryOrBatch(ctx context.Context, sc *config.StoryConfig, orgID string) error {
+	if strings.TrimSpace(orgID) != "" {
+		return h.generateOrganizationEntry(ctx, sc, strings.TrimSpace(orgID))
+	}
+	return h.generateOrganizations(ctx, sc)
+}
+
+// generateOrganizationEntry fills the empty description of one saved
+// organization (and suggests members from existing characters).
+func (h *Handlers) generateOrganizationEntry(ctx context.Context, sc *config.StoryConfig, orgID string) error {
+	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
+	var target *story.Organization
+	for i := range h.settings.Organizations {
+		if h.settings.Organizations[i].ID == orgID {
+			target = &h.settings.Organizations[i]
+			break
+		}
+	}
+	if target == nil {
+		if zh {
+			return errors.New("找不到该组织，请先保存后再点击生成")
+		}
+		return errors.New("organization not found; save it before generating")
+	}
+
+	prompt := briefContext(sc, h.cfg.Language)
+	charLines := make([]string, 0, len(h.settings.Characters))
+	nameToID := map[string]string{}
+	for _, c := range h.settings.Characters {
+		charLines = append(charLines, c.Name)
+		nameToID[strings.TrimSpace(c.Name)] = c.ID
+	}
+	if len(charLines) > 0 {
+		if zh {
+			prompt += "\n【可用角色】\n" + strings.Join(charLines, "、") + "\nmembers 字段只能使用上述角色名。"
+		} else {
+			prompt += "\n[AVAILABLE CHARACTER NAMES]\n" + strings.Join(charLines, ", ") + "\nThe members field may only reference names from this list."
+		}
+	}
+	desc := strings.TrimSpace(target.Description)
+	if zh {
+		prompt += fmt.Sprintf("\n请完善组织「%s」（类型：%s）。", target.Name, target.Type)
+		if desc != "" {
+			prompt += "作者已填写的描述必须保留并在其基础上扩写：" + desc
+		} else {
+			prompt += "请生成一段完整、具体、与故事简介一致的描述。"
+		}
+		prompt += "同时给出 1-4 个最相关的成员（仅限上面列表中的角色名）。不要修改名称与类型。"
+	} else {
+		prompt += fmt.Sprintf("\nComplete the organization \"%s\" (type: %s).", target.Name, target.Type)
+		if desc != "" {
+			prompt += " Keep the author's existing description and enrich it: " + desc
+		} else {
+			prompt += " Generate one complete, concrete description consistent with the brief."
+		}
+		prompt += " Also suggest 1-4 most relevant members (only names from the list above). Do not change the name or type."
+	}
+	prompt += jsonRule(h.cfg.Language, `{"organization":{"description":"...","members":["角色名"]}}`)
+
+	var out struct {
+		Organization struct {
+			Description string   `json:"description"`
+			Members     []string `json:"members"`
+		} `json:"organization"`
+	}
+	if err := h.llmJSON(ctx, prompt, &out); err != nil {
+		return err
+	}
+	newDesc := strings.TrimSpace(out.Organization.Description)
+	if newDesc == "" && len(out.Organization.Members) == 0 {
+		return errEmptyGeneration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	next := *h.settings
+	next.Organizations = append([]story.Organization{}, h.settings.Organizations...)
+	for i := range next.Organizations {
+		if next.Organizations[i].ID != orgID {
+			continue
+		}
+		o := next.Organizations[i]
+		if newDesc != "" {
+			o.Description = newDesc
+		}
+		if len(o.Members) == 0 {
+			seen := map[string]bool{}
+			for _, m := range out.Organization.Members {
+				if id, ok := nameToID[strings.TrimSpace(m)]; ok && !seen[id] {
+					seen[id] = true
+					o.Members = append(o.Members, id)
+				}
+			}
+		}
+		next.Organizations[i] = o
+		break
+	}
+	if err := story.SaveProjectSettings(h.settingsPath, &next); err != nil {
+		return err
+	}
+	h.settings = &next
+	return nil
+}
+
+// —— worldview —— (single-entry generation for the worldview form's "generate" button)
+
+// generateWorldview fills one worldview entry (identified by name, or a new
+// unnamed placeholder when name is empty) with AI-generated description and
+// tags derived from the story parameters. When an entry already exists with
+// that name it is enriched in place; otherwise a new entry is created.
+func (h *Handlers) generateWorldview(ctx context.Context, sc *config.StoryConfig, name, category, entryID string) error {
+	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
+	name = strings.TrimSpace(name)
+	category = strings.TrimSpace(category)
+	entryID = strings.TrimSpace(entryID)
+	if category == "" {
+		category = "general"
+	}
+	if name == "" && entryID == "" {
+		if zh {
+			return errors.New("请先填写该世界观条目的名称，再点击生成")
+		}
+		return errors.New("enter a name for this worldview entry before generating")
+	}
+	// When editing an existing entry, keep its canonical name/category so the
+	// result is written back to the right row even if the form was renamed.
+	if entryID != "" {
+		for _, w := range h.settings.Worldview {
+			if w.ID == entryID {
+				if name == "" {
+					name = w.Name
+				}
+				category = w.Category
+				break
+			}
+		}
+	}
+
+	prompt := briefContext(sc, h.cfg.Language)
+	if zh {
+		prompt += fmt.Sprintf("\n请为世界观条目「%s」（类别：%s）生成本故事所需的设定内容。", name, category)
+		prompt += "\ndescription：一段完整、具体、与故事简介和类型一致的设定描述（地点写氛围与用途，组织写性质与目标，概念写规则与代价等）。"
+		prompt += "\ntags：逗号分隔的关键词（可关联已有角色/组织名）。不要修改名称与类别。"
+	} else {
+		prompt += fmt.Sprintf("\nGenerate the worldbuilding content for the entry \"%s\" (category: %s) required by this story.", name, category)
+		prompt += "\ndescription: one complete, concrete paragraph consistent with the brief, genre and tone (for locations: atmosphere & purpose; organizations: nature & goals; concepts: rules & costs)."
+		prompt += "\ntags: comma-separated keywords (you may reference existing characters/organizations). Do not change the name or category."
+	}
+	prompt += jsonRule(h.cfg.Language, `{"entry":{"description":"...","tags":"..."}}`)
+
+	var out struct {
+		Entry struct {
+			Description string `json:"description"`
+			Tags        string `json:"tags"`
+		} `json:"entry"`
+	}
+	if err := h.llmJSON(ctx, prompt, &out); err != nil {
+		return err
+	}
+	desc := strings.TrimSpace(out.Entry.Description)
+	tags := strings.TrimSpace(out.Entry.Tags)
+	if desc == "" && tags == "" {
+		return errEmptyGeneration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	next := *h.settings
+	next.Worldview = append([]story.WorldviewEntry{}, h.settings.Worldview...)
+	idx := -1
+	for i, w := range next.Worldview {
+		if entryID != "" {
+			if w.ID == entryID {
+				idx = i
+				break
+			}
+			continue
+		}
+		if strings.TrimSpace(w.Name) == name && w.Category == category {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		w := next.Worldview[idx]
+		if name != "" {
+			w.Name = name
+		}
+		if desc != "" {
+			w.Description = desc
+		}
+		if tags != "" {
+			w.Tags = tags
+		}
+		next.Worldview[idx] = w
+	} else {
+		ps := &next
+		next.Worldview = append(next.Worldview, story.WorldviewEntry{
+			ID:          ps.NextWorldviewID(),
+			Category:    category,
+			Name:        name,
+			Description: desc,
+			Tags:        tags,
+		})
+	}
+	if err := story.SaveProjectSettings(h.settingsPath, &next); err != nil {
+		return err
+	}
+	h.settings = &next
+	return nil
+}
+
 // —— locations —— (worldview entries with Category == "location")
 
 func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig) error {
@@ -972,15 +1441,25 @@ func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig
 
 // —— relations ——
 
-func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig) error {
-	if len(h.settings.Characters)+len(h.settings.Organizations) < 2 {
-		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-			return errors.New("请先生成或添加至少两个角色/组织，然后再生成关系")
-		}
-		return errors.New("generate or add at least two characters/organizations before generating relations")
+// entityKindByID maps every known entity id to its kind ("character",
+// "organization" or "worldview"). Used to validate LLM-produced relation ends.
+func (h *Handlers) entityKindByID() map[string]string {
+	out := map[string]string{}
+	for _, c := range h.settings.Characters {
+		out[c.ID] = "character"
 	}
+	for _, o := range h.settings.Organizations {
+		out[o.ID] = "organization"
+	}
+	for _, w := range h.settings.Worldview {
+		out[w.ID] = "worldview"
+	}
+	return out
+}
 
-	prompt := briefContext(sc, h.cfg.Language)
+// entityListLines renders the existing entities as "- [kind] id | name" lines
+// for inclusion in generation prompts.
+func (h *Handlers) entityListLines() []string {
 	lines := make([]string, 0)
 	for _, c := range h.settings.Characters {
 		lines = append(lines, fmt.Sprintf("- [character] %s | %s", c.ID, c.Name))
@@ -991,12 +1470,68 @@ func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig
 	for _, w := range h.settings.Worldview {
 		lines = append(lines, fmt.Sprintf("- [worldview] %s | %s", w.ID, w.Name))
 	}
-	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-		prompt += "\n【现有实体（id | 名称）】\n" + strings.Join(lines, "\n") + "\nsource_id/target_id 必须使用上面的 id；source_type/target_type 取对应方括号中的类型。"
-		prompt += "\n请设计 5-10 条对剧情有张力的关键关系（敌对、师承、暗恋、效忠、血缘等），label 用一句话描述关系及其暗流。避免重复已有关系。"
+	return lines
+}
+
+// generateRelations creates relations between story entities. When srcID/tgtID
+// are both provided (the frontend "generate" button next to a relation form),
+// only that single pair is generated; otherwise a batch of key relations across
+// all entities is produced.
+func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig, srcID, tgtID string) error {
+	srcID = strings.TrimSpace(srcID)
+	tgtID = strings.TrimSpace(tgtID)
+	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
+
+	kinds := h.entityKindByID()
+	if srcID != "" && tgtID != "" {
+		if _, ok := kinds[srcID]; !ok {
+			if zh {
+				return errors.New("源实体不存在，请先保存该实体后再生成关系")
+			}
+			return errors.New("source entity not found; save it before generating the relation")
+		}
+		if _, ok := kinds[tgtID]; !ok {
+			if zh {
+				return errors.New("目标实体不存在，请先保存该实体后再生成关系")
+			}
+			return errors.New("target entity not found; save it before generating the relation")
+		}
+		if srcID == tgtID {
+			if zh {
+				return errors.New("请选择两个不同的实体来生成关系")
+			}
+			return errors.New("pick two different entities to generate a relation")
+		}
+	} else if len(h.settings.Characters)+len(h.settings.Organizations) < 2 {
+		if zh {
+			return errors.New("请先生成或添加至少两个角色/组织，然后再生成关系")
+		}
+		return errors.New("generate or add at least two characters/organizations before generating relations")
+	}
+
+	prompt := briefContext(sc, h.cfg.Language)
+	lines := h.entityListLines()
+	if srcID != "" && tgtID != "" {
+		// Single-pair mode: fill the relation between the two chosen entities.
+		if zh {
+			prompt += "\n【现有实体（id | 名称）】\n" + strings.Join(lines, "\n")
+			prompt += fmt.Sprintf("\n只为这一对实体生成一条关系：source_id=%s，target_id=%s。", srcID, tgtID)
+			prompt += "\n结合双方的设定与故事简介，设计一条最有戏剧张力的一条关系（敌对、师承、暗恋、效忠、血缘、阴谋等），label 用一句话描述关系及其暗流。"
+			prompt += "\n只返回 JSON 数组中包含这一条关系的对象。"
+		} else {
+			prompt += "\n[EXISTING ENTITIES (id | name)]\n" + strings.Join(lines, "\n")
+			prompt += fmt.Sprintf("\nGenerate exactly ONE relationship for this pair: source_id=%s, target_id=%s.", srcID, tgtID)
+			prompt += "\nBased on both entities' profiles and the story brief, design the single most dramatically charged relation (rivalry, mentorship, secret loyalty, blood tie, conspiracy...); label is one sentence describing the relation and its undercurrents."
+			prompt += "\nReturn only that one relation in the JSON array."
+		}
 	} else {
-		prompt += "\n[EXISTING ENTITIES (id | name)]\n" + strings.Join(lines, "\n") + "\nUse the ids above for source_id/target_id and the bracketed kind for source_type/target_type."
-		prompt += "\nDesign 5-10 key relationships with dramatic tension (rivals, mentorship, secret loyalty, blood ties...); label is one sentence describing the relation and its undercurrents. Avoid duplicating existing relations."
+		if zh {
+			prompt += "\n【现有实体（id | 名称）】\n" + strings.Join(lines, "\n") + "\nsource_id/target_id 必须使用上面的 id；source_type/target_type 取对应方括号中的类型。"
+			prompt += "\n请设计 5-10 条对剧情有张力的关键关系（敌对、师承、暗恋、效忠、血缘等），label 用一句话描述关系及其暗流。避免重复已有关系。"
+		} else {
+			prompt += "\n[EXISTING ENTITIES (id | name)]\n" + strings.Join(lines, "\n") + "\nUse the ids above for source_id/target_id and the bracketed kind for source_type/target_type."
+			prompt += "\nDesign 5-10 key relationships with dramatic tension (rivals, mentorship, secret loyalty, blood ties...); label is one sentence describing the relation and its undercurrents. Avoid duplicating existing relations."
+		}
 	}
 	if len(h.settings.Relations) > 0 {
 		ex := make([]string, 0, len(h.settings.Relations))
@@ -1025,29 +1560,28 @@ func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig
 		return err
 	}
 
-	validID := map[string]string{} // id -> type
-	for _, c := range h.settings.Characters {
-		validID[c.ID] = "character"
-	}
-	for _, o := range h.settings.Organizations {
-		validID[o.ID] = "organization"
-	}
-	for _, w := range h.settings.Worldview {
-		validID[w.ID] = "worldview"
-	}
+	validID := h.entityKindByID()
+
+	singlePair := srcID != "" && tgtID != ""
 
 	next := *h.settings
 	next.Relations = append([]story.Relation{}, h.settings.Relations...)
 	added := 0
 	for _, rel := range out.Relations {
-		srcType, srcOK := validID[strings.TrimSpace(rel.SourceID)]
-		tgtType, tgtOK := validID[strings.TrimSpace(rel.TargetID)]
-		if !srcOK || !tgtOK || rel.SourceID == rel.TargetID || strings.TrimSpace(rel.Label) == "" {
+		src := strings.TrimSpace(rel.SourceID)
+		tgt := strings.TrimSpace(rel.TargetID)
+		srcType, srcOK := validID[src]
+		tgtType, tgtOK := validID[tgt]
+		if !srcOK || !tgtOK || src == tgt || strings.TrimSpace(rel.Label) == "" {
+			continue
+		}
+		if singlePair && (src != srcID || tgt != tgtID) {
+			// Single-pair mode: keep only the relation for the requested pair.
 			continue
 		}
 		dup := false
 		for _, ex := range next.Relations {
-			if ex.SourceID == rel.SourceID && ex.TargetID == rel.TargetID {
+			if ex.SourceID == src && ex.TargetID == tgt {
 				dup = true
 				break
 			}
@@ -1056,6 +1590,8 @@ func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig
 			continue
 		}
 		rel.ID = nextRelationIDFor(&next.Relations)
+		rel.SourceID = src
+		rel.TargetID = tgt
 		rel.SourceType = srcType
 		rel.TargetType = tgtType
 		next.Relations = append(next.Relations, rel)

@@ -40,7 +40,7 @@
   $: cfgTimeout = $apiConfig?.http_timeout_seconds || 600;
 
   let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, max_tokens: 32768, context_budget_tokens: 900000 };
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', brief: '', conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', brief: '' };
+  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', brief: '', conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
 
 // Novel-parameter tooltips (subgenre/structure hints) fetched from /api/novel-params.
 let SUBGENRE_HINTS = {};
@@ -301,9 +301,123 @@ novelParamsTick++;
     }
   }
 
-  // AI section generation (based on the story brief)
+  // AI section generation (based on the story parameters currently in the form)
   let genBusy = {};
-  async function pollGenDone(section) {
+
+  // —— Undo support for AI-generated settings ——
+  // Before a generation runs we snapshot the affected state; "undo" restores it,
+  // so a bad generation can be reverted without leaving the whole project touched.
+  let genUndo = {};
+
+  // Story-config fields (writing_style/pov, theme/motif, brief) are plain
+  // strings inside the config file: snapshot them as a map and restore via PUT.
+  function captureStoryFields(key, fields) {
+    const cur = ($config?.story || {});
+    const snap = {};
+    for (const f of fields) snap[f] = cur[f] ?? '';
+    genUndo = { ...genUndo, [key]: { storyFields: snap } };
+  }
+  async function undoStoryFields(key) {
+    const snap = genUndo[key];
+    if (!snap || !snap.storyFields) return false;
+    try {
+      const st = { ...($config?.story || {}), ...snap.storyFields };
+      await api('PUT', '/api/config', { ...($config || {}), story: st });
+      config.set(await api('GET', '/api/config'));
+      localStoryCfg = { ...localStoryCfg, ...snap.storyFields };
+      genUndo = { ...genUndo, [key]: undefined };
+      addToast($t('config.generate.undoDone'), 'success');
+    } catch (e) { addToast(e.message, 'error'); return false; }
+    return true;
+  }
+
+  function entitySnap(type, id) {
+    if (type === 'character') return ($settings?.characters || []).find(c => c.id === id) || null;
+    if (type === 'organization') return ($settings?.organizations || []).find(o => o.id === id) || null;
+    if (type === 'worldview') return ($settings?.worldview || []).find(w => w.id === id) || null;
+    if (type === 'relation') return ($settings?.relations || []).find(r => r.id === id) || null;
+    return null;
+  }
+
+  function listIds(type) {
+    if (type === 'character') return ($settings?.characters || []).map(c => c.id);
+    if (type === 'organization') return ($settings?.organizations || []).map(o => o.id);
+    if (type === 'worldview') return ($settings?.worldview || []).map(w => w.id);
+    if (type === 'relation') return ($settings?.relations || []).map(r => r.id);
+    return [];
+  }
+
+  function captureSnapshot(key, scope) {
+    const snap = { scope };
+    if (scope.type === 'entity') {
+      snap.entity = entitySnap(scope.entityType, scope.entityId);
+    } else if (scope.type === 'pair') {
+      // Relations between the chosen pair that already exist (either direction).
+      snap.beforePairs = ($settings?.relations || []).filter(r =>
+        (r.source_id === scope.srcId && r.target_id === scope.tgtId) ||
+        (r.source_id === scope.tgtId && r.target_id === scope.srcId));
+    } else {
+      const ids = scope.ids || listIds(scope.entityType);
+      snap.byType = scope.entityType;
+      snap.before = {};
+      ids.forEach(id => { const e = entitySnap(scope.entityType, id); if (e) snap.before[id] = e; });
+    }
+    genUndo = { ...genUndo, [key]: snap };
+  }
+
+  async function restoreEntity(type, id, ent) {
+    if (!ent) return;
+    if (type === 'character') await api('PUT', '/api/characters/' + id, ent);
+    else if (type === 'organization') await api('PUT', '/api/organizations/' + id, ent);
+    else if (type === 'worldview') await api('PUT', '/api/worldview/' + id, ent);
+    else if (type === 'relation') await api('PUT', '/api/relations/' + id, ent);
+  }
+
+  async function removeEntity(type, id) {
+    if (type === 'character') await api('DELETE', '/api/characters/' + id);
+    else if (type === 'organization') await api('DELETE', '/api/organizations/' + id);
+    else if (type === 'worldview') await api('DELETE', '/api/worldview/' + id);
+    else if (type === 'relation') await api('DELETE', '/api/relations/' + id);
+  }
+
+  async function undoGenerate(key) {
+    const snap = genUndo[key];
+    if (!snap) return;
+    if (snap.storyFields) { await undoStoryFields(key); return; }
+    try {
+      if (snap.scope.type === 'entity') {
+        const t = snap.scope.entityType, id = snap.scope.entityId;
+        if (snap.entity) await restoreEntity(t, id, snap.entity);
+        else if (id !== '__new__') await removeEntity(t, id);
+      } else if (snap.scope.type === 'pair') {
+        // Single-pair relation generation: drop the relations that connect the
+        // chosen pair and did not exist before.
+        for (const r of (snap.beforePairs || [])) {
+          const cur = ($settings?.relations || []).find(x => x.id === r.id);
+          if (!cur) continue;
+          if (r.label !== undefined && cur.label !== r.label) await restoreEntity('relation', r.id, r);
+        }
+        for (const id of (snap.afterNew || [])) {
+          await removeEntity('relation', id);
+        }
+      } else {
+        // Batch generation: restore every entity that existed before, delete
+        // the ones the generation added.
+        const t = snap.scope.entityType;
+        for (const [id, ent] of Object.entries(snap.before || {})) {
+          await restoreEntity(t, id, ent);
+        }
+        for (const id of (snap.afterNew || [])) {
+          await removeEntity(t, id);
+        }
+      }
+      genUndo = { ...genUndo, [key]: undefined };
+      settings.set(await api('GET', '/api/settings'));
+      addToast($t('config.generate.undoDone'), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  async function pollGenDone(section, undoKey) {
     try {
       for (;;) {
         await new Promise(r => setTimeout(r, 1500));
@@ -313,8 +427,34 @@ novelParamsTick++;
       addToast($t('config.generate.done'), 'success');
     } finally {
       genBusy = { ...genBusy, [section]: false };
+      // If an undo snapshot exists, reconcile it against the post-generation
+      // state so newly added entities can be removed by "undo".
+      try {
+        const s = await api('GET', '/api/settings');
+        settings.set(s);
+        const snap = genUndo[undoKey || section];
+        if (snap && (snap.scope.type === 'all' || snap.scope.type === 'pair')) {
+          const t = snap.scope.entityType;
+          const nowIds = (() => {
+            if (t === 'character') return (s.characters || []).map(c => c.id);
+            if (t === 'organization') return (s.organizations || []).map(o => o.id);
+            if (t === 'worldview') return (s.worldview || []).map(w => w.id);
+            if (t === 'relation') return (s.relations || []).map(r => r.id);
+            return [];
+          })();
+          const beforeIds = new Set(snap.scope.type === 'pair'
+            ? (snap.beforePairs || []).map(r => r.id)
+            : Object.keys(snap.before || {}));
+          let afterNew = nowIds.filter(id => !beforeIds.has(id));
+          if (snap.scope.type === 'pair') {
+            // Only count relations that actually connect the generated pair.
+            const list = (s.relations || []).filter(r => r.source_id === snap.scope.srcId && r.target_id === snap.scope.tgtId);
+            afterNew = list.filter(r => !beforeIds.has(r.id)).map(r => r.id);
+          }
+          snap.afterNew = afterNew;
+        }
+      } catch (e) {}
       try { config.set(await api('GET', '/api/config')); } catch (e) {}
-      try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
       // If the motif generator wrote into Theme while Motif was empty, merge it into the single Theme field.
       const st = $config?.story || {};
       if ((st.motif || '').trim() && !(st.theme || '').trim()) {
@@ -323,16 +463,30 @@ novelParamsTick++;
       }
     }
   }
-  async function generateSection(section) {
+  function storyPayload() {
+    return { ...localStoryCfg, target_words_per_chapter: Number(localStoryCfg.target_words_per_chapter) || 2500 };
+  }
+  async function generateSection(section, extra = {}, undoKey = section) {
     if (genBusy[section] || $taskRunning) return;
-    const brief = (localStoryCfg.brief || '').trim() || ($config?.story?.brief || '').trim();
-    if (!brief && section !== 'motif' && section !== 'brief') { addToast($t('config.brief.required'), 'error'); return; }
+    const story = storyPayload();
+    const brief = (story.brief || '').trim() || ($config?.story?.brief || '').trim();
+    if (!brief && section !== 'motif' && section !== 'brief' && section !== 'audience_profile') { addToast($t('config.brief.required'), 'error'); return; }
+    // Snapshot what this generation may touch, so the user can undo it.
+    if (section === 'characters') captureSnapshot(undoKey, { type: 'all', entityType: 'character' });
+    else if (section === 'organizations') captureSnapshot(undoKey, { type: 'all', entityType: 'organization' });
+    else if (section === 'relations') captureSnapshot(undoKey, extra.source_id ? { type: 'pair', entityType: 'relation', srcId: extra.source_id, tgtId: extra.target_id } : { type: 'all', entityType: 'relation' });
+    else if (section === 'worldview') captureSnapshot(undoKey, { type: 'entity', entityType: 'worldview', entityId: extra.entry_id || '__new__' });
+    else if (section === 'locations') captureSnapshot(undoKey, { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
+    else if (section === 'style') captureStoryFields(undoKey, ['writing_style', 'writing_pov']);
+    else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif']);
+    else if (section === 'brief') captureStoryFields(undoKey, ['brief']);
+    else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile']);
     try {
-      await api('POST', '/api/generate/' + section, { brief });
+      await api('POST', '/api/generate/' + section, { brief, story, ...extra });
       genBusy = { ...genBusy, [section]: true };
       taskRunning.set(true);
       addToast($t('config.generate.started'), 'info');
-      pollGenDone(section);
+      pollGenDone(section, undoKey);
     } catch (e) {
       addToast(e.message, 'error');
     }
@@ -342,6 +496,14 @@ novelParamsTick++;
       class: 'btn btn-accent btn-xs',
       disabled: $taskRunning || !!genBusy[section],
       onclick: (e) => { e.stopPropagation(); generateSection(section); },
+    };
+  }
+  function undoBtnProps(key) {
+    return {
+      class: 'btn btn-ghost btn-xs border border-base-content/25',
+      disabled: !$taskRunning && !genUndo[key],
+      title: $t('config.generate.undoHint'),
+      onclick: (e) => { e.stopPropagation(); undoGenerate(key); },
     };
   }
 
@@ -526,15 +688,18 @@ novelParamsTick++;
     if (!charName.trim()) { addToast($t('config.char.nameRequired'), 'error'); return; }
     const data = { name: charName.trim(), age: charAge, appearance: charAppearance, personality: charPersonality, background: charBackground, motivation: charMotivation, abilities: charAbilities, notes: charNotes };
     try {
-      if ($editingCharID) {
-        await api('PUT', '/api/characters/' + $editingCharID, data);
+      let savedId = $editingCharID;
+      if (savedId) {
+        await api('PUT', '/api/characters/' + savedId, data);
       } else {
-        await api('POST', '/api/characters', data);
+        const created = await api('POST', '/api/characters', data);
+        savedId = created?.id || created?.character?.id || null;
       }
       addToast($t('config.char.saved'), 'success');
       closeCharForm();
       settings.set(await api('GET', '/api/settings'));
-    } catch (e) { addToast(e.message, 'error'); }
+      return savedId;
+    } catch (e) { addToast(e.message, 'error'); return null; }
   }
 
   async function deleteCharacter(id) {
@@ -590,19 +755,51 @@ novelParamsTick++;
     $editingWvID = null;
   }
 
+  // Returns the saved entry id (or null on failure). Used by both Save and the
+  // form's Generate button so generation can target the just-saved row.
   async function saveWorldview() {
-    if (!wvName.trim() || !wvDescription.trim()) { addToast($t('config.wv.requiredFields'), 'error'); return; }
+    if (!wvName.trim()) { addToast($t('config.wv.requiredFields'), 'error'); return null; }
     const data = { name: wvName.trim(), category: wvCategory, description: wvDescription.trim(), tags: wvTags };
     try {
-      if ($editingWvID) {
-        await api('PUT', '/api/worldview/' + $editingWvID, data);
+      let savedId = $editingWvID;
+      if (savedId) {
+        await api('PUT', '/api/worldview/' + savedId, data);
       } else {
-        await api('POST', '/api/worldview', data);
+        const created = await api('POST', '/api/worldview', data);
+        savedId = created?.id || null;
       }
       addToast($t('config.wv.saved'), 'success');
       closeWvForm();
       settings.set(await api('GET', '/api/settings'));
+      return savedId;
+    } catch (e) { addToast(e.message, 'error'); return null; }
+  }
+
+  // Generate button next to Save in the worldview form: saves the form first,
+  // then asks the LLM to fill the entry's description/tags from the story
+  // parameters currently in the UI (even if unsaved). Undo restores/removes.
+  async function generateWorldviewEntry() {
+    if (genBusy['worldview'] || $taskRunning) return;
+    if (!wvName.trim()) { addToast($t('config.wv.requiredFields'), 'error'); return; }
+    const savedId = await saveWorldview();
+    if (!savedId) return;
+    captureSnapshot('wvform', { type: 'entity', entityType: 'worldview', entityId: savedId });
+    const story = storyPayload();
+    try {
+      await api('POST', '/api/generate/worldview', { brief: (story.brief || '').trim(), story, entry_id: savedId });
+      genBusy = { ...genBusy, worldview: true };
+      taskRunning.set(true);
+      addToast($t('config.generate.started'), 'info');
+      pollGenDone('worldview', 'wvform');
     } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  function wvGenBtnProps() {
+    return {
+      class: 'btn btn-accent btn-xs',
+      disabled: $taskRunning || !!genBusy['worldview'],
+      onclick: (e) => { e.stopPropagation(); generateWorldviewEntry(); },
+    };
   }
 
   async function deleteWorldview(id) {
@@ -664,15 +861,95 @@ novelParamsTick++;
     if (!orgName.trim()) { addToast($t('config.org.nameRequired'), 'error'); return; }
     const data = { name: orgName.trim(), type: orgType, description: orgDescription, members: orgMembers };
     try {
-      if (editingOrgID) {
-        await api('PUT', '/api/organizations/' + editingOrgID, data);
+      let savedId = editingOrgID;
+      if (savedId) {
+        await api('PUT', '/api/organizations/' + savedId, data);
       } else {
-        await api('POST', '/api/organizations', data);
+        const created = await api('POST', '/api/organizations', data);
+        savedId = created?.id || null;
       }
       addToast($t('config.org.saved'), 'success');
       closeOrgForm();
       settings.set(await api('GET', '/api/settings'));
+      return savedId;
+    } catch (e) { addToast(e.message, 'error'); return null; }
+  }
+
+  // —— Per-form "generate" buttons (characters / organizations / relations) ——
+  // They save the current form first (so the backend can address the entry by
+  // id), then ask the LLM to fill in whatever is still empty using the story
+  // parameters currently in the form. "Undo" restores the pre-generation state.
+  async function generateCharacterEntry() {
+    if (genBusy['characters'] || $taskRunning) return;
+    if (!charName.trim()) { addToast($t('config.char.nameRequired'), 'error'); return; }
+    const savedId = await saveCharacter();
+    if (!savedId) return;
+    captureSnapshot('charform', { type: 'entity', entityType: 'character', entityId: savedId });
+    const story = storyPayload();
+    try {
+      await api('POST', '/api/generate/characters', { brief: (story.brief || '').trim(), story, character_id: savedId });
+      genBusy = { ...genBusy, characters: true };
+      taskRunning.set(true);
+      addToast($t('config.generate.started'), 'info');
+      pollGenDone('characters', 'charform');
     } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  async function generateOrganizationEntry() {
+    if (genBusy['organizations'] || $taskRunning) return;
+    if (!orgName.trim()) { addToast($t('config.org.nameRequired'), 'error'); return; }
+    const savedId = await saveOrganization();
+    if (!savedId) return;
+    captureSnapshot('orgform', { type: 'entity', entityType: 'organization', entityId: savedId });
+    const story = storyPayload();
+    try {
+      await api('POST', '/api/generate/organizations', { brief: (story.brief || '').trim(), story, org_id: savedId });
+      genBusy = { ...genBusy, organizations: true };
+      taskRunning.set(true);
+      addToast($t('config.generate.started'), 'info');
+      pollGenDone('organizations', 'orgform');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  async function generateRelationEntry() {
+    if (genBusy['relations'] || $taskRunning) return;
+    if (!relSource || !relTarget) { addToast($t('config.rel.bothRequired'), 'error'); return; }
+    if (relSource === relTarget) { addToast($t('config.rel.sameEntity'), 'error'); return; }
+    const s = parseEntityKey(relSource);
+    const tt = parseEntityKey(relTarget);
+    const savedId = await saveRelation();
+    if (!savedId) return;
+    captureSnapshot('relform', { type: 'pair', entityType: 'relation', srcId: s.id, tgtId: tt.id });
+    const story = storyPayload();
+    try {
+      await api('POST', '/api/generate/relations', { brief: (story.brief || '').trim(), story, source_id: s.id, target_id: tt.id });
+      genBusy = { ...genBusy, relations: true };
+      taskRunning.set(true);
+      addToast($t('config.generate.started'), 'info');
+      pollGenDone('relations', 'relform');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  function charGenBtnProps() {
+    return {
+      class: 'btn btn-accent btn-xs',
+      disabled: $taskRunning || !!genBusy['characters'],
+      onclick: (e) => { e.stopPropagation(); generateCharacterEntry(); },
+    };
+  }
+  function orgGenBtnProps() {
+    return {
+      class: 'btn btn-accent btn-xs',
+      disabled: $taskRunning || !!genBusy['organizations'],
+      onclick: (e) => { e.stopPropagation(); generateOrganizationEntry(); },
+    };
+  }
+  function relGenBtnProps() {
+    return {
+      class: 'btn btn-accent btn-xs',
+      disabled: $taskRunning || !!genBusy['relations'],
+      onclick: (e) => { e.stopPropagation(); generateRelationEntry(); },
+    };
   }
 
   async function deleteOrganization(id) {
@@ -735,15 +1012,18 @@ novelParamsTick++;
     const tt = parseEntityKey(relTarget);
     const data = { source_id: s.id, source_type: s.type, target_id: tt.id, target_type: tt.type, label: relLabel.trim() };
     try {
-      if (editingRelID) {
-        await api('PUT', '/api/relations/' + editingRelID, data);
+      let savedId = editingRelID;
+      if (savedId) {
+        await api('PUT', '/api/relations/' + savedId, data);
       } else {
-        await api('POST', '/api/relations', data);
+        const created = await api('POST', '/api/relations', data);
+        savedId = created?.id || null;
       }
       addToast($t('config.rel.saved'), 'success');
       closeRelForm();
       settings.set(await api('GET', '/api/settings'));
-    } catch (e) { addToast(e.message, 'error'); }
+      return savedId;
+    } catch (e) { addToast(e.message, 'error'); return null; }
   }
 
   async function deleteRelation(id) {
@@ -759,8 +1039,7 @@ novelParamsTick++;
 
 <div class="space-y-3">
   <ConfigChangePanel />
-  <!-- API + Story Config: side by side (API card on the Config tab, story card on the Novel parameters tab) -->
-  <div class="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
+  <!-- Config tab: API config only. Novel parameters tab: Story config at full width, Theme & Motif below it. -->
     {#if tab === 'api'}
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-2">
@@ -960,6 +1239,42 @@ novelParamsTick++;
             </select>
           </div>
           <div>
+            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.romanceLevel')}</span>
+            <select class="select select-sm w-full" bind:value={localStoryCfg.romance_level} disabled={$taskRunning} title={$t('config.tip.romanceLevel')}>
+              <option value="">{$t('config.story.content.unset')}</option>
+              {#each ['random', 'none', 'subplot', 'moderate', 'central'] as r}
+                <option value={r}>{$t('config.story.romanceLevel.' + r)}</option>
+              {/each}
+            </select>
+          </div>
+          <div>
+            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.sexualContent')}</span>
+            <select class="select select-sm w-full" bind:value={localStoryCfg.sexual_content} disabled={$taskRunning} title={$t('config.tip.sexualContent')}>
+              <option value="">{$t('config.story.content.unset')}</option>
+              {#each ['random', 'clean', 'fade_to_black', 'explicit'] as s}
+                <option value={s}>{$t('config.story.sexualContent.' + s)}</option>
+              {/each}
+            </select>
+          </div>
+          <div>
+            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.goreLevel')}</span>
+            <select class="select select-sm w-full" bind:value={localStoryCfg.gore_level} disabled={$taskRunning} title={$t('config.tip.goreLevel')}>
+              <option value="">{$t('config.story.content.unset')}</option>
+              {#each ['random', 'none', 'mid', 'explicit'] as g}
+                <option value={g}>{$t('config.story.goreLevel.' + g)}</option>
+              {/each}
+            </select>
+          </div>
+          <div>
+            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.worldDarkness')}</span>
+            <select class="select select-sm w-full" bind:value={localStoryCfg.world_darkness} disabled={$taskRunning} title={$t('config.tip.worldDarkness')}>
+              <option value="">{$t('config.story.content.unset')}</option>
+              {#each ['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'] as d}
+                <option value={d}>{$t('config.story.worldDarkness.' + d)}</option>
+              {/each}
+            </select>
+          </div>
+          <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.genderBias')}</span>
             <select class="select select-sm w-full" bind:value={localStoryCfg.gender_bias} disabled={$taskRunning} title={$t('config.tip.genderBias')}>
               {#each ['random', 'balanced', 'male', 'female'] as g}
@@ -995,17 +1310,21 @@ novelParamsTick++;
     </div>
     {/if}
 
-    <!-- Novel parameters tab: Theme + Motif combined card -->
+    <!-- Novel parameters tab: Theme & Motif card, below the full-width Story config card -->
     {#if tab === 'novelParams'}
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.theme.title')}</h3>
-        <button {...genBtnProps('motif')}>
-          {#if genBusy['motif']}
-            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-          {:else}✨ {$t('common.generate')}{/if}
-        </button>
+        <div class="flex items-center gap-1.5">
+          <button {...genBtnProps('motif')}>
+            {#if genBusy['motif']}
+              <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
+            {:else}✨ {$t('common.generate')}{/if}
+          </button>
+          <button {...undoBtnProps('motif')}>↩ {$t('common.undo')}</button>
+          <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+        </div>
       </div>
       <div class="grid grid-cols-1 @xl:grid-cols-2 gap-x-3 gap-y-1.5">
         <div>
@@ -1017,29 +1336,40 @@ novelParamsTick++;
           <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning} />
         </div>
       </div>
-      <div class="text-xs opacity-60">{$t('config.theme.hint')}</div>
-      <div class="flex justify-end">
-        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+      <div class="divider my-0.5 py-0 h-px"></div>
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <span class="text-xs text-base-content/65">{$t('config.audience.profileTitle')}</span>
+        <div class="flex items-center gap-1.5">
+          <button class="btn btn-accent btn-xs" disabled={$taskRunning || !!genBusy['audience_profile']}
+            onclick={(e) => { e.stopPropagation(); generateSection('audience_profile'); }}>
+            {#if genBusy['audience_profile']}
+              <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
+            {:else}✨ {$t('common.generate')}{/if}
+          </button>
+          <button {...undoBtnProps('audience_profile')}>↩ {$t('common.undo')}</button>
+        </div>
       </div>
+      <textarea class="textarea textarea-sm w-full h-16 text-xs" bind:value={localStoryCfg.audience_profile}
+        placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
+      <div class="text-xs opacity-60">{$t('config.theme.hint')}</div>
     </div>
   </div>
     {/if}
-  </div>
 
   <!-- Story brief (AI generation seed) -->
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.brief.title')}</h3>
+      </div>
+      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.brief} placeholder={$t('config.brief.placeholder')} disabled={$taskRunning}></textarea>
+      <div class="text-xs opacity-60">{$t('config.brief.hint')}</div>
+      <div class="flex justify-end gap-1.5">
         <button {...genBtnProps('brief')}>
           {#if genBusy['brief']}
             <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
           {:else}✨ {$t('common.generate')}{/if}
         </button>
-      </div>
-      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.brief} placeholder={$t('config.brief.placeholder')} disabled={$taskRunning}></textarea>
-      <div class="text-xs opacity-60">{$t('config.brief.hint')}</div>
-      <div class="flex justify-end">
         <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>
     </div>
@@ -1050,9 +1380,6 @@ novelParamsTick++;
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.style.title')}</h3>
-        <button {...genBtnProps('style')}>
-          {#if genBusy['style']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
       </div>
       <div>
         <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.style.label')}</span>
@@ -1062,7 +1389,10 @@ novelParamsTick++;
         <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.pov.label')}</span>
         <textarea class="textarea w-full h-20 text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}></textarea>
       </div>
-      <div class="flex justify-end">
+      <div class="flex justify-end gap-1.5">
+        <button {...genBtnProps('style')}>
+          {#if genBusy['style']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
+        </button>
         <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>
     </div>
@@ -1143,6 +1473,10 @@ novelParamsTick++;
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveCharacter} disabled={$taskRunning}>{$t('config.char.save')}</button>
+              <button {...charGenBtnProps()}>
+                {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
+              </button>
+              <button {...undoBtnProps('charform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeCharForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -1233,6 +1567,8 @@ novelParamsTick++;
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveWorldview} disabled={$taskRunning}>{$t('common.save')}</button>
+              <button {...wvGenBtnProps()}>✨ {$t('config.generate.worldview')}</button>
+              <button {...undoBtnProps('wvform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeWvForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -1317,6 +1653,10 @@ novelParamsTick++;
             {/if}
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveOrganization} disabled={$taskRunning}>{$t('config.org.save')}</button>
+              <button {...orgGenBtnProps()}>
+                {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
+              </button>
+              <button {...undoBtnProps('orgform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeOrgForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -1396,6 +1736,10 @@ novelParamsTick++;
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveRelation} disabled={$taskRunning}>{$t('config.rel.save')}</button>
+              <button {...relGenBtnProps()}>
+                {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
+              </button>
+              <button {...undoBtnProps('relform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeRelForm}>{$t('common.cancel')}</button>
             </div>
           </div>
