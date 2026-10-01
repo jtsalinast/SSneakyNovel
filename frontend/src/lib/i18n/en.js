@@ -96,7 +96,7 @@ export default {
   "outline.batch.replaceConfirm": "Replace the last unwritten batch using this synopsis and chapter count?",
 
   // Header / shell
-  'app.title': 'AI Novel Generator',
+  'app.title': 'AI Sneaky Story Smith',
   'app.newVersion': 'New version',
   'app.switchProject': 'Switch / new project',
   'app.switchProject.disabled': 'AI task in progress; cannot switch projects',
@@ -112,6 +112,7 @@ export default {
 
   // Navigation
   'nav.config': 'Config',
+  'nav.novelParams': 'Novel parameters',
   'nav.outline': 'Outline',
   'nav.writing': 'Writing',
   'nav.proofread': 'Proofread',
@@ -421,7 +422,9 @@ export default {
 
   'config.story.title': 'Story config',
   'config.story.acceptedHint': 'Confirmed chapters exist. After changing key settings, run reconciliation.',
-  'config.story.type': 'Story type',
+  'config.theme.title': 'Theme & Motif',
+  'config.theme.hint': 'Theme and literary motif are combined here: the central theme plus any recurring image, written together in one field (comma-separated). The generated motif is saved into this same field.',
+  'config.story.type': 'Genre',
   'config.story.type.placeholder': 'Fantasy / urban / sci-fi...',
   'config.story.titleField': 'Novel title (leave empty for AI)',
   'config.story.title.placeholder': 'Leave empty for AI-generated title',
@@ -472,6 +475,7 @@ export default {
   'config.story.targetAudience.all_ages': 'All ages',
   'config.story.specificSettings': 'Specific settings',
   'config.story.specificSettings.placeholder': 'One per line, e.g. hard magic system, faster-than-light travel...',
+  'config.tip.genre': 'Choose the parent genre; subgenres, conflicts, protagonists, tones and settings adapt to it. Pick "Other" to type a custom genre.',
   'config.tip.subgenre': 'Pick a preset for a quick definition, or type any custom subgenre.',
   'config.tip.length': 'Sets chapter-count suggestions and which structures fit best.',
   'config.tip.conflict': 'Suggested scope of the main conflict; guides generation without forcing it.',
