@@ -1,10 +1,11 @@
-# Dependencies
-node_modules/
-
-# Build Artifacts
+# Build artifacts
 dist/
-build/
 
-# Environment & Config
-.env
-.env.local
+# Go build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.a
+*.out
