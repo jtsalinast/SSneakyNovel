@@ -69,6 +69,15 @@ func (s *StoryConfig) EffectiveProtagonist() string {
 	return s.ProtagonistType
 }
 
+// EffectiveMotif returns the literary motif. Theme and Motif are merged in the
+// UI into a single field, so the effective motif is either Motif or Theme.
+func (s *StoryConfig) EffectiveMotif() string {
+	if m := strings.TrimSpace(s.Motif); m != "" {
+		return m
+	}
+	return strings.TrimSpace(s.Theme)
+}
+
 // —— Novel parameters: length & structure options (borrowed from NovelWriter) —
 
 const (

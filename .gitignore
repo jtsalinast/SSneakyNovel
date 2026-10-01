@@ -1,6 +1,10 @@
-(empty)node_modules/
-.next/
+# Dependencies
+node_modules/
+
+# Build Artifacts
 dist/
 build/
-*.log
-node_modules/
+
+# Environment & Config
+.env
+.env.local

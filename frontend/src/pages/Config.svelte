@@ -5,8 +5,11 @@
   import { t } from '../lib/i18n/index.js';
   import { resolveChatCompletionsURL } from '../lib/apiUrl.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
+  import { GENRES, SUBGENRE_DATA } from '../lib/novelwriterGenres.js';
 
   export let sendToChat = async () => {};
+  // Which workspace tab renders this page: 'api' (Config) or 'novelParams' (Novel parameters).
+  export let tab = 'api';
 
   function stripNameMarks(name) {
     return (name.startsWith('「') && name.endsWith('」')) ? name.slice(1, -1) : name;
@@ -128,10 +131,138 @@ return '';
 }
 let genreKeyDerived = '';
 $: genreKeyDerived = matchGenreKey(localStoryCfg.type);
-// novelParamsTick is declared above; bump it after /api/novel-params loads to re-run these derivations.
-$: conflictOpts = (novelParamsTick, genreKeyDerived ? GENRE_CONFLICTS[genreKeyDerived] : []);
-$: protagonistOpts = (novelParamsTick, genreKeyDerived ? GENRE_PROTAGONISTS[genreKeyDerived] : []);
-$: settingSuggestions = (novelParamsTick, genreKeyDerived ? GENRE_SETTINGS[genreKeyDerived] : []);
+
+// --- Genre (parent) / Subgenre cascade, adapted from NovelWriter's genre_configs ---
+const OTHER_GENRE = '__other__';
+let selectedGenreKey = '';   // one of GENRES keys or OTHER_GENRE; '' = not classified yet
+let subgenreManual = false;  // true while the user types a custom subgenre in "Other" mode
+let lastAutoSubgenre = '';   // subgenre we auto-set, so we don't clobber manual edits
+
+function initGenreCascade() {
+  const g = GENRES.find((x) => x.key === genreKeyDerived);
+  if (g) { selectedGenreKey = g.key; subgenreManual = false; }
+  else if ((localStoryCfg.type || '').trim()) { selectedGenreKey = OTHER_GENRE; subgenreManual = true; }
+  else { selectedGenreKey = ''; subgenreManual = false; }
+}
+initGenreCascade();
+
+$: if (genreKeyDerived !== undefined) { void genreKeyDerived; }
+
+// Keep the parent-genre select in sync when the story type changes externally (load/save).
+$: if (!subgenreManual && genreKeyDerived && genreKeyDerived !== selectedGenreKey && genreKeyDerived !== OTHER_GENRE) {
+  selectedGenreKey = genreKeyDerived;
+}
+
+function onGenreChange() {
+  if (selectedGenreKey === OTHER_GENRE) {
+    localStoryCfg.type = subgenreManual ? localStoryCfg.type : '';
+    localStoryCfg.subgenre = '';
+    subgenreManual = true;
+  } else {
+    subgenreManual = false;
+    const g = GENRES.find((x) => x.key === selectedGenreKey);
+    if (g) {
+      localStoryCfg.type = g.label;
+      const cur = localStoryCfg.subgenre;
+      if (!g.subgenres.includes(cur)) {
+        // Only auto-change the subgenre if it was empty or something we auto-set before.
+        if (!cur || cur === lastAutoSubgenre) {
+          localStoryCfg.subgenre = g.subgenres[0];
+          lastAutoSubgenre = g.subgenres[0];
+        }
+      }
+    }
+  }
+}
+
+function onSubgenreChange() {
+  const g = GENRES.find((x) => x.key === selectedGenreKey);
+  if (g && !g.subgenres.includes(localStoryCfg.subgenre)) {
+    selectedGenreKey = OTHER_GENRE;
+    subgenreManual = true;
+  }
+}
+
+$: subgenreOptions = (() => {
+  const g = GENRES.find((x) => x.key === selectedGenreKey);
+  return g ? g.subgenres : [];
+})();
+
+// Options derived from the selected subgenre (NovelWriter per-subgenre configs), falling back to genre-level lists.
+$: subgenreCfg = SUBGENRE_DATA[(localStoryCfg.subgenre || '').trim()] || null;
+$: conflictOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.conflicts : (genreKeyDerived ? GENRE_CONFLICTS[genreKeyDerived] : []));
+$: protagonistOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.protagonists : (genreKeyDerived ? GENRE_PROTAGONISTS[genreKeyDerived] : []));
+$: toneOpts = subgenreCfg ? subgenreCfg.tones : [];
+$: settingSuggestions = (novelParamsTick, subgenreCfg ? subgenreCfg.settings : (genreKeyDerived ? GENRE_SETTINGS[genreKeyDerived] : []));
+
+// Tone: free-text field with per-subgenre suggestions (NovelWriter tones).
+function toneList(v) {
+  return (v || '').split(',').map((x) => x.trim()).filter(Boolean);
+}
+function toggleTone(t) {
+  const cur = toneList(localStoryCfg.tone);
+  const i = cur.indexOf(t);
+  if (i >= 0) cur.splice(i, 1); else cur.push(t);
+  localStoryCfg.tone = cur.join(', ');
+}
+function toneChecked(t) { return toneList(localStoryCfg.tone).includes(t); }
+
+// Structure: preset select + optional free-text addition.
+function structureExtras(v) {
+  return toneList(v).filter((x) => !structOpts.includes(x));
+}
+function onStructureChange(e) {
+  const sel = e.target.value;
+  const extras = structureExtras(localStoryCfg.structure);
+  const parts = [];
+  if (sel && sel !== '__custom__') parts.push(sel);
+  if (sel === '__custom__' && extras.length) parts.push(extras[0]);
+  localStoryCfg.structure = [...parts, ...extras.filter((x) => x !== parts[0])].join(', ');
+}
+$: structSelValue = (() => {
+  const parts = toneList(localStoryCfg.structure);
+  const known = parts.find((x) => structOpts.includes(x));
+  if (known) return known;
+  return parts.length ? '__custom__' : '';
+})();
+
+// Conflict scale / protagonist type: select-with-Other pattern.
+$: conflictSelKnown = conflictOpts.includes(localStoryCfg.conflict_scale);
+$: conflictIsOther = !!localStoryCfg.conflict_scale && !conflictSelKnown;
+function onConflictSelect(e) {
+  const v = e.target.value;
+  if (v === 'other') { localStoryCfg.conflict_scale = 'other'; }
+  else { localStoryCfg.conflict_scale = v; localStoryCfg.conflict_other = ''; }
+}
+$: protSelKnown = protagonistOpts.includes(localStoryCfg.protagonist_type);
+$: protIsOther = !!localStoryCfg.protagonist_type && !protSelKnown;
+function onProtSelect(e) {
+  const v = e.target.value;
+  if (v === 'other') { localStoryCfg.protagonist_type = 'other'; }
+  else { localStoryCfg.protagonist_type = v; localStoryCfg.protagonist_other = ''; }
+}
+
+// Specific settings as checkboxes: parse the stored newline-separated list into a set.
+let checkedSettings = new Set();
+let customSettingsText = '';
+function refreshCheckedSettings() {
+  const all = (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
+  checkedSettings = new Set(all);
+  customSettingsText = all.filter((x) => !settingSuggestions.includes(x)).join('\n');
+}
+refreshCheckedSettings();
+function rebuildSpecificSettings() {
+  const custom = customSettingsText.split('\n').map((x) => x.trim()).filter(Boolean);
+  const merged = [...new Set([...custom, ...[...checkedSettings]])];
+  localStoryCfg.specific_settings = merged.join('\n');
+}
+function toggleSetting(s) {
+  const cur = new Set(checkedSettings);
+  if (cur.has(s)) cur.delete(s); else cur.add(s);
+  checkedSettings = cur;
+  rebuildSpecificSettings();
+}
+function settingChecked(s) { return checkedSettings.has(s); }
 function addSetting(s) {
 const cur = (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
 if (!cur.includes(s)) localStoryCfg.specific_settings = [...cur, s].join('\n');
@@ -184,6 +315,12 @@ novelParamsTick++;
       genBusy = { ...genBusy, [section]: false };
       try { config.set(await api('GET', '/api/config')); } catch (e) {}
       try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
+      // If the motif generator wrote into Theme while Motif was empty, merge it into the single Theme field.
+      const st = $config?.story || {};
+      if ((st.motif || '').trim() && !(st.theme || '').trim()) {
+        localStoryCfg = { ...localStoryCfg, theme: st.motif, motif: '' };
+        try { await api('PUT', '/api/config', { ...($config || {}), story: { ...st, theme: st.motif, motif: '' } }); } catch (e) {}
+      }
     }
   }
   async function generateSection(section) {
@@ -231,6 +368,8 @@ novelParamsTick++;
       if (!localStoryCfg.gender_bias) localStoryCfg.gender_bias = 'random';
       localStoryCfg.locations_enabled = !!$config.story.locations_enabled;
       storyCfgSnapshot = snap;
+      refreshCheckedSettings();
+      initGenreCascade();
     }
   }
 
@@ -620,8 +759,9 @@ novelParamsTick++;
 
 <div class="space-y-3">
   <ConfigChangePanel />
-  <!-- API + Story Config: side by side -->
+  <!-- API + Story Config: side by side (API card on the Config tab, story card on the Novel parameters tab) -->
   <div class="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
+    {#if tab === 'api'}
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-2">
         <h3 class="card-title text-base">{$t('config.api.title')}</h3>
@@ -678,7 +818,9 @@ novelParamsTick++;
         </div>
       </div>
     </div>
+    {/if}
 
+    {#if tab === 'novelParams'}
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-2">
         <h3 class="card-title text-base">{$t('config.story.title')}</h3>
@@ -690,16 +832,41 @@ novelParamsTick++;
         <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.type')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.type} placeholder={$t('config.story.type.placeholder')} disabled={$taskRunning} />
+            {#if selectedGenreKey === OTHER_GENRE}
+              <select class="select select-sm w-full" bind:value={selectedGenreKey} on:change={onGenreChange} disabled={$taskRunning} title={$t('config.tip.genre')}>
+                <option value="">{$t('config.story.auto')}</option>
+                {#each GENRES as g}
+                  <option value={g.key}>{g.label}</option>
+                {/each}
+                <option value={OTHER_GENRE}>{$t('config.story.other')}</option>
+              </select>
+              <input type="text" class="input input-sm w-full mt-1" bind:value={localStoryCfg.type} placeholder={$t('config.story.type.placeholder')} disabled={$taskRunning} />
+            {:else}
+              <select class="select select-sm w-full" bind:value={selectedGenreKey} on:change={onGenreChange} disabled={$taskRunning} title={$t('config.tip.genre')}>
+                <option value="">{$t('config.story.auto')}</option>
+                {#each GENRES as g}
+                  <option value={g.key}>{g.label}</option>
+                {/each}
+                <option value={OTHER_GENRE}>{$t('config.story.other')}</option>
+              </select>
+            {/if}
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.subgenre')}</span>
-            <input type="text" list="subgenre-presets" class="input input-sm w-full" bind:value={localStoryCfg.subgenre} placeholder={$t('config.story.subgenre.placeholder')} disabled={$taskRunning} title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')} />
-            <datalist id="subgenre-presets">
-              {#each SUBGENRE_PRESETS as s}
-                <option value={s}>{subgenreHint(s)}</option>
-              {/each}
-            </datalist>
+            {#if subgenreOptions.length}
+              <select class="select select-sm w-full" bind:value={localStoryCfg.subgenre} on:change={onSubgenreChange} disabled={$taskRunning} title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')}>
+                {#each subgenreOptions as s}
+                  <option value={s}>{s}</option>
+                {/each}
+              </select>
+            {:else}
+              <input type="text" list="subgenre-presets" class="input input-sm w-full" bind:value={localStoryCfg.subgenre} placeholder={$t('config.story.subgenre.placeholder')} disabled={$taskRunning} title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')} />
+              <datalist id="subgenre-presets">
+                {#each [...new Set([...SUBGENRE_PRESETS, ...Object.keys(SUBGENRE_DATA)])] as s}
+                  <option value={s}>{subgenreHint(s)}</option>
+                {/each}
+              </datalist>
+            {/if}
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.titleField')}</span>
@@ -709,13 +876,23 @@ novelParamsTick++;
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.author')}</span>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
           </div>
-          <div>
-            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.theme')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} />
+          <div class="col-span-2">
+            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.theme')} / {$t('config.motif.title')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} title={$t('config.theme.hint')} />
           </div>
-          <div>
+          <div class="col-span-2">
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.tone')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
+            <input type="text" class="input input-sm w-full mb-1" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
+            {#if toneOpts.length}
+              <div class="flex flex-wrap gap-x-3 gap-y-1">
+                {#each toneOpts as t}
+                  <label class="flex items-center gap-1.5 text-xs cursor-pointer" >
+                    <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={$taskRunning} />
+                    {t}
+                  </label>
+                {/each}
+              </div>
+            {/if}
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.length')}</span>
@@ -729,11 +906,16 @@ novelParamsTick++;
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.structure')}</span>
             {#if structOpts.length}
-              <select class="select select-sm w-full" bind:value={localStoryCfg.structure} disabled={$taskRunning} title={structHint(localStoryCfg.structure) || $t('config.story.structure')}>
+              <select class="select select-sm w-full" value={structSelValue} on:change={onStructureChange} disabled={$taskRunning} title={structHint(localStoryCfg.structure) || $t('config.story.structure')}>
+                <option value="">{$t('config.story.auto')}</option>
                 {#each structOpts as k}
                   <option value={k} title={structHint(k)}>{$t('config.story.structure.' + k)}</option>
                 {/each}
+                <option value="__custom__">{$t('config.story.other')}</option>
               </select>
+              {#if structSelValue === '__custom__'}
+                <input type="text" class="input input-sm w-full mt-1" value={structureExtras(localStoryCfg.structure)[0] || ''} on:input={(e) => { const extras = structureExtras(localStoryCfg.structure).slice(1); localStoryCfg.structure = [e.target.value.trim(), ...extras].filter(Boolean).join(', '); }} placeholder={$t('config.story.structure.placeholder')} disabled={$taskRunning} />
+              {/if}
             {:else}
               <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.structure} placeholder={$t('config.story.structure.placeholder')} disabled={$taskRunning} />
             {/if}
@@ -744,36 +926,28 @@ novelParamsTick++;
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.conflict')}</span>
-            {#if conflictOpts.length}
-              <select class="select select-sm w-full" bind:value={localStoryCfg.conflict_scale} disabled={$taskRunning} title={$t('config.tip.conflict')}>
-                <option value="">{$t('config.story.auto')}</option>
-                {#each conflictOpts as c}
-                  <option value={c}>{c}</option>
-                {/each}
-                <option value="other">{$t('config.story.other')}</option>
-              </select>
-              {#if localStoryCfg.conflict_scale === 'other'}
-                <input type="text" class="input input-sm w-full mt-1" bind:value={localStoryCfg.conflict_other} placeholder={$t('config.story.conflict.placeholder')} disabled={$taskRunning} />
-              {/if}
-            {:else}
-              <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.conflict_other} placeholder={$t('config.story.conflict.placeholder')} disabled={$taskRunning} title={$t('config.tip.conflict')} />
+            <select class="select select-sm w-full" value={conflictIsOther ? 'other' : (localStoryCfg.conflict_scale || '')} on:change={onConflictSelect} disabled={$taskRunning} title={$t('config.tip.conflict')}>
+              <option value="">{$t('config.story.auto')}</option>
+              {#each conflictOpts as c}
+                <option value={c}>{c}</option>
+              {/each}
+              <option value="other">{$t('config.story.other')}</option>
+            </select>
+            {#if conflictIsOther}
+              <input type="text" class="input input-sm w-full mt-1" bind:value={localStoryCfg.conflict_scale} placeholder={$t('config.story.conflict.placeholder')} disabled={$taskRunning} />
             {/if}
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.protagonist')}</span>
-            {#if protagonistOpts.length}
-              <select class="select select-sm w-full" bind:value={localStoryCfg.protagonist_type} disabled={$taskRunning} title={$t('config.tip.protagonist')}>
-                <option value="">{$t('config.story.auto')}</option>
-                {#each protagonistOpts as pt}
-                  <option value={pt}>{pt}</option>
-                {/each}
-                <option value="other">{$t('config.story.other')}</option>
-              </select>
-              {#if localStoryCfg.protagonist_type === 'other'}
-                <input type="text" class="input input-sm w-full mt-1" bind:value={localStoryCfg.protagonist_other} placeholder={$t('config.story.protagonist.placeholder')} disabled={$taskRunning} />
-              {/if}
-            {:else}
-              <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.protagonist_other} placeholder={$t('config.story.protagonist.placeholder')} disabled={$taskRunning} title={$t('config.tip.protagonist')} />
+            <select class="select select-sm w-full" value={protIsOther ? 'other' : (localStoryCfg.protagonist_type || '')} on:change={onProtSelect} disabled={$taskRunning} title={$t('config.tip.protagonist')}>
+              <option value="">{$t('config.story.auto')}</option>
+              {#each protagonistOpts as pt}
+                <option value={pt}>{pt}</option>
+              {/each}
+              <option value="other">{$t('config.story.other')}</option>
+            </select>
+            {#if protIsOther}
+              <input type="text" class="input input-sm w-full mt-1" bind:value={localStoryCfg.protagonist_type} placeholder={$t('config.story.protagonist.placeholder')} disabled={$taskRunning} />
             {/if}
           </div>
           <div>
@@ -797,13 +971,18 @@ novelParamsTick++;
         <div>
           <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.specificSettings')}</span>
           {#if settingSuggestions.length}
-            <div class="flex flex-wrap gap-1 mb-1">
+            <div class="grid grid-cols-2 gap-x-3 gap-y-1">
               {#each settingSuggestions as s}
-                <button type="button" class="badge badge-outline badge-sm cursor-pointer hover:badge-primary" on:click={() => addSetting(s)} disabled={$taskRunning} title={$t('config.tip.specificSettings')}>+ {s}</button>
+                <label class="flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={$t('config.tip.specificSettings')}>
+                  <input type="checkbox" class="checkbox checkbox-xs" checked={settingChecked(s)} on:change={() => toggleSetting(s)} disabled={$taskRunning} />
+                  {s.replaceAll('_', ' ')}
+                </label>
               {/each}
             </div>
+          {:else}
+            <p class="text-xs text-base-content/45 mb-1">{$t('config.settings.pickGenre')}</p>
           {/if}
-          <textarea class="textarea textarea-sm w-full h-16 text-xs font-mono" bind:value={localStoryCfg.specific_settings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
+          <textarea class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
         </div>
         <label class="flex items-center gap-2 text-sm cursor-pointer" title={$t('config.tip.locationsEnabled')}>
           <input type="checkbox" class="toggle toggle-sm toggle-primary" bind:checked={localStoryCfg.locations_enabled} disabled={$taskRunning} />
@@ -814,25 +993,37 @@ novelParamsTick++;
         </div>
       </div>
     </div>
-  </div>
+    {/if}
 
-  <!-- Literary motif (random-generable theme/motif seed) -->
+    <!-- Novel parameters tab: Theme + Motif combined card -->
+    {#if tab === 'novelParams'}
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
-        <h3 class="card-title text-base">{$t('config.motif.title')}</h3>
+        <h3 class="card-title text-base">{$t('config.theme.title')}</h3>
         <button {...genBtnProps('motif')}>
           {#if genBusy['motif']}
             <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
           {:else}✨ {$t('common.generate')}{/if}
         </button>
       </div>
-      <input class="input w-full text-base" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning} />
-      <div class="text-xs opacity-60">{$t('config.motif.hint')}</div>
+      <div class="grid grid-cols-1 @xl:grid-cols-2 gap-x-3 gap-y-1.5">
+        <div>
+          <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.theme')}</span>
+          <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} />
+        </div>
+        <div>
+          <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.motif.title')}</span>
+          <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning} />
+        </div>
+      </div>
+      <div class="text-xs opacity-60">{$t('config.theme.hint')}</div>
       <div class="flex justify-end">
         <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>
     </div>
+  </div>
+    {/if}
   </div>
 
   <!-- Story brief (AI generation seed) -->

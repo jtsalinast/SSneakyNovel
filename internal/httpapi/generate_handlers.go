@@ -146,7 +146,7 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 	var b strings.Builder
 	if i18n.NormalizeLanguage(lang) == i18n.LangZH {
 		b.WriteString("你是小说策划助手。请严格依据以下故事简介生成设定，保持与简介的世界观、基调、人物一致；不要引入与简介矛盾的元素。\n\n")
-		if m := strings.TrimSpace(sc.Motif); m != "" {
+		if m := sc.EffectiveMotif(); m != "" {
 			b.WriteString("【文学母题】" + m + "（请将其融入人物、情节与意象）\n")
 		}
 		b.WriteString("【故事简介】\n" + sc.Brief + "\n")
@@ -200,7 +200,7 @@ func briefContext(sc *config.StoryConfig, lang string) string {
 		}
 	} else {
 		b.WriteString("You are a novel planning assistant. Create settings strictly based on the story brief below, staying consistent with its worldview, tone and characters; never contradict the brief.\n\n")
-		if m := strings.TrimSpace(sc.Motif); m != "" {
+		if m := sc.EffectiveMotif(); m != "" {
 			b.WriteString("[LITERARY MOTIF] " + m + " (weave it into characters, plot and imagery)\n")
 		}
 		b.WriteString("[STORY BRIEF]\n" + sc.Brief + "\n")
@@ -358,7 +358,7 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 
 	newCfg := *h.cfg
 	newCfg.Story = *sc
-	newCfg.Story.Motif = pick
+	newCfg.Story.Theme = pick // theme & motif are merged in the UI
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
@@ -407,8 +407,7 @@ func (h *Handlers) generateBriefFromParams(ctx context.Context, sc *config.Story
 	addPair("类型", "Genre", sc.Type)
 	addPair("子类型", "Subgenre", sc.Subgenre)
 	addPair("书名/工作名", "Working title", sc.Title)
-	addPair("文学母题", "Literary motif", sc.Motif)
-	addPair("主题", "Theme", sc.Theme)
+	addPair("主题与母题", "Theme & motif", strings.TrimSpace(sc.EffectiveMotif()+" | "+sc.Theme))
 	addPair("基调", "Tone", sc.Tone)
 	if lbl := lengthLabelZH(sc.StoryLength); lbl != "" {
 		chMin, chMax := config.SuggestedChaptersByLength(sc.StoryLength)

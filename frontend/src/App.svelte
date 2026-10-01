@@ -240,6 +240,7 @@
         <button class="btn btn-ghost btn-sm mb-2 lg:hidden" on:click={closeNavigation}>{$t('common.close')}</button>
         {#each [
           ['config', 'nav.config'],
+          ['novel-params', 'nav.novelParams'],
           ['outline', 'nav.outline'],
           ['writing', 'nav.writing'],
           ['proofread', 'nav.proofread'],
@@ -248,7 +249,7 @@
           ['relations', 'nav.relations'],
           ['skills', 'nav.skills']
         ] as [page, labelKey], i}
-          {#if i === 1 || i === 3 || i === 4 || i === 7}<span class="nav-divider" aria-hidden="true"></span>{/if}
+          {#if i === 2 || i === 4 || i === 5 || i === 8}<span class="nav-divider" aria-hidden="true"></span>{/if}
           <button
             class="nav-item btn btn-sm justify-start w-full px-3 text-sm {$currentPage === page ? 'btn-primary font-medium' : 'btn-ghost'}"
             aria-current={$currentPage === page ? 'page' : undefined}
@@ -262,7 +263,9 @@
       <!-- Center: page content -->
       <main class="workspace-main @container flex-[2] min-w-0 overflow-y-auto p-3 sm:p-5 xl:border-r xl:border-base-content/10">
         {#if $currentPage === 'config'}
-          <Config {sendToChat} />
+          <Config tab="api" {sendToChat} />
+        {:else if $currentPage === 'novel-params'}
+          <Config tab="novelParams" {sendToChat} />
         {:else if $currentPage === 'outline'}
           <Outline />
         {:else if $currentPage === 'writing'}
