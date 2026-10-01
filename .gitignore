@@ -1,11 +1,2 @@
-# Build artifacts
-dist/
-
-# Go build artifacts
-*.exe
-*.dll
-*.so
-*.dylib
-*.o
-*.a
-*.out
+# Dependencies
+node_modules/
