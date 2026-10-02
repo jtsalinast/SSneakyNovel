@@ -1,11 +1,23 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
   import { apiConfig, config, progress, settings, editingCharID, editingWvID, wvFilter, addToast, showConfirm, taskRunning, apiTestResult } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
   import { resolveChatCompletionsURL } from '../lib/apiUrl.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
   import { GENRES, SUBGENRE_DATA } from '../lib/novelwriterGenres.js';
+
+  // —— Cross-tab generation state: both workspace tabs ("Config" and "Novel
+  // parameters") render this same component, but Svelte destroys and recreates
+  // the instance when switching. Keep unsaved form edits, per-section busy
+  // flags, undo snapshots and the status-poller handle here (component body,
+  // module-singleton semantics) so a running generation keeps being tracked
+  // and the UI refreshes with the LLM result when it finishes — no matter
+  // which tab the user moved to (and without an F5).
+  let sharedGenBusy = {};   // section -> true while its generation runs
+  let sharedGenUndo = {};   // undoKey -> pre-generation snapshot
+  let genPollTimer = null;  // shared /api/status poller handle
 
   export let sendToChat = async () => {};
   // Which workspace tab renders this page: 'api' (Config) or 'novelParams' (Novel parameters).
@@ -40,7 +52,44 @@
   $: cfgTimeout = $apiConfig?.http_timeout_seconds || 600;
 
   let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, max_tokens: 32768, context_budget_tokens: 900000 };
+  // —— Cross-tab state (module level): both workspace tabs ("Config" and "Novel
+  // parameters") render this same component, but Svelte destroys and recreates it
+  // when switching. Keep unsaved form edits, per-section busy flags and undo
+  // snapshots here so they survive a tab change (and a failed save doesn't wipe
+  // what the user typed).
+  let sharedStoryDraft = null;   // last localStoryCfg value
+
   let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', brief: '', conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
+  // Preserve unsaved edits across workspace-tab switches (this component is
+  // recreated on every tab change; without this the Genre field and friends
+  // would silently reset to whatever was last saved on the server).
+  if (sharedStoryDraft) localStoryCfg = { ...localStoryCfg, ...sharedStoryDraft };
+  $: if (localStoryCfg) sharedStoryDraft = localStoryCfg;
+  // When leaving this page (workspace-tab switch destroys the component),
+  // persist the story parameters — above all the Genre select, which lives
+  // only here — so the new tab re-renders from the saved config instead of
+  // falling back to stale values (the classic "Fantasy ends up in Other" bug).
+  onDestroy(() => {
+    // Don't persist while *our own* generations are in flight: the backend
+    // locks writes during tasks, and re-setting $config from the stale
+    // pre-generation reply would clobber the fields the LLM just filled. The
+    // module-level poller owns the refresh in that case.
+    // NOTE: we deliberately do NOT check get(taskRunning) here — that global
+    // flag can be stale-true (a task started from another page, or SSE having
+    // missed a task_end event). Skipping the save in that case used to wipe
+    // unsaved edits on tab switches AND silently swallow every Generate click,
+    // because persistStoryBeforeGenerate() bailed out against a locked server
+    // before ever reaching the POST. A genuine conflict simply makes this PUT
+    // fail with 409, which we ignore.
+    if (Object.values(sharedGenBusy).some(Boolean)) return;
+    try {
+      const story = storyPayload();
+      api('PUT', '/api/config', { ...($config || {}), story }).then((saved) => {
+        config.set(saved);
+        storyCfgSnapshot = JSON.stringify(saved?.story || '');
+      }).catch(() => {});
+    } catch (e) { /* ignore */ }
+  });
 
 // Novel-parameter tooltips (subgenre/structure hints) fetched from /api/novel-params.
 let SUBGENRE_HINTS = {};
@@ -139,9 +188,14 @@ let subgenreManual = false;  // true while the user types a custom subgenre in "
 let lastAutoSubgenre = '';   // subgenre we auto-set, so we don't clobber manual edits
 
 function initGenreCascade() {
-  const g = GENRES.find((x) => x.key === genreKeyDerived);
+  const t = (localStoryCfg.type || '').trim();
+  // Exact label match first: a known genre ("Fantasy") must never fall into the
+  // "Other" box just because keyword matching failed on it.
+  const exact = GENRES.find((x) => x.label.toLowerCase() === t.toLowerCase());
+  if (exact) { selectedGenreKey = exact.key; subgenreManual = false; return; }
+  const g = genreKeyDerived ? GENRES.find((x) => x.key === genreKeyDerived) : null;
   if (g) { selectedGenreKey = g.key; subgenreManual = false; }
-  else if ((localStoryCfg.type || '').trim()) { selectedGenreKey = OTHER_GENRE; subgenreManual = true; }
+  else if (t) { selectedGenreKey = OTHER_GENRE; subgenreManual = true; }
   else { selectedGenreKey = ''; subgenreManual = false; }
 }
 initGenreCascade();
@@ -302,20 +356,113 @@ novelParamsTick++;
   }
 
   // AI section generation (based on the story parameters currently in the form)
-  let genBusy = {};
+  let genBusy = { ...sharedGenBusy };
+  // Last server error returned by a Generate click (shown as a toast so a
+  // rejected request is never silently swallowed — "nothing happens" bug).
+  let genLastError = '';
+
+  // Generations run as *component-independent* background tasks: the POST is
+  // fire-and-forget and a module-level poller watches /api/status until the
+  // backend task finishes, then refreshes config/settings and clears the busy
+  // flags. Nothing depends on this component staying mounted, so switching
+  // workspace tabs (which destroys and recreates it) can never orphan a task,
+  // freeze $taskRunning, or leave the Generate buttons dead until an F5.
+  const adoptedSections = Object.keys(sharedGenBusy).filter((s) => sharedGenBusy[s]);
+
+  function applyGeneratedStory(story) {
+    if (!story) return;
+    localStoryCfg = { ...localStoryCfg, ...story };
+    if (!localStoryCfg.gender_bias) localStoryCfg.gender_bias = 'random';
+    initGenreCascade();
+  }
+
+  async function refreshAfterGeneration(finishedSections = []) {
+    try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
+    try {
+      const cfg = await api('GET', '/api/config');
+      config.set(cfg);
+      // Adopt the LLM's result into the visible inputs. The server value wins
+      // unconditionally for the fields owned by the sections that just
+      // finished — a generation *replaces* those fields, so keeping a stale
+      // local copy would leave the input looking empty even though the LLM
+      // answered. Fields not owned by a finished section keep the previous
+      // rule (adopt only when the local field is empty), so unrelated unsaved
+      // edits are never clobbered.
+      const st = cfg?.story || {};
+      const owned = new Set();
+      for (const sec of finishedSections) {
+        if (sec === 'motif') { owned.add('theme'); owned.add('motif'); }
+        else if (sec === 'brief') owned.add('brief');
+        else if (sec === 'audience_profile') owned.add('audience_profile');
+        else if (sec === 'style') { owned.add('writing_style'); owned.add('writing_pov'); }
+      }
+      const merged = {};
+      for (const k of ['theme', 'motif', 'brief', 'audience_profile', 'writing_style', 'writing_pov']) {
+        const sv = (st[k] || '').trim();
+        if (!sv) continue;
+        if (owned.has(k) || !(localStoryCfg[k] || '').trim()) merged[k] = st[k];
+      }
+      applyGeneratedStory(merged);
+    } catch (e) {}
+  }
+
+  function reconcileUndoSnapshot(snap, s) {
+    if (!snap || !(snap.scope.type === 'all' || snap.scope.type === 'pair')) return;
+    const t = snap.scope.entityType;
+    const nowIds = (() => {
+      if (t === 'character') return (s.characters || []).map(c => c.id);
+      if (t === 'organization') return (s.organizations || []).map(o => o.id);
+      if (t === 'worldview') return (s.worldview || []).map(w => w.id);
+      if (t === 'relation') return (s.relations || []).map(r => r.id);
+      return [];
+    })();
+    const beforeIds = new Set(snap.scope.type === 'pair'
+      ? (snap.beforePairs || []).map(r => r.id)
+      : Object.keys(snap.before || {}));
+    let afterNew = nowIds.filter(id => !beforeIds.has(id));
+    if (snap.scope.type === 'pair') {
+      const list = (s.relations || []).filter(r => r.source_id === snap.scope.srcId && r.target_id === snap.scope.tgtId);
+      afterNew = list.filter(r => !beforeIds.has(r.id)).map(r => r.id);
+    }
+    snap.afterNew = afterNew;
+  }
+
+  function startGenPolling() {
+    if (genPollTimer) return;
+    genPollTimer = setInterval(async () => {
+      let st = null;
+      try { st = await api('GET', '/api/status').catch(() => null); } catch (e) {}
+      if (st?.is_task_running) return; // still generating
+      clearInterval(genPollTimer);
+      genPollTimer = null;
+      const finished = Object.keys(sharedGenBusy);
+      for (const s of finished) { delete sharedGenBusy[s]; }
+      taskRunning.set(false);
+      const sections = finished.length ? finished.slice() : [''];
+      for (const sec of sections) {
+        genBusy = { ...genBusy, [sec]: false };
+        addToast($t('config.generate.done'), 'success');
+        try { reconcileUndoSnapshot(sharedGenUndo[sec], get(settings)); } catch (e) {}
+      }
+      await refreshAfterGeneration(sections);
+    }, 1200);
+  }
 
   // —— Undo support for AI-generated settings ——
   // Before a generation runs we snapshot the affected state; "undo" restores it,
   // so a bad generation can be reverted without leaving the whole project touched.
-  let genUndo = {};
+  let genUndo = { ...sharedGenUndo };
 
   // Story-config fields (writing_style/pov, theme/motif, brief) are plain
   // strings inside the config file: snapshot them as a map and restore via PUT.
   function captureStoryFields(key, fields) {
-    const cur = ($config?.story || {});
+    // Snapshot the *form* values (what the user currently sees), so undo
+    // restores exactly the pre-generation state even if it was unsaved.
+    const cur = localStoryCfg || ($config?.story || {});
     const snap = {};
     for (const f of fields) snap[f] = cur[f] ?? '';
     genUndo = { ...genUndo, [key]: { storyFields: snap } };
+    sharedGenUndo[key] = genUndo[key];
   }
   async function undoStoryFields(key) {
     const snap = genUndo[key];
@@ -326,6 +473,7 @@ novelParamsTick++;
       config.set(await api('GET', '/api/config'));
       localStoryCfg = { ...localStoryCfg, ...snap.storyFields };
       genUndo = { ...genUndo, [key]: undefined };
+      delete sharedGenUndo[key];
       addToast($t('config.generate.undoDone'), 'success');
     } catch (e) { addToast(e.message, 'error'); return false; }
     return true;
@@ -363,6 +511,7 @@ novelParamsTick++;
       ids.forEach(id => { const e = entitySnap(scope.entityType, id); if (e) snap.before[id] = e; });
     }
     genUndo = { ...genUndo, [key]: snap };
+    sharedGenUndo[key] = snap;
   }
 
   async function restoreEntity(type, id, ent) {
@@ -412,65 +561,82 @@ novelParamsTick++;
         }
       }
       genUndo = { ...genUndo, [key]: undefined };
+      delete sharedGenUndo[key];
       settings.set(await api('GET', '/api/settings'));
       addToast($t('config.generate.undoDone'), 'success');
     } catch (e) { addToast(e.message, 'error'); }
   }
 
-  async function pollGenDone(section, undoKey) {
+  // Kick off a section generation: POST is fire-and-forget (the backend runs
+  // the LLM call as a background task and answers 202 immediately), busy flags
+  // live in module state, and startGenPolling() — which survives tab switches
+  // — refreshes the UI when the task finishes.
+  // Returns true only if the request was actually accepted by the backend.
+  async function startGeneration(section, extra = {}, undoKey = section) {
+    // Only block on *our own* in-flight generation of this section. The global
+    // $taskRunning flag is deliberately NOT checked here: a stale "running"
+    // flag (left over from another page's task or an aborted request) used to
+    // silently swallow every Generate click — the "nothing happens" bug. If a
+    // real task is running server-side, the POST answers 409 and we surface it.
+    // Guard only against *this section* already being in flight. The global
+    // $taskRunning flag and other sections' flags are intentionally NOT
+    // blockers here: a stale "running" state used to make every Generate
+    // click silently no-op (no network request at all — the reported bug).
+    // If the server is genuinely busy, tryStartTask answers 409 and we show
+    // that error as a toast instead of swallowing the click.
+    if (genBusy[section] || sharedGenBusy[section]) return false;
+    // Mark the button busy *synchronously*, before any await: the POST carries
+    // the full payload but must not gate the UI feedback. Without this, a slow
+    // network made rapid double-clicks fire several generations at once.
+    genBusy = { ...genBusy, [section]: true };
+    sharedGenBusy[section] = true;
+    taskRunning.set(true);
+    const story = storyPayload();
     try {
-      for (;;) {
-        await new Promise(r => setTimeout(r, 1500));
-        const st = await api('GET', '/api/status').catch(() => null);
-        if (!st?.is_task_running) break;
-      }
-      addToast($t('config.generate.done'), 'success');
-    } finally {
+      await api('POST', '/api/generate/' + section, { brief: (story.brief || '').trim(), story, ...extra });
+      genLastError = '';
+      addToast($t('config.generate.started'), 'info');
+      startGenPolling();
+      return true;
+    } catch (e) {
+      delete sharedGenBusy[section];
       genBusy = { ...genBusy, [section]: false };
-      // If an undo snapshot exists, reconcile it against the post-generation
-      // state so newly added entities can be removed by "undo".
-      try {
-        const s = await api('GET', '/api/settings');
-        settings.set(s);
-        const snap = genUndo[undoKey || section];
-        if (snap && (snap.scope.type === 'all' || snap.scope.type === 'pair')) {
-          const t = snap.scope.entityType;
-          const nowIds = (() => {
-            if (t === 'character') return (s.characters || []).map(c => c.id);
-            if (t === 'organization') return (s.organizations || []).map(o => o.id);
-            if (t === 'worldview') return (s.worldview || []).map(w => w.id);
-            if (t === 'relation') return (s.relations || []).map(r => r.id);
-            return [];
-          })();
-          const beforeIds = new Set(snap.scope.type === 'pair'
-            ? (snap.beforePairs || []).map(r => r.id)
-            : Object.keys(snap.before || {}));
-          let afterNew = nowIds.filter(id => !beforeIds.has(id));
-          if (snap.scope.type === 'pair') {
-            // Only count relations that actually connect the generated pair.
-            const list = (s.relations || []).filter(r => r.source_id === snap.scope.srcId && r.target_id === snap.scope.tgtId);
-            afterNew = list.filter(r => !beforeIds.has(r.id)).map(r => r.id);
-          }
-          snap.afterNew = afterNew;
-        }
-      } catch (e) {}
-      try { config.set(await api('GET', '/api/config')); } catch (e) {}
-      // If the motif generator wrote into Theme while Motif was empty, merge it into the single Theme field.
-      const st = $config?.story || {};
-      if ((st.motif || '').trim() && !(st.theme || '').trim()) {
-        localStoryCfg = { ...localStoryCfg, theme: st.motif, motif: '' };
-        try { await api('PUT', '/api/config', { ...($config || {}), story: { ...st, theme: st.motif, motif: '' } }); } catch (e) {}
-      }
+      if (!Object.values(sharedGenBusy).some(Boolean)) taskRunning.set(false);
+      genLastError = e.message;
+      addToast(e.message, 'error');
+      return false;
     }
   }
   function storyPayload() {
     return { ...localStoryCfg, target_words_per_chapter: Number(localStoryCfg.target_words_per_chapter) || 2500 };
   }
-  async function generateSection(section, extra = {}, undoKey = section) {
-    if (genBusy[section] || $taskRunning) return;
+  // Persist the current form into the project config *before* generating, so
+  // the LLM always works from what the author just typed in "Story config",
+  // "Theme & Motif" and "Ideal reader profile" — even if they never pressed
+  // Save. (The backend also receives the live payload, but saving first keeps
+  // the project state and the generation seed identical.)
+  async function persistStoryBeforeGenerate() {
     const story = storyPayload();
-    const brief = (story.brief || '').trim() || ($config?.story?.brief || '').trim();
-    if (!brief && section !== 'motif' && section !== 'brief' && section !== 'audience_profile') { addToast($t('config.brief.required'), 'error'); return; }
+    try {
+      const saved = await api('PUT', '/api/config', { ...($config || {}), story });
+      config.set(saved);
+      storyCfgSnapshot = JSON.stringify(saved?.story || '');
+      return true;
+    } catch (e) {
+      // A task running server-side rejects PUT /api/config (409). Don't let
+      // that abort the flow: the generate POST carries the live payload and
+      // will report the real conflict itself.
+      return false;
+    }
+  }
+  async function generateSection(section, extra = {}, undoKey = section) {
+    // Only block when *this* section already has a generation in flight. We
+    // never consult the global $taskRunning store here: a stale-true flag
+    // (SSE having missed a task_end, or a task started from another page)
+    // used to make every Generate click a silent no-op — no fetch at all,
+    // nothing in the Network tab. Server-side conflicts surface as a 409
+    // toast from startGeneration() instead.
+    if (genBusy[section] || sharedGenBusy[section]) return;
     // Snapshot what this generation may touch, so the user can undo it.
     if (section === 'characters') captureSnapshot(undoKey, { type: 'all', entityType: 'character' });
     else if (section === 'organizations') captureSnapshot(undoKey, { type: 'all', entityType: 'organization' });
@@ -481,20 +647,21 @@ novelParamsTick++;
     else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif']);
     else if (section === 'brief') captureStoryFields(undoKey, ['brief']);
     else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile']);
-    try {
-      await api('POST', '/api/generate/' + section, { brief, story, ...extra });
-      genBusy = { ...genBusy, [section]: true };
-      taskRunning.set(true);
-      addToast($t('config.generate.started'), 'info');
-      pollGenDone(section, undoKey);
-    } catch (e) {
-      addToast(e.message, 'error');
-    }
+    await persistStoryBeforeGenerate();
+    const story = storyPayload();
+    const brief = (story.brief || '').trim() || ($config?.story?.brief || '').trim();
+    if (!brief && section !== 'motif' && section !== 'brief' && section !== 'audience_profile' && section !== 'style') { addToast($t('config.brief.required'), 'error'); discardUndo(undoKey); return; }
+    await startGeneration(section, extra, undoKey);
+  }
+  function discardUndo(key) {
+    genUndo = { ...genUndo, [key]: undefined };
+    delete sharedGenUndo[key];
   }
   function genBtnProps(section) {
     return {
       class: 'btn btn-accent btn-xs',
-      disabled: $taskRunning || !!genBusy[section],
+      disabled: !!genBusy[section],
+      title: genBusy[section] ? '' : (genLastError || $t('common.generate')),
       onclick: (e) => { e.stopPropagation(); generateSection(section); },
     };
   }
@@ -584,6 +751,29 @@ novelParamsTick++;
     try { config.set(await api('GET', '/api/config')); } catch (e) {}
     try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
     fetchNovelParams();
+    // A generation may still be running (it was started fire-and-forget, and
+    // this component gets destroyed/recreated on every workspace-tab switch).
+    // Re-adopt its busy flags, keep the global spinner honest, and make sure
+    // the shared poller is watching so the UI refreshes when it completes.
+    // Independently of that, ALWAYS reconcile $taskRunning with the server: a
+    // stale client-side "running" flag used to leave every input disabled and
+    // every Generate click dead until an F5. The SSE stream can miss a
+    // task_end event (e.g. after a reconnect), so /api/status is the truth.
+    const st = await api('GET', '/api/status').catch(() => null);
+    if (Object.keys(sharedGenBusy).length > 0) {
+      genBusy = { ...genBusy, ...sharedGenBusy };
+      startGenPolling();
+      if (st && !st.is_task_running) {
+        // The task(s) finished while we were away — refresh right now.
+        Object.keys(sharedGenBusy).forEach((s) => { delete sharedGenBusy[s]; genBusy = { ...genBusy, [s]: false }; });
+        taskRunning.set(false);
+        await refreshAfterGeneration();
+      } else {
+        taskRunning.set(true);
+      }
+    } else if (st) {
+      taskRunning.set(!!st.is_task_running);
+    }
   });
 
   async function saveAPIConfig() {
@@ -779,25 +969,19 @@ novelParamsTick++;
   // then asks the LLM to fill the entry's description/tags from the story
   // parameters currently in the UI (even if unsaved). Undo restores/removes.
   async function generateWorldviewEntry() {
-    if (genBusy['worldview'] || $taskRunning) return;
+    if (genBusy['worldview']) return;
     if (!wvName.trim()) { addToast($t('config.wv.requiredFields'), 'error'); return; }
+    await persistStoryBeforeGenerate();
     const savedId = await saveWorldview();
     if (!savedId) return;
     captureSnapshot('wvform', { type: 'entity', entityType: 'worldview', entityId: savedId });
-    const story = storyPayload();
-    try {
-      await api('POST', '/api/generate/worldview', { brief: (story.brief || '').trim(), story, entry_id: savedId });
-      genBusy = { ...genBusy, worldview: true };
-      taskRunning.set(true);
-      addToast($t('config.generate.started'), 'info');
-      pollGenDone('worldview', 'wvform');
-    } catch (e) { addToast(e.message, 'error'); }
+    await startGeneration('worldview', { entry_id: savedId }, 'wvform');
   }
 
   function wvGenBtnProps() {
     return {
       class: 'btn btn-accent btn-xs',
-      disabled: $taskRunning || !!genBusy['worldview'],
+      disabled: !!genBusy['worldview'],
       onclick: (e) => { e.stopPropagation(); generateWorldviewEntry(); },
     };
   }
@@ -880,74 +1064,56 @@ novelParamsTick++;
   // id), then ask the LLM to fill in whatever is still empty using the story
   // parameters currently in the form. "Undo" restores the pre-generation state.
   async function generateCharacterEntry() {
-    if (genBusy['characters'] || $taskRunning) return;
+    if (genBusy['characters']) return;
     if (!charName.trim()) { addToast($t('config.char.nameRequired'), 'error'); return; }
+    await persistStoryBeforeGenerate();
     const savedId = await saveCharacter();
     if (!savedId) return;
     captureSnapshot('charform', { type: 'entity', entityType: 'character', entityId: savedId });
-    const story = storyPayload();
-    try {
-      await api('POST', '/api/generate/characters', { brief: (story.brief || '').trim(), story, character_id: savedId });
-      genBusy = { ...genBusy, characters: true };
-      taskRunning.set(true);
-      addToast($t('config.generate.started'), 'info');
-      pollGenDone('characters', 'charform');
-    } catch (e) { addToast(e.message, 'error'); }
+    await startGeneration('characters', { character_id: savedId }, 'charform');
   }
 
   async function generateOrganizationEntry() {
-    if (genBusy['organizations'] || $taskRunning) return;
+    if (genBusy['organizations']) return;
     if (!orgName.trim()) { addToast($t('config.org.nameRequired'), 'error'); return; }
+    await persistStoryBeforeGenerate();
     const savedId = await saveOrganization();
     if (!savedId) return;
     captureSnapshot('orgform', { type: 'entity', entityType: 'organization', entityId: savedId });
-    const story = storyPayload();
-    try {
-      await api('POST', '/api/generate/organizations', { brief: (story.brief || '').trim(), story, org_id: savedId });
-      genBusy = { ...genBusy, organizations: true };
-      taskRunning.set(true);
-      addToast($t('config.generate.started'), 'info');
-      pollGenDone('organizations', 'orgform');
-    } catch (e) { addToast(e.message, 'error'); }
+    await startGeneration('organizations', { org_id: savedId }, 'orgform');
   }
 
   async function generateRelationEntry() {
-    if (genBusy['relations'] || $taskRunning) return;
+    if (genBusy['relations']) return;
     if (!relSource || !relTarget) { addToast($t('config.rel.bothRequired'), 'error'); return; }
     if (relSource === relTarget) { addToast($t('config.rel.sameEntity'), 'error'); return; }
+    await persistStoryBeforeGenerate();
     const s = parseEntityKey(relSource);
     const tt = parseEntityKey(relTarget);
     const savedId = await saveRelation();
     if (!savedId) return;
     captureSnapshot('relform', { type: 'pair', entityType: 'relation', srcId: s.id, tgtId: tt.id });
-    const story = storyPayload();
-    try {
-      await api('POST', '/api/generate/relations', { brief: (story.brief || '').trim(), story, source_id: s.id, target_id: tt.id });
-      genBusy = { ...genBusy, relations: true };
-      taskRunning.set(true);
-      addToast($t('config.generate.started'), 'info');
-      pollGenDone('relations', 'relform');
-    } catch (e) { addToast(e.message, 'error'); }
+    await startGeneration('relations', { source_id: s.id, target_id: tt.id }, 'relform');
   }
 
   function charGenBtnProps() {
     return {
       class: 'btn btn-accent btn-xs',
-      disabled: $taskRunning || !!genBusy['characters'],
+      disabled: !!genBusy['characters'],
       onclick: (e) => { e.stopPropagation(); generateCharacterEntry(); },
     };
   }
   function orgGenBtnProps() {
     return {
       class: 'btn btn-accent btn-xs',
-      disabled: $taskRunning || !!genBusy['organizations'],
+      disabled: !!genBusy['organizations'],
       onclick: (e) => { e.stopPropagation(); generateOrganizationEntry(); },
     };
   }
   function relGenBtnProps() {
     return {
       class: 'btn btn-accent btn-xs',
-      disabled: $taskRunning || !!genBusy['relations'],
+      disabled: !!genBusy['relations'],
       onclick: (e) => { e.stopPropagation(); generateRelationEntry(); },
     };
   }
@@ -1340,7 +1506,7 @@ novelParamsTick++;
       <div class="flex items-center justify-between gap-2 flex-wrap">
         <span class="text-xs text-base-content/65">{$t('config.audience.profileTitle')}</span>
         <div class="flex items-center gap-1.5">
-          <button class="btn btn-accent btn-xs" disabled={$taskRunning || !!genBusy['audience_profile']}
+          <button class="btn btn-accent btn-xs" disabled={!!genBusy['audience_profile']}
             onclick={(e) => { e.stopPropagation(); generateSection('audience_profile'); }}>
             {#if genBusy['audience_profile']}
               <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
@@ -1356,6 +1522,7 @@ novelParamsTick++;
   </div>
     {/if}
 
+    {#if tab === 'novelParams'}
   <!-- Story brief (AI generation seed) -->
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
@@ -1754,4 +1921,5 @@ novelParamsTick++;
       {/if}
     </div>
   </div>
+    {/if}
 </div>
