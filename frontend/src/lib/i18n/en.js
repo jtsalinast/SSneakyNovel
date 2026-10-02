@@ -113,6 +113,7 @@ export default {
   // Navigation
   'nav.config': 'Config',
   'nav.novelParams': 'Novel parameters',
+  'nav.lore': 'Lore',
   'nav.outline': 'Outline',
   'nav.writing': 'Writing',
   'nav.proofread': 'Proofread',
@@ -421,6 +422,7 @@ export default {
   'config.api.testResultFail': 'Last test failed: {error}',
 
   'config.story.title': 'Story config',
+  'config.story.paramsTitle': 'Story parameters',
   'config.story.acceptedHint': 'Confirmed chapters exist. After changing key settings, run reconciliation.',
   'config.theme.title': 'Theme & Motif',
   'config.theme.hint': 'Theme and literary motif are combined here: the central theme plus any recurring image, written together in one field (comma-separated). The generated motif is saved into this same field.',

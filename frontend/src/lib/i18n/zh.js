@@ -114,6 +114,7 @@ export default {
   // Navigation
   'nav.config': '配置',
   'nav.novelParams': '小说参数',
+  'nav.lore': '设定',
   'nav.outline': '大纲',
   'nav.writing': '写作',
   'nav.proofread': '校订',
@@ -425,6 +426,7 @@ export default {
   'config.api.testResultFail': '上次测试失败：{error}',
 
   'config.story.title': '故事配置',
+  'config.story.paramsTitle': '小说参数',
   'config.story.acceptedHint': '已有已确认章节，修改关键设定后建议执行设定协调。',
   'config.theme.title': '主题与母题',
   'config.theme.hint': '主题与文学母题已合并：核心主题加上贯穿性意象写在同一栏（逗号分隔）。点击生成会把母题写入这一栏。',
