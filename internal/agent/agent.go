@@ -335,6 +335,11 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 	totalWords := len(ctx.State.Chapters) * ctx.Config.Story.TargetWordsPerChapter
 	sb.WriteString(fmt.Sprintf("现有章纲预计总字数: 约 %d 字\n", totalWords))
 
+	if storyFields := story.FormatStoryConfigForPrompt(ctx.Config.Story, i18n.LangZH); storyFields != "" {
+		sb.WriteString("\n### 故事参数（当前值，来自配置页，可直接引用；修改须用 update_project_config）\n")
+		sb.WriteString(storyFields)
+	}
+
 	if ctx.Settings != nil {
 		sb.WriteString(fmt.Sprintf("角色数: %d\n", len(ctx.Settings.Characters)))
 		sb.WriteString(fmt.Sprintf("世界观条目: %d\n", len(ctx.Settings.Worldview)))
@@ -343,11 +348,21 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 
 	if ctx.ContextPage != "" {
 		pageNames := map[string]string{
-			"config":    "配置",
-			"outline":   "大纲",
-			"writing":   "写作",
-			"relations": "图谱",
-			"skills":    "技能",
+			"config":        "配置",
+			"novel-params":  "小说参数",
+			"theme":         "主题与母题",
+			"style":         "写作风格与视角",
+			"lore":          "设定",
+			"characters":    "角色",
+			"worldview":     "世界观",
+			"organizations": "组织",
+			"relations":     "图谱",
+			"foreshadows":   "伏笔",
+			"memory":        "记忆",
+			"proofread":     "校对",
+			"outline":       "大纲",
+			"writing":       "写作",
+			"skills":        "技能",
 		}
 		if name, ok := pageNames[ctx.ContextPage]; ok {
 			sb.WriteString(fmt.Sprintf("\n用户当前正在查看「%s」页面。\n", name))
@@ -436,6 +451,11 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 	totalWords := len(ctx.State.Chapters) * ctx.Config.Story.TargetWordsPerChapter
 	sb.WriteString(fmt.Sprintf("Estimated length of existing outlined chapters: ~%d words\n", totalWords))
 
+	if storyFields := story.FormatStoryConfigForPrompt(ctx.Config.Story, i18n.LangEN); storyFields != "" {
+		sb.WriteString("\n### Story parameters (current values from the config page; quote them directly; change them only via update_project_config)\n")
+		sb.WriteString(storyFields)
+	}
+
 	if ctx.Settings != nil {
 		sb.WriteString(fmt.Sprintf("Characters: %d\n", len(ctx.Settings.Characters)))
 		sb.WriteString(fmt.Sprintf("Worldview entries: %d\n", len(ctx.Settings.Worldview)))
@@ -444,11 +464,21 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 
 	if ctx.ContextPage != "" {
 		pageNames := map[string]string{
-			"config":    "Config",
-			"outline":   "Outline",
-			"writing":   "Writing",
-			"relations": "Relations",
-			"skills":    "Skills",
+			"config":        "Config",
+			"novel-params":  "Novel Parameters",
+			"theme":         "Theme & Motif",
+			"style":         "Writing Style & POV",
+			"lore":          "Lore",
+			"characters":    "Characters",
+			"worldview":     "Worldview",
+			"organizations": "Organizations",
+			"relations":     "Relations",
+			"foreshadows":   "Foreshadows",
+			"memory":        "Memory",
+			"proofread":     "Proofread",
+			"outline":       "Outline",
+			"writing":       "Writing",
+			"skills":        "Skills",
 		}
 		if name, ok := pageNames[ctx.ContextPage]; ok {
 			sb.WriteString(fmt.Sprintf("\nThe user is currently viewing the \"%s\" page.\n", name))
@@ -1200,68 +1230,71 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_project_config",
-			Description: "读取当前故事配置",
+			Description: "读取当前故事配置（所有小说参数，含简介、主题、基调等）",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
-				snapshot := ctx.State.StoryConfigSnapshot
-				if snapshot == nil {
-					snapshot = &ctx.Config.Story
-				}
-				data, _ := json.MarshalIndent(snapshot, "", "  ")
+				// Always read from the live config: the form (PUT /api/config) and
+				// agent updates both mutate ctx.Config.Story, while the progress
+				// snapshot can be stale after a manual save.
+				data, _ := json.MarshalIndent(ctx.Config.Story, "", "  ")
 				return string(data), nil
 			},
 		},
 		{
 			Name:        "update_project_config",
-			Description: "更新全局故事设定：类型、标题、每章字数、风格和视角。批次梗概和章数直接传给 generate_outline，不在全局配置填写。覆盖已有字段需 confirm_overwrite=true。",
-			Parameters:  `{"type":"故事类型","title":"标题","target_words_per_chapter":2500,"writing_style":"写作风格","writing_pov":"叙述视角","confirm_overwrite":false}`,
+			Description: "更新全局故事设定的任意字段：type/subgenre/title/author/theme/tone/motif/story_length/structure/brief/conflict_scale/conflict_other/specific_settings/protagonist_type/protagonist_other/target_audience/audience_profile/romance_level/sexual_content/gore_level/world_darkness/gender_bias/locations_enabled/character_arcs_enabled/target_words_per_chapter/writing_style/writing_pov。批次梗概和章数直接传给 generate_outline，不在全局配置填写。覆盖已有字段需 confirm_overwrite=true。",
+			Parameters:  `{"type":"故事类型","title":"标题","subgenre":"子类型","theme":"主题","tone":"基调","author":"作者","story_length":"篇幅","structure":"结构","motif":"母题","brief":"故事简介","conflict_scale":"冲突规模","conflict_other":"自定义冲突","specific_settings":"特定设定(每行一条)","protagonist_type":"主角类型","protagonist_other":"自定义主角","target_audience":"目标读者","audience_profile":"读者画像","romance_level":"恋爱线","sexual_content":"性描写","gore_level":"暴力尺度","world_darkness":"世界黑暗度","gender_bias":"性别倾向","locations_enabled":false,"character_arcs_enabled":false,"target_words_per_chapter":2500,"writing_style":"写作风格","writing_pov":"叙述视角","confirm_overwrite":false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
-				var params struct {
-					Type                  string `json:"type"`
-					Title                 string `json:"title"`
-					TargetWordsPerChapter int    `json:"target_words_per_chapter"`
-					WritingStyle          string `json:"writing_style"`
-					WritingPOV            string `json:"writing_pov"`
-					ConfirmOverwrite      bool   `json:"confirm_overwrite"`
-				}
+				var params map[string]json.RawMessage
 				if err := json.Unmarshal(args, &params); err != nil {
 					return "", agentErr(ctx, "invalid_json", err)
 				}
+				var overwrite bool
+				if raw, ok := params["confirm_overwrite"]; ok {
+					_ = json.Unmarshal(raw, &overwrite)
+					delete(params, "confirm_overwrite")
+				}
+				if len(params) == 0 {
+					return "", agentErr(ctx, "no_fields", fmt.Errorf("no supported config fields provided"))
+				}
 
 				proposed := ctx.Config.Story
-				if params.Type != "" {
-					proposed.Type = params.Type
-				}
-				if params.Title != "" {
-					proposed.Title = params.Title
-				}
-				if params.WritingStyle != "" {
-					proposed.WritingStyle = params.WritingStyle
-				}
-				if params.WritingPOV != "" {
-					proposed.WritingPOV = params.WritingPOV
+				for key, raw := range params {
+					sp, ok := story.LookupStoryFieldSpec(key)
+					if !ok {
+						return "", agentErr(ctx, "unknown_field", fmt.Errorf("unsupported config field %q", key))
+					}
+					switch {
+					case sp.SetStr != nil:
+						var v string
+						if err := json.Unmarshal(raw, &v); err != nil {
+							return "", agentErr(ctx, "invalid_field_value", fmt.Errorf("field %q must be a string", key))
+						}
+						sp.SetStr(&proposed, v)
+					case sp.SetBool != nil:
+						var v bool
+						if err := json.Unmarshal(raw, &v); err != nil {
+							return "", agentErr(ctx, "invalid_field_value", fmt.Errorf("field %q must be a boolean", key))
+						}
+						sp.SetBool(&proposed, v)
+					case sp.SetInt != nil:
+						var v int
+						if err := json.Unmarshal(raw, &v); err != nil {
+							return "", agentErr(ctx, "invalid_field_value", fmt.Errorf("field %q must be an integer", key))
+						}
+						if v <= 0 {
+							continue
+						}
+						sp.SetInt(&proposed, v)
+					}
 				}
 
 				conflicts := story.CollectStoryConfigConflicts(ctx.Config.Story, proposed, "agent", "")
-				if len(conflicts) > 0 && !params.ConfirmOverwrite {
+				if len(conflicts) > 0 && !overwrite {
 					return story.FormatConfigConflictMessage(conflicts, ctx.Config.Language), nil
 				}
 
-				if params.Type != "" {
-					ctx.Config.Story.Type = params.Type
-				}
-				if params.Title != "" {
-					ctx.Config.Story.Title = params.Title
-				}
-				if params.TargetWordsPerChapter > 0 {
-					ctx.Config.Story.TargetWordsPerChapter = params.TargetWordsPerChapter
-				}
-				if params.WritingStyle != "" {
-					ctx.Config.Story.WritingStyle = params.WritingStyle
-				}
-				if params.WritingPOV != "" {
-					ctx.Config.Story.WritingPOV = params.WritingPOV
-				}
+				ctx.Config.Story = proposed
 
 				story.SyncProgressMetaFromStory(ctx.State, ctx.Config.Story)
 
@@ -1269,7 +1302,7 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "save_config_failed", err)
 				}
 
-				if params.ConfirmOverwrite {
+				if overwrite {
 					pendingPath := story.PendingConfigChangesPath(ctx.ProgressPath)
 					for _, c := range conflicts {
 						_ = story.RemovePendingFields(pendingPath, c.Field)

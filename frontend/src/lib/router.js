@@ -4,7 +4,7 @@ import { writable } from 'svelte/store';
 // after a refactor) used to render an empty main area — only the top bar, the
 // nav rail and the chat were visible until the user pressed F5. Normalize any
 // unknown page back to a valid one so the content always renders.
-const KNOWN_PAGES = ['config', 'novel-params', 'outline', 'writing', 'proofread', 'foreshadows', 'memory', 'relations', 'skills'];
+const KNOWN_PAGES = ['config', 'novel-params', 'lore', 'outline', 'writing', 'proofread', 'foreshadows', 'memory', 'relations', 'skills'];
 
 function normalizePage(raw) {
   const p = (raw || '').trim();

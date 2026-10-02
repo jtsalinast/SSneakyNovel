@@ -20,7 +20,9 @@
   let genPollTimer = null;  // shared /api/status poller handle
 
   export let sendToChat = async () => {};
-  // Which workspace tab renders this page: 'api' (Config) or 'novelParams' (Novel parameters).
+  // Which workspace tab renders this page: 'api' (Config), 'novelParams'
+  // (Story parameters) or 'lore' (Characters / Worldview / Organizations /
+  // Relations).
   export let tab = 'api';
 
   function stripNameMarks(name) {
@@ -29,20 +31,18 @@
 
   let showCharForm = false;
   let showWvForm = false;
-  let charCollapse = false;
-  let wvCollapse = false;
 
   let charName = '', charAge = '', charAppearance = '', charPersonality = '', charBackground = '', charMotivation = '', charAbilities = '', charNotes = '';
   let wvName = '', wvCategory = 'other', wvDescription = '', wvTags = '';
 
   // 组织管理
-  let showOrgForm = false, orgCollapse = false;
+  let showOrgForm = false;
   let orgName = '', orgType = '', orgDescription = '';
   let orgMembers = [];
   let editingOrgID = null;
 
   // 关系管理
-  let showRelForm = false, relCollapse = false;
+  let showRelForm = false;
   let relSource = '', relTarget = '', relLabel = '';
   let editingRelID = null;
 
@@ -1268,7 +1268,7 @@ novelParamsTick++;
     {#if tab === 'novelParams'}
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-2">
-        <h3 class="card-title text-base">{$t('config.story.title')}</h3>
+        <h3 class="card-title text-base">{$t('config.story.paramsTitle')}</h3>
         {#if hasAccepted}
           <div class="alert alert-warning text-xs py-1.5 px-3">
             <span>{$t('config.story.acceptedHint')}</span>
@@ -1320,10 +1320,6 @@ novelParamsTick++;
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.author')}</span>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
-          </div>
-          <div class="col-span-2">
-            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.theme')} / {$t('config.motif.title')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} title={$t('config.theme.hint')} />
           </div>
           <div class="col-span-2">
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.tone')}</span>
@@ -1489,17 +1485,16 @@ novelParamsTick++;
             {:else}✨ {$t('common.generate')}{/if}
           </button>
           <button {...undoBtnProps('motif')}>↩ {$t('common.undo')}</button>
-          <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
         </div>
       </div>
-      <div class="grid grid-cols-1 @xl:grid-cols-2 gap-x-3 gap-y-1.5">
+      <div class="space-y-1.5">
         <div>
           <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.theme')}</span>
-          <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} />
+          <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} title={$t('config.theme.hint')}></textarea>
         </div>
         <div>
           <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.motif.title')}</span>
-          <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning} />
+          <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
         </div>
       </div>
       <div class="divider my-0.5 py-0 h-px"></div>
@@ -1518,30 +1513,14 @@ novelParamsTick++;
       <textarea class="textarea textarea-sm w-full h-16 text-xs" bind:value={localStoryCfg.audience_profile}
         placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
       <div class="text-xs opacity-60">{$t('config.theme.hint')}</div>
+      <div class="flex justify-end">
+        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+      </div>
     </div>
   </div>
     {/if}
 
     {#if tab === 'novelParams'}
-  <!-- Story brief (AI generation seed) -->
-  <div class="card bg-base-200">
-    <div class="card-body p-4 gap-2">
-      <div class="flex justify-between items-center">
-        <h3 class="card-title text-base">{$t('config.brief.title')}</h3>
-      </div>
-      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.brief} placeholder={$t('config.brief.placeholder')} disabled={$taskRunning}></textarea>
-      <div class="text-xs opacity-60">{$t('config.brief.hint')}</div>
-      <div class="flex justify-end gap-1.5">
-        <button {...genBtnProps('brief')}>
-          {#if genBusy['brief']}
-            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-          {:else}✨ {$t('common.generate')}{/if}
-        </button>
-        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Writing Style & POV -->
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
@@ -1565,21 +1544,42 @@ novelParamsTick++;
     </div>
   </div>
 
+  <!-- Story brief (AI generation seed) -->
+  <div class="card bg-base-200">
+    <div class="card-body p-4 gap-2">
+      <div class="flex justify-between items-center">
+        <h3 class="card-title text-base">{$t('config.brief.title')}</h3>
+      </div>
+      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.brief} placeholder={$t('config.brief.placeholder')} disabled={$taskRunning}></textarea>
+      <div class="text-xs opacity-60">{$t('config.brief.hint')}</div>
+      <div class="flex justify-end gap-1.5">
+        <button {...genBtnProps('brief')}>
+          {#if genBusy['brief']}
+            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
+          {:else}✨ {$t('common.generate')}{/if}
+        </button>
+        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+      </div>
+    </div>
+  </div>
+
+    {/if}
+
+    {#if tab === 'lore'}
   <!-- Characters -->
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="flex justify-between items-center cursor-pointer select-none" on:click={() => charCollapse = !charCollapse}>
+      <div class="flex justify-between items-center">
         <div class="flex items-center gap-2">
           <h3 class="card-title text-base">{$t('config.char.title')} <span class="text-xs font-normal text-base-content/65">({chars.length})</span></h3>
           <button {...genBtnProps('characters')}>
             {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
           </button>
         </div>
-        <svg class="w-4 h-4 text-base-content/65 transition-transform" class:rotate-180={charCollapse} viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
       </div>
-      {#if !charCollapse}
+      
         <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
           {#if chars.length === 0}
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.char.empty')}</p>
@@ -1655,7 +1655,6 @@ novelParamsTick++;
             <button class="btn btn-accent btn-xs" on:click={submitCharacters} disabled={$taskRunning}>{$t('config.char.submit')}</button>
           {/if}
         </div>
-      {/if}
     </div>
   </div>
 
@@ -1664,7 +1663,7 @@ novelParamsTick++;
     <div class="card-body p-4 gap-2">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="flex justify-between items-center cursor-pointer select-none" on:click={() => wvCollapse = !wvCollapse}>
+      <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.wv.title')} <span class="text-xs font-normal text-base-content/65">({filteredWvs.length})</span></h3>
         <div class="flex items-center gap-2">
           {#if localStoryCfg.locations_enabled}
@@ -1672,10 +1671,9 @@ novelParamsTick++;
               {#if genBusy['locations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
             </button>
           {/if}
-          <svg class="w-4 h-4 text-base-content/65 transition-transform" class:rotate-180={wvCollapse} viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
         </div>
       </div>
-      {#if !wvCollapse}
+      
         <div class="tabs tabs-box tabs-xs bg-base-300 w-fit">
           {#each wvTabs as [cat, label]}
             <button class="tab tab-xs {$wvFilter === cat ? 'tab-active' : ''}" on:click={() => wvFilter.set(cat)}>
@@ -1747,7 +1745,6 @@ novelParamsTick++;
             <button class="btn btn-accent btn-xs" on:click={submitWorldview} disabled={$taskRunning}>{$t('config.wv.submit')}</button>
           {/if}
         </div>
-      {/if}
     </div>
   </div>
 
@@ -1756,16 +1753,15 @@ novelParamsTick++;
     <div class="card-body p-4 gap-2">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="flex justify-between items-center cursor-pointer select-none" on:click={() => orgCollapse = !orgCollapse}>
+      <div class="flex justify-between items-center">
         <div class="flex items-center gap-2">
           <h3 class="card-title text-base">{$t('config.org.title')} <span class="text-xs font-normal text-base-content/65">({orgs.length})</span></h3>
           <button {...genBtnProps('organizations')}>
             {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
           </button>
         </div>
-        <svg class="w-4 h-4 text-base-content/65 transition-transform" class:rotate-180={orgCollapse} viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
       </div>
-      {#if !orgCollapse}
+      
         <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
           {#if orgs.length === 0}
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.org.empty')}</p>
@@ -1832,7 +1828,6 @@ novelParamsTick++;
         <div class="flex gap-1.5">
           <button class="btn btn-primary btn-xs" on:click={requestNewOrg} disabled={$taskRunning}>{$t('config.org.create')}</button>
         </div>
-      {/if}
     </div>
   </div>
 
@@ -1841,16 +1836,15 @@ novelParamsTick++;
     <div class="card-body p-4 gap-2">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="flex justify-between items-center cursor-pointer select-none" on:click={() => relCollapse = !relCollapse}>
+      <div class="flex justify-between items-center">
         <div class="flex items-center gap-2">
           <h3 class="card-title text-base">{$t('config.rel.title')} <span class="text-xs font-normal text-base-content/65">({rels.length})</span></h3>
           <button {...genBtnProps('relations')}>
             {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
           </button>
         </div>
-        <svg class="w-4 h-4 text-base-content/65 transition-transform" class:rotate-180={relCollapse} viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
       </div>
-      {#if !relCollapse}
+      
         <div class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2">
           {#if rels.length === 0}
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.rel.empty')}</p>
@@ -1918,7 +1912,6 @@ novelParamsTick++;
             <span class="text-xs text-base-content/65 self-center">{$t('config.rel.needTwo')}</span>
           {/if}
         </div>
-      {/if}
     </div>
   </div>
     {/if}

@@ -241,6 +241,7 @@
         {#each [
           ['config', 'nav.config'],
           ['novel-params', 'nav.novelParams'],
+          ['lore', 'nav.lore'],
           ['outline', 'nav.outline'],
           ['writing', 'nav.writing'],
           ['proofread', 'nav.proofread'],
@@ -249,7 +250,7 @@
           ['relations', 'nav.relations'],
           ['skills', 'nav.skills']
         ] as [page, labelKey], i}
-          {#if i === 2 || i === 4 || i === 5 || i === 8}<span class="nav-divider" aria-hidden="true"></span>{/if}
+          {#if i === 3 || i === 5 || i === 6 || i === 9}<span class="nav-divider" aria-hidden="true"></span>{/if}
           <button
             class="nav-item btn btn-sm justify-start w-full px-3 text-sm {$currentPage === page ? 'btn-primary font-medium' : 'btn-ghost'}"
             aria-current={$currentPage === page ? 'page' : undefined}
@@ -266,6 +267,8 @@
           <Config tab="api" {sendToChat} />
         {:else if $currentPage === 'novel-params'}
           <Config tab="novelParams" {sendToChat} />
+        {:else if $currentPage === 'lore'}
+          <Config tab="lore" {sendToChat} />
         {:else if $currentPage === 'outline'}
           <Outline />
         {:else if $currentPage === 'writing'}
