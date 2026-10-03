@@ -4,7 +4,7 @@ package i18n
 // Templates use fmt.Sprintf verbs (%s, %d, %v). Frontend mirrors keys with {0},{1},… placeholders.
 var messageCatalog = map[string]map[string]string{
 	"log.history_degraded":           {LangZH: "历史摘要暂用本地截断内容；下次使用时将重试生成。", LangEN: "History summaries are using locally shortened text; generation will be retried on next use."},
-	"log.section_generating":         {LangZH: "正在根据故事简介生成%s...", LangEN: "Generating %s from the story brief..."},
+	"log.section_generating":         {LangZH: "正在根据小说参数与故事构想生成%s...", LangEN: "Generating %s from the novel parameters and story idea..."},
 	"log.section_generate_failed":    {LangZH: "生成失败: %v", LangEN: "Generation failed: %v"},
 	"log.section_generate_done":      {LangZH: "%s 生成完成！", LangEN: "%s generated!"},
 	"log.section_generate_cancelled": {LangZH: "生成已取消", LangEN: "Generation cancelled"},
@@ -622,6 +622,10 @@ var messageCatalog = map[string]map[string]string{
 	"agent.max_steps": {
 		LangZH: "已达到最大工具调用步骤限制。",
 		LangEN: "Reached the maximum tool-call step limit.",
+	},
+	"agent.section_generate_started": {
+		LangZH: "已开始后台生成「%s」，完成后会自动刷新相关数据；请稍候并告知用户关注进度指示。",
+		LangEN: "Background generation for \"%s\" has started; related data refreshes automatically when it finishes. Tell the user to watch the progress indicator.",
 	},
 	"agent.tool_exec_error": {
 		LangZH: "工具执行错误: %v",

@@ -43,7 +43,7 @@ func FromRequest(r *http.Request) string {
 // errorCatalog maps a stable error key to its zh/en messages.
 // Messages may contain %s for args.
 var errorCatalog = map[string]map[string]string{
-	"brief_required":           {LangZH: "请先填写故事简介（Brief）", LangEN: "Please fill in the story brief first"},
+	"story_idea_required":      {LangZH: "请先填写故事构想（Story idea）", LangEN: "Please fill in the story idea first"},
 	"unknown_section":          {LangZH: "无效的生成区块", LangEN: "Invalid generation section"},
 	"generate_failed":          {LangZH: "生成失败：%v", LangEN: "Generation failed: %v"},
 	"backup_failed":            {LangZH: "项目备份失败：%v", LangEN: "Project backup failed: %v"},

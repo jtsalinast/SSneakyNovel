@@ -2,7 +2,7 @@
   import { onMount, afterUpdate } from 'svelte';
   import { api } from '../lib/api.js';
   import { renderMarkdown } from '../lib/markdown.js';
-  import { chatSessions, currentChatSession, addToast, showConfirm, taskRunning, lastFailedTask, logEntries, currentTaskName } from '../lib/stores.js';
+  import { chatSessions, currentChatSession, addToast, showConfirm, taskRunning, lastFailedTask, logEntries, currentTaskName, chatTurnEnd } from '../lib/stores.js';
   import { t, uiLocale, formatToolResult } from '../lib/i18n/index.js';
   import TaskTokenBadge from './TaskTokenBadge.svelte';
 
@@ -125,12 +125,33 @@
     if (messagesContainer && autoScroll) messagesContainer.scrollTop = messagesContainer.scrollHeight;
   });
 
+  // Resolves when the assistant turn finishes (SSE 'chat_turn_end') so callers
+  // like Config's Generate buttons can refresh their busy state. Also resolves
+  // after a timeout as a safety net if the SSE event never arrives.
+  let pendingChatResolve = null;
+
+  function settleChat() {
+    if (pendingChatResolve) {
+      const r = pendingChatResolve;
+      pendingChatResolve = null;
+      r();
+    }
+  }
+
+  chatTurnEnd.subscribe(() => settleChat());
+
   export async function sendMessageToChat(text) {
     if (!$currentChatSession) {
       await createSession();
     }
     chatInput = text;
-    await sendMessage();
+    const sent = await sendMessage();
+    if (!sent) return false;
+    await new Promise((resolve) => {
+      pendingChatResolve = resolve;
+      setTimeout(() => { if (pendingChatResolve === resolve) settleChat(); }, 180000);
+    });
+    return true;
   }
 
   async function createSession() {
@@ -166,10 +187,10 @@
   }
 
   async function sendMessage() {
-    if ($taskRunning) { addToast($t('chat.toast.taskRunning'), 'error'); return; }
-    if (!$currentChatSession) { addToast($t('chat.toast.needSession'), 'error'); return; }
+    if ($taskRunning) { addToast($t('chat.toast.taskRunning'), 'error'); return false; }
+    if (!$currentChatSession) { addToast($t('chat.toast.needSession'), 'error'); return false; }
     const msg = chatInput.trim();
-    if (!msg) return;
+    if (!msg) return false;
     chatInput = '';
     if (inputEl) inputEl.style.height = 'auto';
     autoScroll = true;
@@ -182,7 +203,8 @@
 
     try {
       await api('POST', '/api/chat/sessions/' + $currentChatSession.id + '/messages', { content: msg, context_page: contextPage });
-    } catch (e) { addToast(e.message, 'error'); }
+      return true;
+    } catch (e) { addToast(e.message, 'error'); return false; }
   }
 
   function handleKeydown(e) {

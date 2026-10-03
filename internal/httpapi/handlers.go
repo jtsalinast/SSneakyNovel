@@ -2687,6 +2687,12 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 			CfgPath:      h.cfgPath,
 			SessionsDir:  h.sessionsDir,
 			ProjectDir:   filepath.Join(h.progDir, "storys", h.projectName),
+			// Wire the generate_section chat tool to the same background
+			// runner used by the config-page buttons (ownsLock=false: the
+			// agent loop already holds the task, so register as child work).
+			StartSectionGenerate: func(req agent.SectionGenRequest) error {
+				return h.StartSectionGenerateAsync(req, false)
+			},
 			StartAsync: func(taskName string, fn func(goCtx context.Context) error) {
 				// 子任务必须计入 activeWork，否则 Agent 主循环结束后锁被释放，
 				// 子任务仍在运行时新任务可并发进入，造成数据竞争。

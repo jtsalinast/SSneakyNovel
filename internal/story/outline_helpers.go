@@ -125,7 +125,7 @@ func finalizeOutlinePrompt(template, rendered string, cfg *config.Config, settin
 		block := formatOutlineLengthRequirementBlock(minLen, maxLen, lang) + "\n" + formatOutlineStructureRequirementBlock(lang)
 		rendered += "\n\n" + block
 	}
-	if np := novelParametersBlock(cfg); np != "" {
+	if np := NovelParametersBlock(cfg); np != "" {
 		rendered += "\n\n" + np
 	}
 	return rendered

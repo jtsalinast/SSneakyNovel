@@ -125,7 +125,7 @@ func GenerateOutlineBatch(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 	// Always add the explicit scope, including for previously saved custom templates.
 	template += batchScopeTemplate(cfg.Language)
 	template += endingPrompt(OutlineBatch{EndCh: start + req.ChapterCount - 1, EndingIntent: req.EndingIntent, EndingStyle: req.EndingStyle, EndingRequirements: req.EndingRequirements, PlannedFinal: req.EndingIntent == "final" || req.EndingIntent == "sequel"}, 0, cfg.Language)
-	if np := novelParametersBlock(cfg); np != "" {
+	if np := NovelParametersBlock(cfg); np != "" {
 		template += "\n\n" + np
 	}
 	data := map[string]string{

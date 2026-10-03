@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { addLog, addToast, config, progress, skills, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, outlineCharacterSuggestions, outlineCharacterShowSuggestions, pendingConfigChanges, showConfigChangePanel, storageError } from './stores.js';
+import { addLog, addToast, config, progress, skills, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, outlineCharacterSuggestions, outlineCharacterShowSuggestions, pendingConfigChanges, showConfigChangePanel, storageError, chatTurnEnd } from './stores.js';
 import { api } from './api.js';
 import { getLocale, translate, formatLogEntry, formatToolResult } from './i18n/index.js';
 import { TOKEN_POLL_INTERVAL_MS } from './tokenPoll.js';
@@ -195,6 +195,9 @@ export function connectSSE() {
     }
 
     if (d.task === 'chat_message') {
+      // Notify ChatPanel so sendMessageToChat() callers (Generate buttons)
+      // can unblock once the assistant turn is over.
+      chatTurnEnd.update(n => n + 1);
       // 异步工具可能仍有子任务；须在此取消 chat_chunk 延迟 flush，
       // 否则 reload 后的 messages 与 streaming_text 会各显示一遍相同 reply。
       clearChatBuf();

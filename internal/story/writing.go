@@ -564,7 +564,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 		"OutlineConstraints": outlineConstraints,
 	})
 	userPrompt = finalizeChapterWritingPrompt(cfg.Prompts.ChapterWriting, userPrompt, minLen, maxLen, targetWords, lang)
-	if np := novelParametersBlock(cfg); np != "" {
+	if np := NovelParametersBlock(cfg); np != "" {
 		userPrompt += "\n\n" + np
 	}
 	if block := formatExtraWritingConstraintsBlock(extraWritingConstraints, lang); block != "" {
