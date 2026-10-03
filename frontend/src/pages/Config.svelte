@@ -1555,6 +1555,25 @@ novelParamsTick++;
     {/if}
 
     {#if tab === 'novelParams'}
+  <!-- Story idea (AI generation seed) — comes first so the style generator can use it -->
+  <div class="card bg-base-200">
+    <div class="card-body p-4 gap-2">
+      <div class="flex justify-between items-center">
+        <h3 class="card-title text-base">{$t('config.story_idea.title')}</h3>
+      </div>
+      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
+      <div class="text-xs opacity-60">{$t('config.story_idea.hint')}</div>
+      <div class="flex justify-end gap-1.5">
+        <button {...genBtnProps('story_idea')}>
+          {#if genBusy['story_idea']}
+            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
+          {:else}✨ {$t('common.generate')}{/if}
+        </button>
+        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Writing Style & POV -->
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
@@ -1572,25 +1591,6 @@ novelParamsTick++;
       <div class="flex justify-end gap-1.5">
         <button {...genBtnProps('style')}>
           {#if genBusy['style']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
-        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Story idea (AI generation seed) -->
-  <div class="card bg-base-200">
-    <div class="card-body p-4 gap-2">
-      <div class="flex justify-between items-center">
-        <h3 class="card-title text-base">{$t('config.story_idea.title')}</h3>
-      </div>
-      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
-      <div class="text-xs opacity-60">{$t('config.story_idea.hint')}</div>
-      <div class="flex justify-end gap-1.5">
-        <button {...genBtnProps('story_idea')}>
-          {#if genBusy['story_idea']}
-            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-          {:else}✨ {$t('common.generate')}{/if}
         </button>
         <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>

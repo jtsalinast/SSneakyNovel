@@ -161,6 +161,11 @@ export function connectSSE() {
     currentTaskName.set(taskLabel(d.task));
     logEntries.set([]);
     lastFailedTask.set(null);
+    // A new task started while a sendMessageToChat() caller (Generate button)
+    // is waiting: the chat turn itself is over — the agent invoked its tool and
+    // the background generation took over. Unblock the caller so it can switch
+    // to progress polling instead of hanging until the safety timeout.
+    chatTurnEnd.update(n => n + 1);
     startTokenPoll();
   });
 

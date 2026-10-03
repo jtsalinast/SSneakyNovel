@@ -31,6 +31,7 @@ type SectionGenRequest struct {
 	TargetID    string              // relations pair mode
 	CharacterID string              // single-character form mode
 	OrgID       string              // single-organization form mode
+	Ctx         context.Context     // optional parent ctx for the generation (chat tool passes a detached one)
 }
 
 type Tool struct {
@@ -59,8 +60,12 @@ type AgentContext struct {
 	// Handlers.StartSectionGenerateAsync with ownsLock=false. May be nil in
 	// tests/embedded contexts; the generate_section tool reports that clearly.
 	StartSectionGenerate func(req SectionGenRequest) error
-	toolMsgKey           string
-	toolMsgArgs          []string
+	// SectionGenCtx, when set, is the context handed to StartSectionGenerate
+	// so the child generation keeps running even after this agent turn's task
+	// lock is released (prevents "context canceled" mid-generation).
+	SectionGenCtx context.Context
+	toolMsgKey    string
+	toolMsgArgs   []string
 }
 
 type AgentStep struct {
@@ -1441,6 +1446,7 @@ func getBuiltinTools() []Tool {
 					TargetID:    params.TargetID,
 					CharacterID: params.CharacterID,
 					OrgID:       params.OrgID,
+					Ctx:         ctx.SectionGenCtx,
 				}
 				runner := ctx.StartSectionGenerate
 				if runner == nil {

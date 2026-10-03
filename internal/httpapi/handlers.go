@@ -50,6 +50,7 @@ type Handlers struct {
 	taskRunning        bool
 	activeWork         int
 	taskCtx            context.Context
+	generationID       uint64 // bumped on every task start/stop; see tryStartTask
 	taskCancel         context.CancelFunc
 	taskTokens         *llm.TaskTokenUsage
 	knowledgeAtStart   string
@@ -209,9 +210,16 @@ func (h *Handlers) tryStartTask() bool {
 	ctx, h.taskTokens = llm.WithTaskTokens(ctx, h.logger)
 	h.taskCtx = ctx
 	h.taskCancel = cancel
+	h.generationID++
 	devlog.Log("tryStartTask ok activeWork=1")
 	return true
 }
+
+// generationID identifies the current task run. endTask bumps it so any
+// background goroutine that captured an older id knows its context was
+// cancelled by task teardown (normal completion or stop) rather than by a
+// real error — used to suppress spurious "API 调用失败: context canceled"
+// logs when a chat turn's lock is released while child work finished first.
 
 func (h *Handlers) endTask() {
 	h.taskMu.Lock()
@@ -236,6 +244,7 @@ func (h *Handlers) endTask() {
 			h.taskCancel = nil
 			cancelled = true
 		}
+		h.generationID++
 	}
 	aw, running := h.activeWork, h.taskRunning
 	h.taskMu.Unlock()
@@ -2652,7 +2661,15 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		// defer 确保任何错误路径都会释放任务锁，否则后续所有任务将永久 409
 		defer h.endTask()
 		h.logger.TaskStart("chat_message")
-		ctx := h.activateSkills(h.taskCtx, story.SkillScopeAssistantChat, false)
+		// Snapshot the task context: endTask() cancels h.taskCancel when the last
+		// unit of work finishes. If the agent's generate_section tool starts a
+		// child generation that completes *before* this chat turn does, endTask
+		// would cancel the context underneath the still-running agent loop,
+		// producing "步骤 N: API 调用失败: context canceled". Capturing h.taskCtx
+		// here (while the lock is definitely held) keeps this turn alive until it
+		// really ends; later tryStartTask() creates a fresh context anyway.
+		chatCtx := h.taskCtx
+		ctx := h.activateSkills(chatCtx, story.SkillScopeAssistantChat, false)
 
 		var history []agent.AgentStep
 		for _, m := range session.Messages {
@@ -2675,18 +2692,23 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		agentCtx := &agent.AgentContext{
-			APICfg:       h.apiCfg,
-			Settings:     h.settings,
-			SettingsPath: h.settingsPath,
-			State:        h.state,
-			Config:       h.cfg,
-			Skills:       h.skills,
-			Logger:       h.logger,
-			ContextPage:  req.ContextPage,
-			ProgressPath: h.progressPath,
-			CfgPath:      h.cfgPath,
-			SessionsDir:  h.sessionsDir,
-			ProjectDir:   filepath.Join(h.progDir, "storys", h.projectName),
+			// Own context for the generate_section child task (see chatCtx note
+			// above): WithoutCancel keeps the child alive when this turn's lock is
+			// released early, while PostTaskStop can still cancel it through the
+			// parent chain (h.taskCancel → chatCtx).
+			SectionGenCtx: context.WithoutCancel(chatCtx),
+			APICfg:        h.apiCfg,
+			Settings:      h.settings,
+			SettingsPath:  h.settingsPath,
+			State:         h.state,
+			Config:        h.cfg,
+			Skills:        h.skills,
+			Logger:        h.logger,
+			ContextPage:   req.ContextPage,
+			ProgressPath:  h.progressPath,
+			CfgPath:       h.cfgPath,
+			SessionsDir:   h.sessionsDir,
+			ProjectDir:    filepath.Join(h.progDir, "storys", h.projectName),
 			// Wire the generate_section chat tool to the same background
 			// runner used by the config-page buttons (ownsLock=false: the
 			// agent loop already holds the task, so register as child work).

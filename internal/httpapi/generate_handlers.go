@@ -68,6 +68,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		TargetID:    body.TargetID,
 		CharacterID: body.CharacterID,
 		OrgID:       body.OrgID,
+		Ctx:         h.taskCtx, // snapshot: the caller holds the task lock
 	}
 	if err := h.validateSectionGen(req); err != nil {
 		h.endTask()
@@ -75,7 +76,10 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go func() { h.runSectionGenerate(req) }()
+	go func() {
+		defer h.endTask()
+		h.runSectionGenerate(req)
+	}()
 
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
@@ -93,9 +97,28 @@ func (h *Handlers) StartSectionGenerateAsync(req SectionGenRequest, ownsLock boo
 	if !ownsLock && !h.startChildWork() {
 		return errors.New("task_running_wait")
 	}
+	// Snapshot the generation id: endTask() bumps it and cancels the task ctx
+	// when the last unit of work finishes. If that happens while this child is
+	// still running (e.g. a chat turn whose tool started the generation), any
+	// resulting "context canceled" is spurious — we suppress its error log/toast
+	// below by comparing ids.
+	h.taskMu.Lock()
+	genID := h.generationID
+	h.taskMu.Unlock()
 	go func() {
 		defer h.endTask()
-		h.runSectionGenerate(req)
+		err := h.runSectionGenerate(req)
+		if err != nil && req.Ctx != nil && req.Ctx.Err() != nil {
+			h.taskMu.Lock()
+			stale := genID != h.generationID
+			h.taskMu.Unlock()
+			if stale {
+				// Task lock was released underneath us; treat as cancelled,
+				// not as a generation failure.
+				return
+			}
+		}
+		_ = err
 	}()
 	return nil
 }
@@ -140,12 +163,15 @@ func (h *Handlers) validateSectionGen(req SectionGenRequest) error {
 // releases the task lock when done (it is always started via tryStartTask or
 // startChildWork, which take the lock). Returns the generation error.
 func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
-	defer h.endTask()
 	section := req.Section
 	storyCfg, err := h.normalizeSectionGen(req)
 	taskName := "section_generate_" + section
 	h.logger.TaskStart(taskName)
 	ctx := h.taskCtx
+	if req.Ctx != nil {
+		// Chat-tool path: use the detached context captured when the tool ran.
+		ctx = req.Ctx
+	}
 	if err == nil {
 		h.logger.InfoKey("log.section_generating", sectionLabel(section, h.cfg.Language))
 		switch section {
