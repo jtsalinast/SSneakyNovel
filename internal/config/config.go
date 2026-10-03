@@ -39,7 +39,7 @@ type StoryConfig struct {
 	StoryLength           string `json:"story_length,omitempty"`           // 篇幅：short/novella/novel/epic，联动章节数与结构选项
 	Structure             string `json:"structure,omitempty"`              // 故事结构框架（3幕/英雄之旅等，随篇幅变化）
 	Motif                 string `json:"motif,omitempty"`                  // 文学母题：可随机生成，注入大纲/写作/生成 prompts
-	Brief                 string `json:"brief,omitempty"`                  // 故事简介：作为 AI 生成风格/角色/组织/关系的依据
+	StoryIdea             string `json:"story_idea,omitempty"`             // 故事构想（Story idea）：作为 AI 生成风格/角色/组织/关系的依据；旧配置中的 "brief" 键由 normalizeLegacyStoryKeys 迁移
 	ConflictScale         string `json:"conflict_scale,omitempty"`         // 冲突规模（借鉴 NovelWriter conflict_scales；"other" 时使用 ConflictOther）
 	ConflictOther         string `json:"conflict_other,omitempty"`         // 自定义冲突规模
 	SpecificSettings      string `json:"specific_settings,omitempty"`      // 特定设定，每行一条（借鉴 implied_settings）
@@ -246,6 +246,21 @@ func LoadConfig(path string) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %w", err)
+	}
+
+	// Legacy migration: the story field once called "brief" (easily confused
+	// with chapter/outline synopses in AI prompts) is now "story_idea". Copy
+	// the old key over when the new one is empty so existing projects keep
+	// their data; the next SaveConfig persists it under the new key.
+	if strings.TrimSpace(cfg.Story.StoryIdea) == "" {
+		var legacy struct {
+			Story struct {
+				Brief string `json:"brief"`
+			} `json:"story"`
+		}
+		if json.Unmarshal(data, &legacy) == nil && strings.TrimSpace(legacy.Story.Brief) != "" {
+			cfg.Story.StoryIdea = legacy.Story.Brief
+		}
 	}
 
 	if cfg.Story.TargetWordsPerChapter <= 0 {

@@ -74,6 +74,10 @@ export const outlineCharacterShowSuggestions = writable(false);
 export const pendingConfigChanges = writable([]);
 export const showConfigChangePanel = writable(false);
 
+// Bumped by the SSE layer when a chat assistant turn finishes (task_end for
+// 'chat_message'). ChatPanel subscribes to resolve sendMessageToChat() callers.
+export const chatTurnEnd = writable(0);
+
 export function showConfirm(message, onConfirm) {
   confirmModal.set({ message, onConfirm });
 }

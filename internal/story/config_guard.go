@@ -39,7 +39,7 @@ var storyFieldSpecs = []storyFieldSpec{
 	{"story_length", "Story length", "篇幅", func(s config.StoryConfig) string { return s.StoryLength }, func(c *config.StoryConfig, v string) { c.StoryLength = v }, nil, nil},
 	{"structure", "Story structure", "故事结构", func(s config.StoryConfig) string { return s.Structure }, func(c *config.StoryConfig, v string) { c.Structure = v }, nil, nil},
 	{"motif", "Literary motif", "文学母题", func(s config.StoryConfig) string { return s.Motif }, func(c *config.StoryConfig, v string) { c.Motif = v }, nil, nil},
-	{"brief", "Story brief / synopsis", "故事简介", func(s config.StoryConfig) string { return s.Brief }, func(c *config.StoryConfig, v string) { c.Brief = v }, nil, nil},
+	{"story_idea", "Story idea (core premise; NOT a chapter/outline synopsis)", "故事构想", func(s config.StoryConfig) string { return s.StoryIdea }, func(c *config.StoryConfig, v string) { c.StoryIdea = v }, nil, nil},
 	{"conflict_scale", "Conflict scale", "冲突规模", func(s config.StoryConfig) string { return s.ConflictScale }, func(c *config.StoryConfig, v string) { c.ConflictScale = v }, nil, nil},
 	{"conflict_other", "Custom conflict scale", "自定义冲突规模", func(s config.StoryConfig) string { return s.ConflictOther }, func(c *config.StoryConfig, v string) { c.ConflictOther = v }, nil, nil},
 	{"specific_settings", "Specific settings (one per line)", "特定设定（每行一条）", func(s config.StoryConfig) string { return s.SpecificSettings }, func(c *config.StoryConfig, v string) { c.SpecificSettings = v }, nil, nil},
@@ -79,7 +79,7 @@ type StoryFieldSpec struct {
 }
 
 // LookupStoryFieldSpec returns the typed accessor spec for a StoryConfig JSON
-// key (e.g. "brief", "theme"), so tools can read/write any field generically.
+// key (e.g. "story_idea", "theme"), so tools can read/write any field generically.
 func LookupStoryFieldSpec(key string) (StoryFieldSpec, bool) {
 	sp, ok := storyFieldSpecByKey[key]
 	if !ok {
@@ -103,7 +103,7 @@ func StoryFieldLabel(field, lang string) string {
 
 // FormatStoryConfigForPrompt renders all non-empty story-config fields as
 // "- key: value" lines so the chat model always sees the current form values
-// (including the brief) without needing a tool call.
+// (including the story idea) without needing a tool call.
 func FormatStoryConfigForPrompt(story config.StoryConfig, lang string) string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	var sb strings.Builder
@@ -123,7 +123,7 @@ func FormatStoryConfigForPrompt(story config.StoryConfig, lang string) string {
 
 // protectedStoryFields lists the user-editable fields that must never be
 // silently overwritten by generated content. Every StoryConfig field is now
-// covered so conflicts surface for brief/theme/tone/... too.
+// covered so conflicts surface for story_idea/theme/tone/... too.
 var protectedStoryFields = func() []string {
 	out := make([]string, 0, len(storyFieldSpecs))
 	for _, sp := range storyFieldSpecs {

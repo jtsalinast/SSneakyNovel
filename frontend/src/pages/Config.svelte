@@ -59,7 +59,7 @@
   // what the user typed).
   let sharedStoryDraft = null;   // last localStoryCfg value
 
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', brief: '', conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
+  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
   // Preserve unsaved edits across workspace-tab switches (this component is
   // recreated on every tab change; without this the Genre field and friends
   // would silently reset to whatever was last saved on the server).
@@ -392,12 +392,12 @@ novelParamsTick++;
       const owned = new Set();
       for (const sec of finishedSections) {
         if (sec === 'motif') { owned.add('theme'); owned.add('motif'); }
-        else if (sec === 'brief') owned.add('brief');
+        else if (sec === 'story_idea') owned.add('story_idea');
         else if (sec === 'audience_profile') owned.add('audience_profile');
         else if (sec === 'style') { owned.add('writing_style'); owned.add('writing_pov'); }
       }
       const merged = {};
-      for (const k of ['theme', 'motif', 'brief', 'audience_profile', 'writing_style', 'writing_pov']) {
+      for (const k of ['theme', 'motif', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov']) {
         const sv = (st[k] || '').trim();
         if (!sv) continue;
         if (owned.has(k) || !(localStoryCfg[k] || '').trim()) merged[k] = st[k];
@@ -453,7 +453,7 @@ novelParamsTick++;
   // so a bad generation can be reverted without leaving the whole project touched.
   let genUndo = { ...sharedGenUndo };
 
-  // Story-config fields (writing_style/pov, theme/motif, brief) are plain
+  // Story-config fields (writing_style/pov, theme/motif, story_idea) are plain
   // strings inside the config file: snapshot them as a map and restore via PUT.
   function captureStoryFields(key, fields) {
     // Snapshot the *form* values (what the user currently sees), so undo
@@ -567,10 +567,11 @@ novelParamsTick++;
     } catch (e) { addToast(e.message, 'error'); }
   }
 
-  // Kick off a section generation: POST is fire-and-forget (the backend runs
-  // the LLM call as a background task and answers 202 immediately), busy flags
-  // live in module state, and startGenPolling() — which survives tab switches
-  // — refreshes the UI when the task finishes.
+  // Kick off a section generation. Config-page "Generate" buttons go through
+  // the chat assistant (generate_section tool) so every generation is visible
+  // and steerable in the side panel; startGeneration() keeps the direct HTTP
+  // path for single-entity form buttons (one character / worldview entry / org
+  // / relation pair), which carry ids the chat should not have to infer.
   // Returns true only if the request was actually accepted by the backend.
   async function startGeneration(section, extra = {}, undoKey = section) {
     // Only block on *our own* in-flight generation of this section. The global
@@ -593,7 +594,7 @@ novelParamsTick++;
     taskRunning.set(true);
     const story = storyPayload();
     try {
-      await api('POST', '/api/generate/' + section, { brief: (story.brief || '').trim(), story, ...extra });
+      await api('POST', '/api/generate/' + section, { story_idea: (story.story_idea || '').trim(), story, ...extra });
       genLastError = '';
       addToast($t('config.generate.started'), 'info');
       startGenPolling();
@@ -645,12 +646,45 @@ novelParamsTick++;
     else if (section === 'locations') captureSnapshot(undoKey, { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
     else if (section === 'style') captureStoryFields(undoKey, ['writing_style', 'writing_pov']);
     else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif']);
-    else if (section === 'brief') captureStoryFields(undoKey, ['brief']);
+    else if (section === 'story_idea') captureStoryFields(undoKey, ['story_idea']);
     else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile']);
     await persistStoryBeforeGenerate();
     const story = storyPayload();
-    const brief = (story.brief || '').trim() || ($config?.story?.brief || '').trim();
-    if (!brief && section !== 'motif' && section !== 'brief' && section !== 'audience_profile' && section !== 'style') { addToast($t('config.brief.required'), 'error'); discardUndo(undoKey); return; }
+    const idea = (story.story_idea || '').trim() || ($config?.story?.story_idea || '').trim();
+    if (!idea && section !== 'motif' && section !== 'story_idea' && section !== 'audience_profile' && section !== 'style') { addToast($t('config.story_idea.required'), 'error'); discardUndo(undoKey); return; }
+    // Section-level Generate buttons now go through the chat assistant: the
+    // message below is matched by the agent's system prompt, which MUST call
+    // the generate_section tool with this exact section key. The tool reuses
+    // the same background runner as startGeneration(), so progress polling,
+    // toasts and undo keep working unchanged.
+    const chatMsgs = {
+      style: $t('config.generate.chat.style'),
+      characters: $t('config.generate.chat.characters'),
+      organizations: $t('config.generate.chat.organizations'),
+      relations: $t('config.generate.chat.relations'),
+      locations: $t('config.generate.chat.locations'),
+      worldview: $t('config.generate.chat.worldview'),
+      motif: $t('config.generate.chat.motif'),
+      story_idea: $t('config.generate.chat.story_idea'),
+      audience_profile: $t('config.generate.chat.audience_profile'),
+    };
+    const msg = chatMsgs[section];
+    if (msg) {
+      genBusy = { ...genBusy, [section]: true };
+      sharedGenBusy[section] = true;
+      try {
+        await sendToChat(msg);
+        // The agent's generate_section tool kicks off the same background
+        // task the HTTP buttons used to start directly; poll its progress so
+        // the busy flag clears and results refresh when it finishes.
+        startGenPolling();
+      } catch (e) {
+        delete sharedGenBusy[section];
+        genBusy = { ...genBusy, [section]: false };
+        addToast(e?.message || String(e), 'error');
+      }
+      return;
+    }
     await startGeneration(section, extra, undoKey);
   }
   function discardUndo(key) {
@@ -1521,6 +1555,25 @@ novelParamsTick++;
     {/if}
 
     {#if tab === 'novelParams'}
+  <!-- Story idea (AI generation seed) — comes first so the style generator can use it -->
+  <div class="card bg-base-200">
+    <div class="card-body p-4 gap-2">
+      <div class="flex justify-between items-center">
+        <h3 class="card-title text-base">{$t('config.story_idea.title')}</h3>
+      </div>
+      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
+      <div class="text-xs opacity-60">{$t('config.story_idea.hint')}</div>
+      <div class="flex justify-end gap-1.5">
+        <button {...genBtnProps('story_idea')}>
+          {#if genBusy['story_idea']}
+            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
+          {:else}✨ {$t('common.generate')}{/if}
+        </button>
+        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Writing Style & POV -->
   <div class="card bg-base-200">
     <div class="card-body p-4 gap-2">
@@ -1538,25 +1591,6 @@ novelParamsTick++;
       <div class="flex justify-end gap-1.5">
         <button {...genBtnProps('style')}>
           {#if genBusy['style']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
-        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Story brief (AI generation seed) -->
-  <div class="card bg-base-200">
-    <div class="card-body p-4 gap-2">
-      <div class="flex justify-between items-center">
-        <h3 class="card-title text-base">{$t('config.brief.title')}</h3>
-      </div>
-      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.brief} placeholder={$t('config.brief.placeholder')} disabled={$taskRunning}></textarea>
-      <div class="text-xs opacity-60">{$t('config.brief.hint')}</div>
-      <div class="flex justify-end gap-1.5">
-        <button {...genBtnProps('brief')}>
-          {#if genBusy['brief']}
-            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-          {:else}✨ {$t('common.generate')}{/if}
         </button>
         <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>

@@ -97,10 +97,13 @@ func lengthLabel(length, lang string) string {
 	return length
 }
 
-// novelParametersBlock builds an optional prompt block from the story config's
-// novel parameters (brief, subgenre, theme, tone, author, length, structure).
 // It returns "" when nothing is set, so existing prompts stay unchanged.
-func novelParametersBlock(cfg *config.Config) string {
+// NovelParametersBlock builds the authoritative "novel parameters" prompt block
+// (story idea, motif, subgenre, theme, tone, length, structure, conflict,
+// protagonist, audience, content guidance...) from the story config. It is
+// shared by outline, writing and section generation so every AI feature sees
+// the same complete parameter set.
+func NovelParametersBlock(cfg *config.Config) string {
 	sc := cfg.Story
 	en := i18n.NormalizeLanguage(cfg.Language) == i18n.LangEN
 	var lines []string
@@ -116,11 +119,11 @@ func novelParametersBlock(cfg *config.Config) string {
 	if m := sc.EffectiveMotif(); m != "" {
 		add("【文学母题】"+m+"（请将其作为贯穿全书的意象与主题线索，自然织入情节、人物与场景，不要生硬说教）", "[LITERARY MOTIF] "+m+" (weave it as a recurring image/thematic thread through plot, characters and scenes; never heavy-handed)")
 	}
-	if b := strings.TrimSpace(sc.Brief); b != "" {
+	if b := strings.TrimSpace(sc.StoryIdea); b != "" {
 		if en {
-			lines = append(lines, "[STORY BRIEF - authoritative premise]\n"+b)
+			lines = append(lines, "[STORY IDEA - authoritative premise]\n"+b)
 		} else {
-			lines = append(lines, "【故事简介·权威前提】\n"+b)
+			lines = append(lines, "【故事构想·权威前提】\n"+b)
 		}
 	}
 	if v := strings.TrimSpace(sc.Subgenre); v != "" {
