@@ -46,7 +46,15 @@ type AgentContext struct {
 	Settings     *story.ProjectSettings
 	SettingsPath string
 	State        *story.Progress
-	Config       *config.Config
+	// Config is the live in-memory project config. Tests and embedded callers
+	// set it directly; httpapi prefers ConfigGetter (below) so every read picks
+	// up exactly what the author just saved through the form.
+	Config *config.Config
+	// ConfigGetter, when non-nil, supersedes Config: each cfg() call returns
+	// the freshest on-disk config (falling back to the snapshot). This is what
+	// makes the chat-side generate_section tool see the unsaved-but-PUT form
+	// values the config-page buttons persist right before messaging the chat.
+	ConfigGetter func() *config.Config
 	Skills       []story.Skill
 	Logger       *sse.LogBroadcaster
 	ContextPage  string
@@ -90,7 +98,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 
 	toolResultLabel := "[工具结果]"
-	if i18n.NormalizeLanguage(ctx.Config.Language) == i18n.LangEN {
+	if projectLang(ctx) == i18n.LangEN {
 		toolResultLabel = "[Tool result]"
 	}
 
@@ -125,6 +133,17 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 
 	messages = append(messages, llm.Message{Role: "user", Content: userMessage})
 
+	// The Generate buttons prepend [generate-section:X]. The chat agent still
+	// owns execution; the tag only makes the tool choice deterministic: on the
+	// first step we skip the model round-trip entirely and execute the tool
+	// ourselves, so a click ALWAYS triggers the generation even when the LLM
+	// endpoint is down or answers with plain text. Later steps are normal
+	// model turns that summarize the tool result for the user.
+	forcedCall := parseGenerateSectionTag(userMessage)
+	// Visible reply guaranteed for tagged turns even when the LLM never
+	// answers (endpoint down / truncated): used if no later step returns prose.
+	fallbackReply := ""
+
 	// ponytail: one parse-retry per loop; ceiling = still-broken after retry → hard error (no silent final reply).
 	parseRetryUsed := false
 
@@ -133,12 +152,37 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			return "", history, agentErr(ctx, "agent.task_cancelled")
 		}
 
+		if forcedCall != nil && step == 0 {
+			tcJSON, _ := json.Marshal(forcedCall)
+			history = append(history, AgentStep{Role: "assistant", ToolCall: forcedCall})
+			if ctx.Logger != nil {
+				ctx.logger().ToolCallStart("", forcedCall.Name, string(tcJSON))
+			}
+			result, resultKey, resultArgs := executeTool(forcedCall, tools, ctx)
+			history = append(history, AgentStep{
+				Role:           "tool",
+				ToolResult:     result,
+				ToolResultKey:  resultKey,
+				ToolResultArgs: resultArgs,
+			})
+			if ctx.Logger != nil {
+				ctx.logger().ToolCallEnd("", forcedCall.Name, story.Truncate(result, 200), resultKey, resultArgs)
+			}
+			messages = append(messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("<tool_call>\n%s\n</tool_call>", string(tcJSON))})
+			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("%s\n%s", toolResultLabel, result)})
+			// The click ALWAYS produces a visible chat reply, even when the
+			// summary LLM call below fails or loops out: this becomes the final
+			// assistant message unless a later step returns prose first.
+			fallbackReply = agentMsg(ctx, "agent.section_generate_started", forcedSectionName(forcedCall))
+			continue
+		}
+
 		if ctx.Logger != nil {
 			var roleSeq []string
 			for _, m := range messages {
 				roleSeq = append(roleSeq, fmt.Sprintf("%s(%d)", m.Role, len([]rune(m.Content))))
 			}
-			ctx.Logger.Info(fmt.Sprintf("[Agent] 步骤 %d/%d: 消息 %d 条: %v", step+1, maxSteps, len(messages), roleSeq))
+			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d/%d: 消息 %d 条: %v", step+1, maxSteps, len(messages), roleSeq))
 		}
 
 		fullResp := ""
@@ -147,23 +191,40 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 		})
 		if err != nil {
 			if ctx.Logger != nil {
-				ctx.Logger.Error(fmt.Sprintf("[Agent] 步骤 %d: API 调用失败: %v", step+1, err))
+				ctx.logger().Error(fmt.Sprintf("[Agent] 步骤 %d: API 调用失败: %v", step+1, err))
+			}
+			if forcedCall != nil {
+				// Tagged turn: the generate_section tool already ran. Give the
+				// summary LLM one more chance on the next step; if every model
+				// call fails, fall through to the deterministic reply below so
+				// the click still shows an assistant message in the chat.
+				if fallbackReply != "" && step >= maxSteps-1 {
+					break
+				}
+				continue
 			}
 			return "", history, agentErr(ctx, "agent.api_failed", err)
 		}
 
 		if ctx.Logger != nil {
-			ctx.Logger.Info(fmt.Sprintf("[Agent] 步骤 %d: API 响应 %d 字符 (finish_reason=%s)", step+1, len(fullResp), finishReason))
+			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: API 响应 %d 字符 (finish_reason=%s)", step+1, len(fullResp), finishReason))
 		}
 
 		toolCall := parseToolCall(fullResp)
+
+		if forcedCall != nil && toolCall == nil {
+			// Model answered plain text after the forced tool ran (or an odd
+			// retry): keep its prose as the visible reply instead of looping.
+			history = append(history, AgentStep{Role: "assistant", Content: fullResp})
+			return fullResp, history, nil
+		}
 
 		if isFailedToolCallAttempt(fullResp, toolCall) {
 			if !parseRetryUsed {
 				parseRetryUsed = true
 				feedback := toolCallParseRetryFeedback(ctx, finishReason, fullResp)
 				if ctx.Logger != nil {
-					ctx.Logger.WarnKey("log.agent_tool_call_parse_retry", finishReason, len(fullResp))
+					ctx.logger().WarnKey("log.agent_tool_call_parse_retry", finishReason, len(fullResp))
 				}
 				// Keep broken output in messages only (not history) so the model can diagnose; UI/session stay clean.
 				messages = append(messages, llm.Message{Role: "assistant", Content: fullResp})
@@ -172,9 +233,9 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			}
 			if ctx.Logger != nil {
 				if finishReason == "length" || hasUnclosedToolCall(fullResp) {
-					ctx.Logger.WarnKey("log.agent_output_truncated", agentEffectiveMaxTokens(ctx.APICfg))
+					ctx.logger().WarnKey("log.agent_output_truncated", agentEffectiveMaxTokens(ctx.APICfg))
 				} else {
-					ctx.Logger.WarnKey("log.agent_tool_call_parse_failed")
+					ctx.logger().WarnKey("log.agent_tool_call_parse_failed")
 				}
 			}
 			if finishReason == "length" || hasUnclosedToolCall(fullResp) {
@@ -189,14 +250,14 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 				if len([]rune(preview)) > 200 {
 					preview = string([]rune(preview)[:200]) + "..."
 				}
-				ctx.Logger.Info(fmt.Sprintf("[Agent] 步骤 %d: 未检测到工具调用，作为最终回复返回。内容预览: %s", step+1, preview))
+				ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: 未检测到工具调用，作为最终回复返回。内容预览: %s", step+1, preview))
 			}
 			history = append(history, AgentStep{Role: "assistant", Content: fullResp})
 			return fullResp, history, nil
 		}
 
 		if ctx.Logger != nil {
-			ctx.Logger.Info(fmt.Sprintf("[Agent] 步骤 %d: 检测到工具调用 → %s", step+1, toolCall.Name))
+			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: 检测到工具调用 → %s", step+1, toolCall.Name))
 		}
 
 		// 保存到历史时，剥离 <tool_call> 标签，只保留工具调用结构。
@@ -205,7 +266,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 		history = append(history, AgentStep{Role: "assistant", Content: strippedContent, ToolCall: toolCall})
 
 		if ctx.Logger != nil {
-			ctx.Logger.ToolCallStart("", toolCall.Name, string(toolCall.Arguments))
+			ctx.logger().ToolCallStart("", toolCall.Name, string(toolCall.Arguments))
 		}
 
 		result, resultKey, resultArgs := executeTool(toolCall, tools, ctx)
@@ -215,7 +276,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			if len([]rune(resultPreview)) > 100 {
 				resultPreview = string([]rune(resultPreview)[:100]) + "..."
 			}
-			ctx.Logger.Info(fmt.Sprintf("[Agent] 步骤 %d: 工具 %s 执行完成，结果: %s", step+1, toolCall.Name, resultPreview))
+			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: 工具 %s 执行完成，结果: %s", step+1, toolCall.Name, resultPreview))
 		}
 
 		history = append(history, AgentStep{
@@ -226,7 +287,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 		})
 
 		if ctx.Logger != nil {
-			ctx.Logger.ToolCallEnd("", toolCall.Name, story.Truncate(result, 200), resultKey, resultArgs)
+			ctx.logger().ToolCallEnd("", toolCall.Name, story.Truncate(result, 200), resultKey, resultArgs)
 		}
 
 		messages = append(messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("<tool_call>\n%s\n</tool_call>", func() string {
@@ -236,7 +297,73 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 		messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("%s\n%s", toolResultLabel, result)})
 	}
 
+	if fallbackReply != "" {
+		// Tagged turn whose summary LLM never delivered prose (API down or
+		// step ceiling): the tool DID run, so answer deterministically.
+		history = append(history, AgentStep{Role: "assistant", Content: fallbackReply})
+		return fallbackReply, history, nil
+	}
 	return agentMsg(ctx, "agent.max_steps"), history, nil
+}
+
+// generateSectionValid is the set of section keys accepted by the
+// generate_section tool and its background runner.
+var generateSectionValid = map[string]bool{
+	"style": true, "characters": true, "organizations": true,
+	"relations": true, "locations": true, "worldview": true,
+	"motif": true, "story_idea": true, "audience_profile": true,
+}
+
+// parseGenerateSectionTag looks for the [generate-section:<section>] marker
+// that the config-page Generate buttons prepend to their chat message (see the
+// config.generate.chat.* i18n keys). When present and the section key is one
+// the generate_section tool accepts, it returns a ready-to-execute ToolCall so
+// the agent loop can force the call deterministically instead of relying on the
+// model to emit the tool-call block itself. Returns nil when no valid tag is
+// found, leaving normal model-driven behavior untouched.
+// ParseGenerateSectionTag is the exported wrapper used by the HTTP layer to
+// run the deterministic Generate-button fast path before the LLM turn.
+func ParseGenerateSectionTag(userMessage string) *ToolCall {
+	return parseGenerateSectionTag(userMessage)
+}
+
+// ForcedSectionName is the exported wrapper around forcedSectionName.
+func ForcedSectionName(call *ToolCall) string {
+	return forcedSectionName(call)
+}
+
+func parseGenerateSectionTag(userMessage string) *ToolCall {
+	const marker = "[generate-section:"
+	idx := strings.Index(userMessage, marker)
+	if idx < 0 {
+		return nil
+	}
+	rest := userMessage[idx+len(marker):]
+	end := strings.Index(rest, "]")
+	if end < 0 {
+		return nil
+	}
+	section := strings.TrimSpace(rest[:end])
+	if !generateSectionValid[section] {
+		return nil
+	}
+	args, err := json.Marshal(map[string]string{"section": section})
+	if err != nil {
+		return nil
+	}
+	return &ToolCall{Name: "generate_section", Arguments: args}
+}
+
+// forcedSectionName extracts the section argument from a forced
+// generate_section ToolCall (used to build the deterministic chat reply).
+func forcedSectionName(call *ToolCall) string {
+	var params struct {
+		Section string `json:"section"`
+	}
+	if call != nil {
+		_ = json.Unmarshal(call.Arguments, &params)
+	}
+	return params.Section
 }
 
 func callAgentAPI(ctx context.Context, apiCfg *config.APIConfig, messages []llm.Message, onChunk func(string)) (finishReason string, err error) {
@@ -321,7 +448,7 @@ func toolCallParseRetryFeedback(ctx *AgentContext, finishReason, content string)
 }
 
 func buildAgentSystemPrompt(ctx *AgentContext, toolDesc string) string {
-	if i18n.NormalizeLanguage(ctx.Config.Language) == i18n.LangEN {
+	if projectLang(ctx) == i18n.LangEN {
 		return buildAgentSystemPromptEN(ctx, toolDesc)
 	}
 	return buildAgentSystemPromptZH(ctx, toolDesc)
@@ -366,11 +493,12 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 	}
 	sb.WriteString(fmt.Sprintf("当前阶段: %s\n", ctx.State.Phase))
 	sb.WriteString(fmt.Sprintf("当前大纲章节数: %d\n", len(ctx.State.Chapters)))
-	sb.WriteString(fmt.Sprintf("每章目标字数: %d\n", ctx.Config.Story.TargetWordsPerChapter))
-	totalWords := len(ctx.State.Chapters) * ctx.Config.Story.TargetWordsPerChapter
+	cfg := ctx.safeCfg()
+	sb.WriteString(fmt.Sprintf("每章目标字数: %d\n", cfg.Story.TargetWordsPerChapter))
+	totalWords := len(ctx.State.Chapters) * cfg.Story.TargetWordsPerChapter
 	sb.WriteString(fmt.Sprintf("现有章纲预计总字数: 约 %d 字\n", totalWords))
 
-	if storyFields := story.FormatStoryConfigForPrompt(ctx.Config.Story, i18n.LangZH); storyFields != "" {
+	if storyFields := story.FormatStoryConfigForPrompt(cfg.Story, i18n.LangZH); storyFields != "" {
 		sb.WriteString("\n### 故事参数（当前值，来自配置页，可直接引用；修改须用 update_project_config）\n")
 		sb.WriteString(storyFields)
 	}
@@ -411,7 +539,7 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 
 	sb.WriteString("\n")
 
-	enabledSkills := story.ResolveSkills(ctx.Skills, ctx.Config.SkillConfig, story.SkillScopeAssistantChat, ctx.Config.Language)
+	enabledSkills := story.ResolveSkills(ctx.Skills, cfg.SkillConfig, story.SkillScopeAssistantChat, cfg.Language)
 	if len(enabledSkills) > 0 {
 		sb.WriteString("## 已启用技能\n")
 		sb.WriteString(story.FormatSkillsContent(enabledSkills))
@@ -483,11 +611,12 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 	}
 	sb.WriteString(fmt.Sprintf("Current phase: %s\n", ctx.State.Phase))
 	sb.WriteString(fmt.Sprintf("Current outline chapter count: %d\n", len(ctx.State.Chapters)))
-	sb.WriteString(fmt.Sprintf("Target words per chapter: %d\n", ctx.Config.Story.TargetWordsPerChapter))
-	totalWords := len(ctx.State.Chapters) * ctx.Config.Story.TargetWordsPerChapter
+	cfg := ctx.safeCfg()
+	sb.WriteString(fmt.Sprintf("Target words per chapter: %d\n", cfg.Story.TargetWordsPerChapter))
+	totalWords := len(ctx.State.Chapters) * cfg.Story.TargetWordsPerChapter
 	sb.WriteString(fmt.Sprintf("Estimated length of existing outlined chapters: ~%d words\n", totalWords))
 
-	if storyFields := story.FormatStoryConfigForPrompt(ctx.Config.Story, i18n.LangEN); storyFields != "" {
+	if storyFields := story.FormatStoryConfigForPrompt(cfg.Story, i18n.LangEN); storyFields != "" {
 		sb.WriteString("\n### Story parameters (current values from the config page; quote them directly; change them only via update_project_config)\n")
 		sb.WriteString(storyFields)
 	}
@@ -528,7 +657,7 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 
 	sb.WriteString("\n")
 
-	enabledSkills := story.ResolveSkills(ctx.Skills, ctx.Config.SkillConfig, story.SkillScopeAssistantChat, ctx.Config.Language)
+	enabledSkills := story.ResolveSkills(ctx.Skills, cfg.SkillConfig, story.SkillScopeAssistantChat, cfg.Language)
 	if len(enabledSkills) > 0 {
 		sb.WriteString("## Enabled skills\n")
 		sb.WriteString(story.FormatSkillsContent(enabledSkills))
@@ -1002,7 +1131,7 @@ func getBuiltinTools() []Tool {
 				}
 
 				var result strings.Builder
-				result.WriteString(story.BatchSynopses(ctx.State, ctx.Config.Language))
+				result.WriteString(story.BatchSynopses(ctx.State, ctx.safeCfg().Language))
 				result.WriteString(fmt.Sprintf("《%s》\n\n", ctx.State.Title))
 				for _, ch := range ctx.State.Chapters {
 					status := ""
@@ -1113,7 +1242,7 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "save_failed", err)
 				}
 				if ctx.Logger != nil {
-					ctx.Logger.SettingsUpdated()
+					ctx.logger().SettingsUpdated()
 				}
 
 				return agentMsg(ctx, "agent.character_created", c.Name, c.ID), nil
@@ -1170,7 +1299,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 
 						return agentMsg(ctx, "agent.character_updated", ctx.Settings.Characters[i].Name), nil
@@ -1196,7 +1325,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 						return agentMsg(ctx, "agent.character_deleted", c.Name), nil
 					}
@@ -1224,7 +1353,7 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "save_failed", err)
 				}
 				if ctx.Logger != nil {
-					ctx.Logger.SettingsUpdated()
+					ctx.logger().SettingsUpdated()
 				}
 
 				return agentMsg(ctx, "agent.worldview_created", w.Name, w.ID), nil
@@ -1265,7 +1394,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 
 						return agentMsg(ctx, "agent.worldview_updated", ctx.Settings.Worldview[i].Name), nil
@@ -1291,7 +1420,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 						return agentMsg(ctx, "agent.worldview_deleted", w.Name), nil
 					}
@@ -1305,9 +1434,9 @@ func getBuiltinTools() []Tool {
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				// Always read from the live config: the form (PUT /api/config) and
-				// agent updates both mutate ctx.Config.Story, while the progress
+				// agent updates both mutate the live config Story, while the progress
 				// snapshot can be stale after a manual save.
-				data, _ := json.MarshalIndent(ctx.Config.Story, "", "  ")
+				data, _ := json.MarshalIndent(ctx.safeCfg().Story, "", "  ")
 				return string(data), nil
 			},
 		},
@@ -1329,7 +1458,8 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "no_fields", fmt.Errorf("no supported config fields provided"))
 				}
 
-				proposed := ctx.Config.Story
+				cfg := ctx.safeCfg()
+				proposed := cfg.Story
 				for key, raw := range params {
 					sp, ok := story.LookupStoryFieldSpec(key)
 					if !ok {
@@ -1360,16 +1490,16 @@ func getBuiltinTools() []Tool {
 					}
 				}
 
-				conflicts := story.CollectStoryConfigConflicts(ctx.Config.Story, proposed, "agent", "")
+				conflicts := story.CollectStoryConfigConflicts(cfg.Story, proposed, "agent", "")
 				if len(conflicts) > 0 && !overwrite {
-					return story.FormatConfigConflictMessage(conflicts, ctx.Config.Language), nil
+					return story.FormatConfigConflictMessage(conflicts, cfg.Language), nil
 				}
 
-				ctx.Config.Story = proposed
+				cfg.Story = proposed
 
-				story.SyncProgressMetaFromStory(ctx.State, ctx.Config.Story)
+				story.SyncProgressMetaFromStory(ctx.State, cfg.Story)
 
-				if err := config.SaveConfig(ctx.CfgPath, ctx.Config); err != nil {
+				if err := config.SaveConfig(ctx.CfgPath, cfg); err != nil {
 					return "", agentErr(ctx, "save_config_failed", err)
 				}
 
@@ -1389,11 +1519,11 @@ func getBuiltinTools() []Tool {
 				}
 
 				if hasAccepted && ctx.StartAsync != nil {
-					newSettings := ctx.Config.Story
+					newSettings := cfg.Story
 					ctx.StartAsync("settings_reconciliation", func(goCtx context.Context) error {
-						err := story.ReconcileSettingsAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, newSettings, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
+						err := story.ReconcileSettingsAction(goCtx, ctx.APICfg, cfg, ctx.State, newSettings, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
 						if err != nil {
-							ctx.Logger.Error(fmt.Sprintf("设定协调失败: %v", err))
+							ctx.logger().Error(fmt.Sprintf("设定协调失败: %v", err))
 						}
 						return err
 					})
@@ -1401,7 +1531,7 @@ func getBuiltinTools() []Tool {
 				}
 
 				if ctx.Logger != nil {
-					ctx.Logger.SettingsUpdated()
+					ctx.logger().SettingsUpdated()
 				}
 				return agentMsg(ctx, "agent.config_saved"), nil
 			},
@@ -1429,10 +1559,11 @@ func getBuiltinTools() []Tool {
 				default:
 					return "", agentErr(ctx, "unknown_field", fmt.Errorf("unsupported section %q", params.Section))
 				}
-				storyCfg := ctx.Config.Story
+				cfg := ctx.safeCfg()
+				storyCfg := cfg.Story
 				// Persist the current novel parameters first so the generation seed and
 				// the saved project state stay identical (same as the config-page flow).
-				if err := config.SaveConfig(ctx.CfgPath, ctx.Config); err != nil {
+				if err := config.SaveConfig(ctx.CfgPath, cfg); err != nil {
 					return "", agentErr(ctx, "save_config_failed", err)
 				}
 				req := SectionGenRequest{
@@ -1455,7 +1586,7 @@ func getBuiltinTools() []Tool {
 				if err := runner(req); err != nil {
 					return "", agentErr(ctx, "task_running_wait", err)
 				}
-				ctx.Logger.InfoKey("log.section_generating", params.Section)
+				ctx.logger().InfoKey("log.section_generating", params.Section)
 				return agentMsg(ctx, "agent.section_generate_started", params.Section), nil
 			},
 		},
@@ -1473,14 +1604,14 @@ func getBuiltinTools() []Tool {
 						return msg, nil
 					}
 				}
-				if err := story.ValidateOutlineBatch(ctx.State, req, ctx.Config.Language); err != nil {
+				if err := story.ValidateOutlineBatch(ctx.State, req, ctx.safeCfg().Language); err != nil {
 					return "", err
 				}
 				if ctx.StartAsync == nil {
 					return "", agentErr(ctx, "task_running_wait")
 				}
 				ctx.StartAsync("outline_generation", func(goCtx context.Context) error {
-					return story.GenerateOutlineBatch(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.Settings, req, ctx.ProgressPath, ctx.Logger)
+					return story.GenerateOutlineBatch(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.Settings, req, ctx.ProgressPath, ctx.Logger)
 				})
 				return agentMsg(ctx, "agent.outline_task_started"), nil
 			},
@@ -1499,7 +1630,7 @@ func getBuiltinTools() []Tool {
 				if err := story.ConfirmOutlineAction(ctx.State, ctx.ProgressPath); err != nil {
 					return "", agentErr(ctx, "outline_confirm_failed", err)
 				}
-				ctx.Logger.SuccessKey("log.outline_confirmed")
+				ctx.logger().SuccessKey("log.outline_confirmed")
 				return agentMsg(ctx, "agent.outline_confirmed"), nil
 			},
 		},
@@ -1519,9 +1650,9 @@ func getBuiltinTools() []Tool {
 				}
 				feedback := params.Feedback
 				ctx.StartAsync("outline_revision", func(goCtx context.Context) error {
-					err := story.ReviseOutlineAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, feedback, ctx.Logger)
+					err := story.ReviseOutlineAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, feedback, ctx.Logger)
 					if err != nil {
-						ctx.Logger.Error(fmt.Sprintf("大纲修订失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("大纲修订失败: %v", err))
 					}
 					return err
 				})
@@ -1550,7 +1681,7 @@ func getBuiltinTools() []Tool {
 				if err := story.SaveProgress(ctx.ProgressPath, ctx.State); err != nil {
 					return "", agentErr(ctx, "save_progress_failed", err)
 				}
-				ctx.Logger.SuccessKey("log.outline_deleted")
+				ctx.logger().SuccessKey("log.outline_deleted")
 				return agentMsg(ctx, "agent.outline_deleted"), nil
 			},
 		},
@@ -1573,7 +1704,7 @@ func getBuiltinTools() []Tool {
 				if err := story.SaveProgress(ctx.ProgressPath, ctx.State); err != nil {
 					return "", agentErr(ctx, "save_progress_failed", err)
 				}
-				ctx.Logger.SuccessKey("log.chapter_outline_updated", params.Num)
+				ctx.logger().SuccessKey("log.chapter_outline_updated", params.Num)
 				return agentMsg(ctx, "agent.chapter_outline_updated", params.Num), nil
 			},
 		},
@@ -1590,9 +1721,9 @@ func getBuiltinTools() []Tool {
 				}
 				chIdx := ctx.State.CurrentChapterIndex
 				ctx.StartAsync("chapter_generation", func(goCtx context.Context) error {
-					err := story.GenerateChapterAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, ctx.Settings, ctx.Skills, ctx.Logger)
+					err := story.GenerateChapterAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.ProgressPath, ctx.Settings, ctx.Skills, ctx.Logger)
 					if err != nil {
-						ctx.Logger.Error(fmt.Sprintf("章节创作失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("章节创作失败: %v", err))
 					}
 					return err
 				})
@@ -1611,7 +1742,7 @@ func getBuiltinTools() []Tool {
 					return "", err
 				}
 				ch := ctx.State.Chapters[ctx.State.CurrentChapterIndex-1]
-				ctx.Logger.SuccessKey("log.chapter_confirmed", ch.Num)
+				ctx.logger().SuccessKey("log.chapter_confirmed", ch.Num)
 				return agentMsg(ctx, "agent.chapter_confirmed", ch.Num, ch.Title), nil
 			},
 		},
@@ -1701,12 +1832,12 @@ func getBuiltinTools() []Tool {
 				ctx.StartAsync("chapter_revision", func(goCtx context.Context) error {
 					var err error
 					if isCurrent {
-						err = story.ReviseChapterAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, feedback, ctx.Settings, ctx.Logger)
+						err = story.ReviseChapterAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.ProgressPath, feedback, ctx.Settings, ctx.Logger)
 					} else {
-						err = story.ReviseSpecificChapterAction(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.ProgressPath, chNum, feedback, ctx.Settings, ctx.Logger)
+						err = story.ReviseSpecificChapterAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.ProgressPath, chNum, feedback, ctx.Settings, ctx.Logger)
 					}
 					if err != nil {
-						ctx.Logger.Error(fmt.Sprintf("章节修订失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("章节修订失败: %v", err))
 					}
 					return err
 				})
@@ -1750,7 +1881,7 @@ func getBuiltinTools() []Tool {
 				if err := story.SaveProgress(ctx.ProgressPath, ctx.State); err != nil {
 					return "", agentErr(ctx, "save_progress_failed", err)
 				}
-				ctx.Logger.SuccessKey("log.chapter_deleted", num)
+				ctx.logger().SuccessKey("log.chapter_deleted", num)
 				return agentMsg(ctx, "agent.chapter_deleted", num), nil
 			},
 		},
@@ -1804,7 +1935,7 @@ func getBuiltinTools() []Tool {
 				if err := story.SaveProgress(ctx.ProgressPath, ctx.State); err != nil {
 					return "", agentErr(ctx, "save_progress_failed", err)
 				}
-				ctx.Logger.SuccessKey("log.chapters_deleted_from", params.Num, deletedCount)
+				ctx.logger().SuccessKey("log.chapters_deleted_from", params.Num, deletedCount)
 				return agentMsg(ctx, "agent.chapters_deleted_from", params.Num, deletedCount), nil
 			},
 		},
@@ -1826,7 +1957,7 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "save_failed", err)
 				}
 				if ctx.Logger != nil {
-					ctx.Logger.SettingsUpdated()
+					ctx.logger().SettingsUpdated()
 				}
 				return agentMsg(ctx, "agent.organization_created", o.Name, o.ID), nil
 			},
@@ -1864,7 +1995,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 						return agentMsg(ctx, "agent.organization_updated", ctx.Settings.Organizations[i].Name), nil
 					}
@@ -1888,7 +2019,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 						return agentMsg(ctx, "agent.organization_deleted", o.Name), nil
 					}
@@ -1914,7 +2045,7 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "save_failed", err)
 				}
 				if ctx.Logger != nil {
-					ctx.Logger.SettingsUpdated()
+					ctx.logger().SettingsUpdated()
 				}
 				return agentMsg(ctx, "agent.relation_created", rel.ID), nil
 			},
@@ -1956,7 +2087,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 						return agentMsg(ctx, "agent.relation_updated", ctx.Settings.Relations[i].ID), nil
 					}
@@ -1980,7 +2111,7 @@ func getBuiltinTools() []Tool {
 							return "", agentErr(ctx, "save_failed", err)
 						}
 						if ctx.Logger != nil {
-							ctx.Logger.SettingsUpdated()
+							ctx.logger().SettingsUpdated()
 						}
 						return agentMsg(ctx, "agent.relation_deleted"), nil
 					}
@@ -2000,13 +2131,13 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "task_running_wait")
 				}
 				ctx.StartAsync("foreshadow_suggest", func(goCtx context.Context) error {
-					suggestions, err := story.SuggestForeshadows(goCtx, ctx.APICfg, ctx.Config, ctx.State, ctx.Logger)
+					suggestions, err := story.SuggestForeshadows(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.Logger)
 					if err != nil {
-						ctx.Logger.Error(fmt.Sprintf("伏笔建议生成失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("伏笔建议生成失败: %v", err))
 						return err
 					}
-					ctx.Logger.Success(fmt.Sprintf("伏笔建议生成完成，共 %d 条", len(suggestions)))
-					ctx.Logger.ForeshadowSuggestions(suggestions)
+					ctx.logger().Success(fmt.Sprintf("伏笔建议生成完成，共 %d 条", len(suggestions)))
+					ctx.logger().ForeshadowSuggestions(suggestions)
 					return nil
 				})
 				return agentMsg(ctx, "agent.foreshadow_suggest_started"), nil
@@ -2129,8 +2260,8 @@ func getBuiltinTools() []Tool {
 				var result strings.Builder
 				for _, s := range ctx.Skills {
 					enabled := false
-					if ctx.Config.SkillConfig != nil && ctx.Config.SkillConfig.EnabledSkills != nil {
-						enabled = ctx.Config.SkillConfig.EnabledSkills[s.ID]
+					if sk := ctx.safeCfg().SkillConfig; sk != nil && sk.EnabledSkills != nil {
+						enabled = sk.EnabledSkills[s.ID]
 					}
 					status := "❌"
 					if enabled {
@@ -2163,14 +2294,15 @@ func getBuiltinTools() []Tool {
 				if !found {
 					return "", agentErr(ctx, "skill_not_found")
 				}
-				if ctx.Config.SkillConfig == nil {
-					ctx.Config.SkillConfig = &config.SkillConfig{EnabledSkills: make(map[string]bool)}
+				cfg := ctx.safeCfg()
+				if cfg.SkillConfig == nil {
+					cfg.SkillConfig = &config.SkillConfig{EnabledSkills: make(map[string]bool)}
 				}
-				if ctx.Config.SkillConfig.EnabledSkills == nil {
-					ctx.Config.SkillConfig.EnabledSkills = make(map[string]bool)
+				if cfg.SkillConfig.EnabledSkills == nil {
+					cfg.SkillConfig.EnabledSkills = make(map[string]bool)
 				}
-				ctx.Config.SkillConfig.EnabledSkills[params.ID] = params.Enabled
-				if err := config.SaveConfig(ctx.CfgPath, ctx.Config); err != nil {
+				cfg.SkillConfig.EnabledSkills[params.ID] = params.Enabled
+				if err := config.SaveConfig(ctx.CfgPath, cfg); err != nil {
 					return "", agentErr(ctx, "save_config_failed", err)
 				}
 				status := "禁用"
@@ -2193,7 +2325,7 @@ func getBuiltinTools() []Tool {
 				}
 				// 原地清空，保证 Handlers 持有的同一指针也被重置
 				*ctx.State = story.Progress{Phase: "outline"}
-				ctx.Logger.Success("进度已重置。")
+				ctx.logger().Success("进度已重置。")
 				return agentMsg(ctx, "agent.progress_reset"), nil
 			},
 		},
@@ -2217,11 +2349,46 @@ func (ctx *AgentContext) takeToolMsg() (string, []string) {
 	return k, a
 }
 
+// cfg returns the live project config for this context. When ConfigGetter is
+// set (httpapi wiring) it takes precedence so every read sees the freshest
+// on-disk config the author just saved through the form; otherwise the plain
+// Config snapshot is used (tests/embedded callers). Nil-safe.
+func (ctx *AgentContext) cfg() *config.Config {
+	if ctx == nil {
+		return nil
+	}
+	if ctx.ConfigGetter != nil {
+		if c := ctx.ConfigGetter(); c != nil {
+			return c
+		}
+	}
+	return ctx.Config
+}
+
+// logger returns the SSE broadcaster or a no-op instance so tool code never
+// panics when Logger is unset (tests, early boot).
+func (ctx *AgentContext) logger() *sse.LogBroadcaster {
+	if ctx == nil || ctx.Logger == nil {
+		return sse.NewLogBroadcaster()
+	}
+	return ctx.Logger
+}
+
+// safeCfg is cfg() with a zero-value fallback so callers never dereference nil
+// (e.g. in tests or when no config file exists yet).
+func (ctx *AgentContext) safeCfg() *config.Config {
+	if c := ctx.cfg(); c != nil {
+		return c
+	}
+	return &config.Config{}
+}
+
 func projectLang(ctx *AgentContext) string {
-	if ctx == nil || ctx.Config == nil {
+	c := ctx.cfg()
+	if c == nil {
 		return i18n.LangZH
 	}
-	return i18n.NormalizeLanguage(ctx.Config.Language)
+	return i18n.NormalizeLanguage(c.Language)
 }
 
 func agentMsg(ctx *AgentContext, key string, args ...any) string {

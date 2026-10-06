@@ -2669,6 +2669,54 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		// here (while the lock is definitely held) keeps this turn alive until it
 		// really ends; later tryStartTask() creates a fresh context anyway.
 		chatCtx := h.taskCtx
+
+		// Deterministic fast path for [generate-section:X] messages (Generate
+		// buttons): execute the forced tool call BEFORE touching the LLM, so a
+		// click always triggers the generation even when the model endpoint is
+		// down or slow. The generation runs on its own detached context (see
+		// StartDetachedSectionGenerate) so it survives the end of this chat turn;
+		// the normal agent loop below then runs as the summary turn.
+		fastForced := agent.ParseGenerateSectionTag(req.Content)
+		fastReply := ""
+		if fastForced != nil {
+			sectionName := agent.ForcedSectionName(fastForced)
+			tcJSON, _ := json.Marshal(fastForced)
+			h.logger.ToolCallStart(sessionID, fastForced.Name, string(tcJSON))
+			result := fmt.Sprintf("generate_section(%s): started", sectionName)
+			var genErr error
+			if h.cfg == nil {
+				genErr = errors.New("config_not_loaded")
+			} else if err := h.StartDetachedSectionGenerate(agent.SectionGenRequest{
+				Section:   sectionName,
+				StoryIdea: strings.TrimSpace(h.cfg.Story.StoryIdea),
+				Story:     &h.cfg.Story,
+			}); err != nil {
+				genErr = err
+				result = fmt.Sprintf("generate_section(%s): failed: %v", sectionName, err)
+			}
+			h.logger.ToolCallEnd(sessionID, fastForced.Name, result, "", nil)
+			fastReply = i18n.T(i18n.FromRequest(r), "agent.section_generate_started", sectionName)
+			devlog.Log("chat fast-path generate_section=%s ok=%v", sectionName, genErr == nil)
+			if genErr != nil {
+				// Surface the failure immediately in the chat instead of a silent
+				// dead button: save + broadcast an error reply and end the turn.
+				msg := fastReply + " — " + genErr.Error()
+				session.Messages = append(session.Messages, story.ChatMessage{
+					Role:      "assistant",
+					Content:   msg,
+					Timestamp: time.Now().Format(time.RFC3339),
+				})
+				session.UpdatedAt = time.Now().Format(time.RFC3339)
+				if saveErr := story.SaveChatSession(h.sessionsDir, session); saveErr != nil {
+					h.logger.WarnKey("log.save_session_failed", saveErr)
+				}
+				h.logger.ChatChunk(sessionID, msg)
+				h.logger.ErrorKey("log.chat_failed", genErr)
+				h.logger.TaskEnd("chat_message", false)
+				return
+			}
+		}
+
 		ctx := h.activateSkills(chatCtx, story.SkillScopeAssistantChat, false)
 
 		var history []agent.AgentStep
@@ -2701,7 +2749,6 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 			Settings:      h.settings,
 			SettingsPath:  h.settingsPath,
 			State:         h.state,
-			Config:        h.cfg,
 			Skills:        h.skills,
 			Logger:        h.logger,
 			ContextPage:   req.ContextPage,
@@ -2709,6 +2756,21 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 			CfgPath:       h.cfgPath,
 			SessionsDir:   h.sessionsDir,
 			ProjectDir:    filepath.Join(h.progDir, "storys", h.projectName),
+			// Always act on the freshest on-disk config: the Generate button
+			// persists the live form via PUT /api/config right before sending the
+			// chat message, and the in-memory snapshot can lag (or be nil). The
+			// getter makes every read (system prompt, generate_section seed/save)
+			// pick up exactly what the author just typed.
+			ConfigGetter: func() *config.Config {
+				if h.cfgPath != "" {
+					if cfg, err := config.LoadConfig(h.cfgPath); err == nil && cfg != nil {
+						return cfg
+					}
+				}
+				h.projectMu.RLock()
+				defer h.projectMu.RUnlock()
+				return h.cfg
+			},
 			// Wire the generate_section chat tool to the same background
 			// runner used by the config-page buttons (ownsLock=false: the
 			// agent loop already holds the task, so register as child work).

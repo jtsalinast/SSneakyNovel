@@ -1,6 +1,6 @@
 <script>
   import { currentPage } from './lib/router.js';
-  import { progress, taskRunning, contextPage, toastStore, currentProject, projectLanguage, config, settings, chatSessions, currentChatSession } from './lib/stores.js';
+  import { progress, taskRunning, contextPage, toastStore, addToast, currentProject, projectLanguage, config, settings, chatSessions, currentChatSession } from './lib/stores.js';
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
   import { onMount, onDestroy } from 'svelte';
@@ -110,8 +110,49 @@
     return $t('app.chapters.count', { accepted, total: chs.length });
   })();
 
+  // Programmatic chat invocation used by Generate buttons outside the panel.
+  // Every rejection path THROWS so callers can surface the failure and clear
+  // their busy flags — a silent no-op here was the "nothing happens" bug:
+  // the click marked the section busy, nothing reached the chat, and the UI
+  // hung until a manual refresh.
   async function sendToChat(text) {
-    if (chatPanel) await chatPanel.sendMessageToChat(text);
+    console.log('[chat] sendToChat invoked', text?.slice(0, 60));
+    if (!chatPanel || typeof chatPanel.sendMessageToChat !== 'function') {
+      throw new Error('Chat assistant is not ready yet');
+    }
+    // Make the turn visible: on narrow screens the panel lives in a drawer
+    // that starts closed, and the user otherwise sees a busy button with no
+    // chat activity at all.
+    assistantOpen = true;
+    // The POST /messages endpoint ACKNOWLEDGES the request immediately (the
+    // agent turn runs server-side in background goroutines) — it never blocks
+    // until the turn ends. So awaiting here resolves as soon as the message is
+    // accepted and shows up in the panel. Awaiting the full turn instead (the
+    // old behavior via sendMessageToChat's internal settle promise) meant this
+    // call hung for minutes behind SSE/event-loop timing, which looked exactly
+    // like "the button does nothing".
+    const ok = await watchSendToChat(chatPanel.sendMessageToChat(text, { force: true }));
+    console.log('[chat] sendToChat result', ok);
+    if (!ok) throw new Error('Chat message could not be sent');
+  }
+
+  // Last-resort visibility net for programmatic chat sends (Generate buttons).
+  // If sendMessageToChat never resolves — e.g. the POST hangs because the
+  // browser is still holding an open SSE connection to the same origin and
+  // Chrome's per-host connection cap starves the request — the click would
+  // otherwise look like a total no-op: no chat activity, no toast, spinner
+  // forever. Surface exactly what happened instead of staying silent.
+  function watchSendToChat(promise, section) {
+    const label = section ? ` [${section}]` : '';
+    const timer = setTimeout(() => {
+      addToast($t('app.chat.sendPending') + label, 'info');
+    }, 8000);
+    promise
+      .catch((e) => {
+        addToast(($t('app.chat.sendFailed') || 'Chat send failed') + label + ': ' + (e?.message || String(e)), 'error');
+      })
+      .finally(() => clearTimeout(timer));
+    return promise;
   }
 
   async function backToProjects() {

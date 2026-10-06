@@ -97,15 +97,26 @@
 
   onMount(async () => {
     try {
-      chatSessions.set(await api('GET', '/api/chat/sessions'));
+      const idx = await api('GET', '/api/chat/sessions');
+      chatSessions.set(idx);
       if (!$currentChatSession) {
-        if (sessions.length > 0) {
-          await selectSession(sessions[0].id);
+        // Robust session pick: the index shape has varied across versions
+        // ({sessions:[...]}, {items:[...]} or a bare array). Reading only one
+        // shape used to leave $currentChatSession null with no visible error,
+        // so programmatic sends (Generate buttons) silently did nothing.
+        const list = Array.isArray(idx?.sessions) ? idx.sessions
+          : Array.isArray(idx?.items) ? idx.items
+          : Array.isArray(idx) ? idx : [];
+        if (list.length > 0) {
+          await selectSession(list[0].id);
         } else {
           await createSession();
         }
       }
-    } catch (e) {}
+      if (!$currentChatSession) addToast('Chat assistant could not open a session', 'error');
+    } catch (e) {
+      addToast('Chat assistant failed to load: ' + (e?.message || e), 'error');
+    }
   });
 
   function handleScroll() {
@@ -140,17 +151,50 @@
 
   chatTurnEnd.subscribe(() => settleChat());
 
-  export async function sendMessageToChat(text) {
+  // Programmatic sends used by the Generate buttons: resolve as soon as the
+  // POST is ACCEPTED (the message appears in the panel and the agent turn
+  // starts server-side). Do NOT await the settle/chatTurnEnd promise here —
+  // that waits for task_end SSE, which may never arrive if the browser's SSE
+  // stream was opened before this session's task started or got starved; the
+  // caller then hung behind a 180 s timeout and looked like a dead button.
+  // Manual sends keep waiting for the full turn via their own path.
+  export async function sendMessageToChat(text, opts = {}) {
+    console.log('[chat] sendMessageToChat', text?.slice(0, 60), 'force=', !!opts.force);
+    if (!text || !String(text).trim()) throw new Error('Empty chat message');
+    // Wait until the session bootstrap (onMount) has settled: on a cold load
+    // $currentChatSession is still null for a moment and createSession() here
+    // used to race the bootstrap, leaving the message unsent with no feedback.
+    if (!$currentChatSession) {
+      const deadline = Date.now() + 5000;
+      while (!$currentChatSession && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
     if (!$currentChatSession) {
       await createSession();
     }
-    chatInput = text;
-    const sent = await sendMessage();
-    if (!sent) return false;
-    await new Promise((resolve) => {
-      pendingChatResolve = resolve;
-      setTimeout(() => { if (pendingChatResolve === resolve) settleChat(); }, 180000);
-    });
+    if (!$currentChatSession) throw new Error('No active chat session');
+    // The message text lives in the shared input; postChatMessage() reads it
+    // from there. Programmatic sends (Generate buttons) BYPASS the client-side
+    // $taskRunning guard entirely: a stale-true flag used to swallow every
+    // click as a silent no-op. The server is the authority and answers 409
+    // for a genuinely busy backend, which surfaces as an error toast.
+    chatInput = String(text);
+    const sent = opts.force ? await postChatMessage() : await sendMessage();
+    if (!sent) {
+      // postChatMessage returns false when the textarea was empty — impossible
+      // once chatInput is set above — or after it already toasted the real
+      // failure (needSession / POST error). Make sure the caller always sees
+      // a concrete reason instead of a silent no-op.
+      chatInput = '';
+      throw new Error('Chat message could not be sent');
+    }
+    if (opts.awaitTurn) {
+      await new Promise((resolve) => {
+        pendingChatResolve = resolve;
+        setTimeout(() => { if (pendingChatResolve === resolve) settleChat(); }, 180000);
+      });
+    }
     return true;
   }
 
@@ -188,8 +232,20 @@
 
   async function sendMessage() {
     if ($taskRunning) { addToast($t('chat.toast.taskRunning'), 'error'); return false; }
+    return postChatMessage();
+  }
+
+  // Same as sendMessage() but skips the client-side $taskRunning guard.
+  // Used by programmatic sends (Generate buttons): a stale flag must not
+  // swallow the request — the server is the authority and answers 409 for a
+  // genuinely busy backend, which surfaces as an error toast via postChatMessage.
+  async function sendMessageForce() {
+    return postChatMessage();
+  }
+
+  async function postChatMessage() {
     if (!$currentChatSession) { addToast($t('chat.toast.needSession'), 'error'); return false; }
-    const msg = chatInput.trim();
+    const msg = (chatInput || '').trim();
     if (!msg) return false;
     chatInput = '';
     if (inputEl) inputEl.style.height = 'auto';

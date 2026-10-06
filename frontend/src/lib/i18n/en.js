@@ -109,6 +109,8 @@ export default {
   'app.uiLang.label': 'UI language',
   'app.uiLang.zh': 'ZH',
   'app.uiLang.en': 'EN',
+  'app.chat.sendPending': 'Sending request to the chat assistant… (taking longer than expected)',
+  'app.chat.sendFailed': 'Chat send failed',
 
   // Navigation
   'nav.config': 'Config',
@@ -534,6 +536,7 @@ export default {
   'config.generating': 'Generating...',
   'config.generate.done': 'Generated successfully',
   'config.generate.started': 'Generation started; see the task progress indicator',
+  'config.generate.chat.dispatched': 'Sending "{section}" to the chat assistant…',
   'config.generate.chat.style': '[generate-section:style] Please generate the writing style & POV for this novel based on all Novel parameters, and save them into the config.',
   'config.generate.chat.characters': '[generate-section:characters] Please generate the characters for this novel based on all Novel parameters (including the story idea), and save them.',
   'config.generate.chat.organizations': '[generate-section:organizations] Please generate the organizations for this novel based on all Novel parameters (including the story idea), and save them.',

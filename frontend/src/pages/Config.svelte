@@ -429,10 +429,16 @@ novelParamsTick++;
 
   function startGenPolling() {
     if (genPollTimer) return;
+    // Safety net: the poller must never run forever. If /api/status keeps
+    // reporting a running task way past any realistic generation (or the
+    // endpoint errors out repeatedly), stop watching after 10 minutes and
+    // release the busy flags so the Generate buttons don't stay deadlocked
+    // until an F5. The server-side task itself is unaffected.
+    const startedAt = Date.now();
     genPollTimer = setInterval(async () => {
       let st = null;
       try { st = await api('GET', '/api/status').catch(() => null); } catch (e) {}
-      if (st?.is_task_running) return; // still generating
+      if (st?.is_task_running && Date.now() - startedAt < 600000) return; // still generating
       clearInterval(genPollTimer);
       genPollTimer = null;
       const finished = Object.keys(sharedGenBusy);
@@ -631,13 +637,16 @@ novelParamsTick++;
     }
   }
   async function generateSection(section, extra = {}, undoKey = section) {
+    // DEBUG: temporary breadcrumb so a dead button is obvious even when the
+    // bundle on disk is stale or an early guard below returns silently.
+    console.log('[generate] clicked', section);
     // Only block when *this* section already has a generation in flight. We
     // never consult the global $taskRunning store here: a stale-true flag
     // (SSE having missed a task_end, or a task started from another page)
     // used to make every Generate click a silent no-op — no fetch at all,
     // nothing in the Network tab. Server-side conflicts surface as a 409
     // toast from startGeneration() instead.
-    if (genBusy[section] || sharedGenBusy[section]) return;
+    if (genBusy[section] || sharedGenBusy[section]) { console.log('[generate] blocked by busy flag', section); return; }
     // Snapshot what this generation may touch, so the user can undo it.
     if (section === 'characters') captureSnapshot(undoKey, { type: 'all', entityType: 'character' });
     else if (section === 'organizations') captureSnapshot(undoKey, { type: 'all', entityType: 'organization' });
@@ -669,18 +678,28 @@ novelParamsTick++;
       audience_profile: $t('config.generate.chat.audience_profile'),
     };
     const msg = chatMsgs[section];
+    console.log('[generate] dispatching via chat?', section, 'msg found:', !!msg);
     if (msg) {
       genBusy = { ...genBusy, [section]: true };
       sharedGenBusy[section] = true;
+      // Immediate feedback: the busy flag alone is easy to miss on a small
+      // button, and previously every failure below was silent.
+      addToast($t('config.generate.chat.dispatched', { section }), 'info');
       try {
+        // sendToChat resolves as soon as the POST is accepted (message visible
+        // in the panel, agent turn running server-side). No watchdog needed:
+        // sendMessageToChat now returns at accept time, so failures are
+        // always immediate throws instead of 30 s silent hangs.
         await sendToChat(msg);
-        // The agent's generate_section tool kicks off the same background
+        // The agent's generate_section tool kicked off the same background
         // task the HTTP buttons used to start directly; poll its progress so
         // the busy flag clears and results refresh when it finishes.
         startGenPolling();
       } catch (e) {
+        console.log('[generate] send failed', e?.message || String(e));
         delete sharedGenBusy[section];
         genBusy = { ...genBusy, [section]: false };
+        if (!Object.values(sharedGenBusy).some(Boolean)) taskRunning.set(false);
         addToast(e?.message || String(e), 'error');
       }
       return;
@@ -691,22 +710,28 @@ novelParamsTick++;
     genUndo = { ...genUndo, [key]: undefined };
     delete sharedGenUndo[key];
   }
+  // NOTE: this project uses Svelte 4, where the event directive is `on:click`.
+  // A plain `onclick` property passed through a spread ({...props}) or written
+  // literally on an element is treated as a *static attribute* in Svelte 4 and
+  // is NEVER wired as an event listener — that is why every Generate button
+  // was a dead no-op (nothing in DevTools Network, no toast). The helpers
+  // below now only return visual props; each <button> binds on:click directly.
   function genBtnProps(section) {
     return {
       class: 'btn btn-accent btn-xs',
       disabled: !!genBusy[section],
       title: genBusy[section] ? '' : (genLastError || $t('common.generate')),
-      onclick: (e) => { e.stopPropagation(); generateSection(section); },
     };
   }
+  const genClick = (section) => (e) => { e.stopPropagation(); generateSection(section); };
   function undoBtnProps(key) {
     return {
       class: 'btn btn-ghost btn-xs border border-base-content/25',
       disabled: !$taskRunning && !genUndo[key],
       title: $t('config.generate.undoHint'),
-      onclick: (e) => { e.stopPropagation(); undoGenerate(key); },
     };
   }
+  const undoClick = (key) => (e) => { e.stopPropagation(); undoGenerate(key); };
 
   $: resolvedChatURL = resolveChatCompletionsURL(localApiCfg.base_url, !!localApiCfg.url_strict);
 
@@ -939,8 +964,12 @@ novelParamsTick++;
   async function submitCharacters() {
     if (chars.length === 0) { addToast($t('config.char.noneToSubmit'), 'error'); return; }
     const lines = chars.map(c => `- ${c.name}${c.age ? ', ' + c.age : ''}${c.personality ? ', ' + c.personality : ''}`).join('\n');
-    await sendToChat($t('config.char.submitMsg', { n: chars.length, lines }));
-    addToast($t('config.char.submitted'), 'success');
+    // sendToChat throws when the panel is not ready or the POST fails: show it
+    // instead of crashing the handler and silently doing nothing.
+    try {
+      await sendToChat($t('config.char.submitMsg', { n: chars.length, lines }));
+      addToast($t('config.char.submitted'), 'success');
+    } catch (e) { addToast(e?.message || String(e), 'error'); }
   }
 
   let wvFormSnapshot = '';
@@ -1016,7 +1045,6 @@ novelParamsTick++;
     return {
       class: 'btn btn-accent btn-xs',
       disabled: !!genBusy['worldview'],
-      onclick: (e) => { e.stopPropagation(); generateWorldviewEntry(); },
     };
   }
 
@@ -1033,8 +1061,11 @@ novelParamsTick++;
   async function submitWorldview() {
     if (allWvs.length === 0) { addToast($t('config.wv.noneToSubmit'), 'error'); return; }
     const lines = allWvs.map(w => `- [${catLabels[w.category] || w.category}] ${w.name}: ${w.description.slice(0, 50)}`).join('\n');
-    await sendToChat($t('config.wv.submitMsg', { n: allWvs.length, lines }));
-    addToast($t('config.wv.submitted'), 'success');
+    // Same as submitCharacters(): surface sendToChat failures as a toast.
+    try {
+      await sendToChat($t('config.wv.submitMsg', { n: allWvs.length, lines }));
+      addToast($t('config.wv.submitted'), 'success');
+    } catch (e) { addToast(e?.message || String(e), 'error'); }
   }
 
   // —— 组织 CRUD ——
@@ -1134,21 +1165,18 @@ novelParamsTick++;
     return {
       class: 'btn btn-accent btn-xs',
       disabled: !!genBusy['characters'],
-      onclick: (e) => { e.stopPropagation(); generateCharacterEntry(); },
     };
   }
   function orgGenBtnProps() {
     return {
       class: 'btn btn-accent btn-xs',
       disabled: !!genBusy['organizations'],
-      onclick: (e) => { e.stopPropagation(); generateOrganizationEntry(); },
     };
   }
   function relGenBtnProps() {
     return {
       class: 'btn btn-accent btn-xs',
       disabled: !!genBusy['relations'],
-      onclick: (e) => { e.stopPropagation(); generateRelationEntry(); },
     };
   }
 
@@ -1513,12 +1541,12 @@ novelParamsTick++;
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.theme.title')}</h3>
         <div class="flex items-center gap-1.5">
-          <button {...genBtnProps('motif')}>
+          <button {...genBtnProps('motif')} on:click={genClick('motif')}>
             {#if genBusy['motif']}
               <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
             {:else}✨ {$t('common.generate')}{/if}
           </button>
-          <button {...undoBtnProps('motif')}>↩ {$t('common.undo')}</button>
+          <button {...undoBtnProps('motif')} on:click={undoClick('motif')}>↩ {$t('common.undo')}</button>
         </div>
       </div>
       <div class="space-y-1.5">
@@ -1536,12 +1564,12 @@ novelParamsTick++;
         <span class="text-xs text-base-content/65">{$t('config.audience.profileTitle')}</span>
         <div class="flex items-center gap-1.5">
           <button class="btn btn-accent btn-xs" disabled={!!genBusy['audience_profile']}
-            onclick={(e) => { e.stopPropagation(); generateSection('audience_profile'); }}>
+            on:click={(e) => { e.stopPropagation(); generateSection('audience_profile'); }}>
             {#if genBusy['audience_profile']}
               <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
             {:else}✨ {$t('common.generate')}{/if}
           </button>
-          <button {...undoBtnProps('audience_profile')}>↩ {$t('common.undo')}</button>
+          <button {...undoBtnProps('audience_profile')} on:click={undoClick('audience_profile')}>↩ {$t('common.undo')}</button>
         </div>
       </div>
       <textarea class="textarea textarea-sm w-full h-16 text-xs" bind:value={localStoryCfg.audience_profile}
@@ -1564,7 +1592,7 @@ novelParamsTick++;
       <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
       <div class="text-xs opacity-60">{$t('config.story_idea.hint')}</div>
       <div class="flex justify-end gap-1.5">
-        <button {...genBtnProps('story_idea')}>
+        <button {...genBtnProps('story_idea')} on:click={genClick('story_idea')}>
           {#if genBusy['story_idea']}
             <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
           {:else}✨ {$t('common.generate')}{/if}
@@ -1589,7 +1617,7 @@ novelParamsTick++;
         <textarea class="textarea w-full h-20 text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}></textarea>
       </div>
       <div class="flex justify-end gap-1.5">
-        <button {...genBtnProps('style')}>
+        <button {...genBtnProps('style')} on:click={genClick('style')}>
           {#if genBusy['style']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
         </button>
         <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
@@ -1608,7 +1636,7 @@ novelParamsTick++;
       <div class="flex justify-between items-center">
         <div class="flex items-center gap-2">
           <h3 class="card-title text-base">{$t('config.char.title')} <span class="text-xs font-normal text-base-content/65">({chars.length})</span></h3>
-          <button {...genBtnProps('characters')}>
+          <button {...genBtnProps('characters')} on:click={genClick('characters')}>
             {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
           </button>
         </div>
@@ -1674,10 +1702,10 @@ novelParamsTick++;
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveCharacter} disabled={$taskRunning}>{$t('config.char.save')}</button>
-              <button {...charGenBtnProps()}>
+              <button {...charGenBtnProps()} on:click={() => generateCharacterEntry()}>
                 {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
               </button>
-              <button {...undoBtnProps('charform')}>↩ {$t('common.undo')}</button>
+              <button {...undoBtnProps('charform')} on:click={undoClick('charform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeCharForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -1701,7 +1729,7 @@ novelParamsTick++;
         <h3 class="card-title text-base">{$t('config.wv.title')} <span class="text-xs font-normal text-base-content/65">({filteredWvs.length})</span></h3>
         <div class="flex items-center gap-2">
           {#if localStoryCfg.locations_enabled}
-            <button {...genBtnProps('locations')} onclick={(e) => { e.stopPropagation(); generateSection('locations'); }}>
+            <button {...genBtnProps('locations')} on:click={genClick('locations')}>
               {#if genBusy['locations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
             </button>
           {/if}
@@ -1766,8 +1794,8 @@ novelParamsTick++;
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveWorldview} disabled={$taskRunning}>{$t('common.save')}</button>
-              <button {...wvGenBtnProps()}>✨ {$t('config.generate.worldview')}</button>
-              <button {...undoBtnProps('wvform')}>↩ {$t('common.undo')}</button>
+              <button {...wvGenBtnProps()} on:click={() => generateWorldviewEntry()}>✨ {$t('config.generate.worldview')}</button>
+              <button {...undoBtnProps('wvform')} on:click={undoClick('wvform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeWvForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -1790,7 +1818,7 @@ novelParamsTick++;
       <div class="flex justify-between items-center">
         <div class="flex items-center gap-2">
           <h3 class="card-title text-base">{$t('config.org.title')} <span class="text-xs font-normal text-base-content/65">({orgs.length})</span></h3>
-          <button {...genBtnProps('organizations')}>
+          <button {...genBtnProps('organizations')} on:click={genClick('organizations')}>
             {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
           </button>
         </div>
@@ -1850,10 +1878,10 @@ novelParamsTick++;
             {/if}
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveOrganization} disabled={$taskRunning}>{$t('config.org.save')}</button>
-              <button {...orgGenBtnProps()}>
+              <button {...orgGenBtnProps()} on:click={() => generateOrganizationEntry()}>
                 {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
               </button>
-              <button {...undoBtnProps('orgform')}>↩ {$t('common.undo')}</button>
+              <button {...undoBtnProps('orgform')} on:click={undoClick('orgform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeOrgForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -1873,7 +1901,7 @@ novelParamsTick++;
       <div class="flex justify-between items-center">
         <div class="flex items-center gap-2">
           <h3 class="card-title text-base">{$t('config.rel.title')} <span class="text-xs font-normal text-base-content/65">({rels.length})</span></h3>
-          <button {...genBtnProps('relations')}>
+          <button {...genBtnProps('relations')} on:click={genClick('relations')}>
             {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
           </button>
         </div>
@@ -1931,10 +1959,10 @@ novelParamsTick++;
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveRelation} disabled={$taskRunning}>{$t('config.rel.save')}</button>
-              <button {...relGenBtnProps()}>
+              <button {...relGenBtnProps()} on:click={() => generateRelationEntry()}>
                 {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
               </button>
-              <button {...undoBtnProps('relform')}>↩ {$t('common.undo')}</button>
+              <button {...undoBtnProps('relform')} on:click={undoClick('relform')}>↩ {$t('common.undo')}</button>
               <button class="btn btn-ghost btn-xs" on:click={closeRelForm}>{$t('common.cancel')}</button>
             </div>
           </div>
