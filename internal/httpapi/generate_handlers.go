@@ -159,6 +159,99 @@ func (h *Handlers) validateSectionGen(req SectionGenRequest) error {
 	return err
 }
 
+// StartDetachedSectionGenerate runs a section generation as an independent
+// background task, fully detached from any chat turn. It is used by the
+// [generate-section:X] fast path in PostChatMessage: the click must always
+// trigger the generation even if the model endpoint is down or slow. The
+// caller must already hold the task lock (chat turn); this registers the
+// generation as child work so the lock stays alive until it finishes.
+//
+// Unlike StartSectionGenerateAsync it does NOT reuse the chat turn's context:
+// when the turn ends, endTask() cancels that context, which would kill the
+// still-running generation. Here we build our own cancellable context and
+// wire it into the handler state (under taskMu, guarded by generationID) so
+// StopTask can still cancel it while it runs.
+func (h *Handlers) StartDetachedSectionGenerate(req SectionGenRequest) error {
+	if err := h.validateSectionGen(req); err != nil {
+		return err
+	}
+	if !h.startChildWork() {
+		return errors.New("task_running_wait")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.taskMu.Lock()
+	genID := h.generationID
+	h.taskCtx = ctx
+	h.taskCancel = cancel
+	h.taskMu.Unlock()
+	go func() {
+		defer cancel()
+		defer h.endTask()
+		err := h.runDetachedSectionGenerate(req, ctx)
+		if err != nil && ctx.Err() != nil {
+			h.taskMu.Lock()
+			stale := genID != h.generationID
+			h.taskMu.Unlock()
+			if stale {
+				// Task lock was released underneath us; treat as cancelled,
+				// not as a generation failure.
+				return
+			}
+		}
+		_ = err
+	}()
+	return nil
+}
+
+// runDetachedSectionGenerate mirrors runSectionGenerate but executes the
+// generation with its own explicit context instead of the shared task ctx,
+// so it survives the end of the chat turn that started it. The switch below
+// must stay in sync with runSectionGenerate (same sections, same helpers).
+func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context.Context) error {
+	section := req.Section
+	storyCfg, err := h.normalizeSectionGen(req)
+	taskName := "section_generate_" + section
+	h.logger.TaskStart(taskName)
+	if err == nil {
+		h.logger.InfoKey("log.section_generating", sectionLabel(section, h.cfg.Language))
+		switch section {
+		case "style":
+			err = h.generateStyle(ctx, &storyCfg)
+		case "characters":
+			err = h.generateCharactersEntryOrBatch(ctx, &storyCfg, req.CharacterID)
+		case "organizations":
+			err = h.generateOrganizationsEntryOrBatch(ctx, &storyCfg, req.OrgID)
+		case "relations":
+			err = h.generateRelations(ctx, &storyCfg, req.SourceID, req.TargetID)
+		case "locations":
+			err = h.generateLocations(ctx, &storyCfg)
+		case "worldview":
+			err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
+		case "motif":
+			err = h.generateMotif(ctx, &storyCfg)
+		case "story_idea":
+			err = h.generateStoryIdeaFromParams(ctx, &storyCfg)
+		case "audience_profile":
+			err = h.generateAudienceProfile(ctx, &storyCfg)
+		default:
+			err = fmt.Errorf("unknown_section: %s", section)
+		}
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			h.logger.WarnKey("log.section_generate_cancelled")
+		} else {
+			h.logger.ErrorKey("log.section_generate_failed", err)
+		}
+		h.logger.TaskEnd(taskName, false)
+		return err
+	}
+	h.logger.SuccessKey("log.section_generate_done", sectionLabel(section, h.cfg.Language))
+	h.logger.TaskEnd(taskName, true)
+	h.broadcastProgress()
+	return nil
+}
+
 // runSectionGenerate executes one section generation as a background task and
 // releases the task lock when done (it is always started via tryStartTask or
 // startChildWork, which take the lock). Returns the generation error.

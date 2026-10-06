@@ -110,6 +110,8 @@ export default {
   'app.uiLang.label': '界面语言',
   'app.uiLang.zh': '中',
   'app.uiLang.en': 'EN',
+  'app.chat.sendPending': '正在向聊天助手发送请求…（耗时超出预期）',
+  'app.chat.sendFailed': '聊天消息发送失败',
 
   // Navigation
   'nav.config': '配置',
@@ -538,6 +540,7 @@ export default {
   'config.generating': '生成中...',
   'config.generate.done': '生成完成',
   'config.generate.started': '生成任务已启动，请查看顶部进度指示',
+  'config.generate.chat.dispatched': '正在向聊天助手发送「{section}」生成请求…',
   'config.generate.chat.style': '[generate-section:style] 请根据全部小说参数生成本书的写作风格与叙事视角，并保存到配置中。',
   'config.generate.chat.characters': '[generate-section:characters] 请根据全部小说参数（含故事构想）生成本书的角色设定，并保存。',
   'config.generate.chat.organizations': '[generate-section:organizations] 请根据全部小说参数（含故事构想）生成本书的组织设定，并保存。',
