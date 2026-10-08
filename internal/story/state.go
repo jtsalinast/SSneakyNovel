@@ -123,6 +123,30 @@ type Progress struct {
 	LongTermDirection           string                   `json:"long_term_direction,omitempty"`
 	LatestPlanningReview        *PlanningReview          `json:"latest_planning_review,omitempty"`
 	NarrativeCheckpoints        []NarrativeCheckpoint    `json:"narrative_checkpoints,omitempty"`
+	PrePlanning                 *PrePlanning             `json:"pre_planning,omitempty"`
+}
+
+// PrePlanning is the book-level plan generated before any outline batch: total
+// chapter recommendation, long-term direction and one card per act, derived
+// from the configured Story structure (three-act, hero's journey, ...). Each
+// act carries a suggested chapter count for its batch and a ready-to-use
+// batch synopsis so the author can start generating outlines directly.
+type PrePlanning struct {
+	GeneratedAt       string           `json:"generated_at,omitempty"`
+	BasedOnStructure  string           `json:"based_on_structure,omitempty"`
+	TotalChapters     int              `json:"total_chapters,omitempty"`
+	LongTermDirection string           `json:"long_term_direction,omitempty"`
+	Acts              []PrePlanningAct `json:"acts,omitempty"`
+}
+
+// PrePlanningAct is one act card of the pre-planning result.
+type PrePlanningAct struct {
+	Name              string `json:"name"`
+	Summary           string `json:"summary,omitempty"`
+	SuggestedChapters int    `json:"suggested_chapters,omitempty"`
+	StartCh           int    `json:"start_ch,omitempty"`
+	EndCh             int    `json:"end_ch,omitempty"`
+	BatchSynopsis     string `json:"batch_synopsis,omitempty"`
 }
 
 const (

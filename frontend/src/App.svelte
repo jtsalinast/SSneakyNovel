@@ -311,7 +311,7 @@
         {:else if $currentPage === 'lore'}
           <Config tab="lore" {sendToChat} />
         {:else if $currentPage === 'outline'}
-          <Outline />
+          <Outline {sendToChat} />
         {:else if $currentPage === 'writing'}
           <Writing />
         {:else if $currentPage === 'proofread'}

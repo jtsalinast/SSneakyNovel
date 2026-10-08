@@ -2678,21 +2678,40 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		// the normal agent loop below then runs as the summary turn.
 		fastForced := agent.ParseGenerateSectionTag(req.Content)
 		fastReply := ""
+		// A chat turn ALWAYS holds the task lock here, so a "task_running_wait"
+		// from the detached runners is not a real user-facing conflict: it means
+		// startChildWork() lost a race against a sibling task that had just
+		// finished. Retry once after a short grace period instead of dropping the
+		// generation silently (that silent drop was why Pre-planning's Generate
+		// button showed a spinner but produced no chat activity at all). Any
+		// other error surfaces in the chat as before.
 		if fastForced != nil {
 			sectionName := agent.ForcedSectionName(fastForced)
 			tcJSON, _ := json.Marshal(fastForced)
 			h.logger.ToolCallStart(sessionID, fastForced.Name, string(tcJSON))
 			result := fmt.Sprintf("generate_section(%s): started", sectionName)
 			var genErr error
-			if h.cfg == nil {
-				genErr = errors.New("config_not_loaded")
-			} else if err := h.StartDetachedSectionGenerate(agent.SectionGenRequest{
-				Section:   sectionName,
-				StoryIdea: strings.TrimSpace(h.cfg.Story.StoryIdea),
-				Story:     &h.cfg.Story,
-			}); err != nil {
-				genErr = err
-				result = fmt.Sprintf("generate_section(%s): failed: %v", sectionName, err)
+			startOnce := func() error {
+				if h.cfg == nil {
+					return errors.New("config_not_loaded")
+				}
+				if sectionName == "pre_planning" {
+					// Book-level plan: dedicated detached runner (writes Progress, not config).
+					return h.StartDetachedPrePlanGenerate()
+				}
+				return h.StartDetachedSectionGenerate(agent.SectionGenRequest{
+					Section:   sectionName,
+					StoryIdea: strings.TrimSpace(h.cfg.Story.StoryIdea),
+					Story:     &h.cfg.Story,
+				})
+			}
+			genErr = startOnce()
+			for attempt := 0; genErr != nil && strings.Contains(genErr.Error(), "task_running_wait") && attempt < 3; attempt++ {
+				time.Sleep(400 * time.Millisecond)
+				genErr = startOnce()
+			}
+			if genErr != nil {
+				result = fmt.Sprintf("generate_section(%s): failed: %v", sectionName, genErr)
 			}
 			h.logger.ToolCallEnd(sessionID, fastForced.Name, result, "", nil)
 			fastReply = i18n.T(i18n.FromRequest(r), "agent.section_generate_started", sectionName)
@@ -2776,6 +2795,9 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 			// agent loop already holds the task, so register as child work).
 			StartSectionGenerate: func(req agent.SectionGenRequest) error {
 				return h.StartSectionGenerateAsync(req, false)
+			},
+			StartPrePlanGenerate: func() error {
+				return h.StartDetachedPrePlanGenerate()
 			},
 			StartAsync: func(taskName string, fn func(goCtx context.Context) error) {
 				// 子任务必须计入 activeWork，否则 Agent 主循环结束后锁被释放，

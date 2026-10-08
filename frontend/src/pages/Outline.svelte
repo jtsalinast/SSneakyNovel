@@ -5,6 +5,11 @@
   import { onMount, tick } from 'svelte';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
 
+  // Passed down from App.svelte: the same chat dispatch the config-page
+  // Generate buttons use, so Pre-planning's button runs through the agent's
+  // generate_section tool ([generate-section:pre_planning] fast path).
+  export let sendToChat = async () => {};
+
   const OUTLINE_FOCUS_KEY = 'showmethestory.outlineFocusChapter';
 
   function isOutlineEditable(status) {
@@ -113,7 +118,7 @@
   }
 
 
-  onMount(refreshImportStatus);
+  onMount(() => { refreshImportStatus(); loadPrePlan(); });
   $: if (!$taskRunning) refreshImportStatus();
 
   let outlineFocusTried = false;
@@ -270,9 +275,165 @@
       addToast($t("outline.dynamic.reviewStarted"), "info");
     } catch (e) { addToast(e.message, "error"); }
   }
+
+  // —— Pre-planning (book-level plan above the batch cards) ——
+  let prePlan = null;
+  let prePlanLoaded = false;
+  let prePlanBusy = false;
+
+  async function loadPrePlan() {
+    try {
+      prePlan = await api('GET', '/api/outline/preplan');
+    } catch { prePlan = null; }
+    prePlanLoaded = true;
+  }
+  $: if (p && !prePlanLoaded) { prePlan = p.pre_planning || null; prePlanLoaded = true; }
+  $: if (p?.pre_planning) { prePlan = p.pre_planning; }
+
+  // Same pattern as the config-page Generate buttons: the message carries the
+  // [generate-section:pre_planning] tag, which the backend fast path executes
+  // deterministically (StartDetachedPrePlanGenerate) before touching the LLM,
+  // and the agent's generate_section tool also accepts the key.
+
+  // Module-level busy flag (Config.svelte's sharedGenBusy pattern): Svelte
+  // destroys and recreates this page when switching tabs, so a component-local
+  // flag lost the "generation running" state mid-flight.
+  let sharedPrePlanBusy = false;
+  let prePlanPollTimer = null;
+
+  // Same flow as Config.svelte's generateSection(): the message carries the
+  // [generate-section:pre_planning] tag, App.svelte's sendToChat posts it to
+  // the chat panel (so the user sees the instruction, the agent's tool call
+  // and all live logs/token activity in the panel), and the backend fast path
+  // starts the detached generation before the summary LLM turn runs.
+  async function generatePrePlan() {
+    console.log('[generate] clicked', 'pre_planning');
+    if (sharedPrePlanBusy) { console.log('[generate] blocked by busy flag', 'pre_planning'); return; }
+    sharedPrePlanBusy = true;
+    prePlanBusy = true;
+
+    const msg = $t('config.generate.chat.pre_planning');
+    // Immediate feedback, same as the config-page buttons' dispatched toast.
+    addToast($t('config.generate.chat.dispatched', { section: 'pre_planning' }), 'info');
+    try {
+      // sendToChat resolves as soon as the POST is accepted; the backend
+      // fast path ([generate-section:pre_planning]) starts the detached
+      // generation before the LLM turn even runs.
+      await sendToChat(msg);
+      // Mirror the busy state across pages / SSE reconnects.
+      taskRunning.set(true);
+      startPrePlanPolling();
+    } catch (e) {
+      console.log('[preplan] chat dispatch failed:', e?.message || String(e));
+      clearPrePlanBusy();
+      addToast(e?.message || String(e), 'error');
+    }
+  }
+
+  function clearPrePlanBusy() {
+    sharedPrePlanBusy = false;
+    prePlanBusy = false;
+    if (prePlanPollTimer) { clearInterval(prePlanPollTimer); prePlanPollTimer = null; }
+  }
+
+  // Same /api/status poller Config.svelte uses after a chat-dispatched
+  // generation: when the server-side task ends, refresh the plan and release
+  // the busy flags (with a 10-minute cap so the buttons can't deadlock).
+  function startPrePlanPolling() {
+    if (prePlanPollTimer) return;
+    const startedAt = Date.now();
+    prePlanPollTimer = setInterval(async () => {
+      let st = null;
+      try { st = await api('GET', '/api/status').catch(() => null); } catch (e) {}
+      if (st?.is_task_running && Date.now() - startedAt < 600000) return; // still generating
+      clearPrePlanBusy();
+      taskRunning.set(false);
+      prePlanLoaded = false;
+      await loadPrePlan();
+      try { progress.set(await api('GET', '/api/progress')); } catch (e) {}
+      addToast($t('config.generate.done'), 'success');
+    }, 1200);
+  }
+
+  async function deletePrePlan() {
+    showConfirm($t('outline.preplan.deleteConfirm'), async () => {
+      try {
+        await api('DELETE', '/api/outline/preplan');
+        prePlan = null;
+        progress.set(await api('GET', '/api/progress'));
+        addToast($t('outline.preplan.deleted'), 'success');
+      } catch (e) { addToast(e.message, 'error'); }
+    });
+  }
+
+  // Fill the batch-planning card with one act's suggestion and scroll to it.
+  function usePrePlanAct(act) {
+    continuationCount = Math.min(36, Math.max(1, act.suggested_chapters || 5));
+    planningRequirements = act.batch_synopsis || '';
+    if (prePlan?.long_term_direction && !longTermDirection.trim()) {
+      longTermDirection = prePlan.long_term_direction;
+    }
+    replacingBatch = null;
+    document.getElementById('batch-planning')?.scrollIntoView({ behavior: 'smooth' });
+  }
 </script>
 
 <div class="space-y-3">
+  <div id="pre-planning" class="card bg-base-200">
+    <div class="card-body p-4 gap-3">
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <h3 class="card-title text-base">{$t('outline.preplan.title')}</h3>
+        <div class="flex gap-2">
+          {#if prePlan}
+            <button class="btn btn-sm btn-ghost" on:click={deletePrePlan}>{$t('outline.preplan.clear')}</button>
+          {/if}
+          <button class="btn btn-sm btn-primary" on:click={generatePrePlan} disabled={prePlanBusy}>
+            {#if prePlanBusy}<span class="loading loading-spinner loading-xs"></span>{/if}
+            {prePlan ? $t('outline.preplan.regenerate') : $t('outline.preplan.generate')}
+          </button>
+        </div>
+      </div>
+      <p class="text-xs text-base-content/70">{$t('outline.preplan.help')}</p>
+      {#if !prePlan}
+        <div class="text-sm text-base-content/60 border border-dashed rounded-lg p-4 text-center">{$t('outline.preplan.empty')}</div>
+      {:else}
+        <div class="flex flex-wrap gap-4 text-sm">
+          <div><span class="font-semibold">{$t('outline.preplan.total')}:</span> {prePlan.total_chapters}</div>
+          {#if prePlan.based_on_structure}<div><span class="font-semibold">{$t('outline.preplan.structure')}:</span> {prePlan.based_on_structure}</div>{/if}
+        </div>
+        {#if prePlan.long_term_direction}
+          <div>
+            <div class="text-sm font-semibold mb-1">{$t('outline.preplan.direction')}</div>
+            <div class="whitespace-pre-wrap text-sm rounded-lg bg-base-100 border p-3">{prePlan.long_term_direction}</div>
+          </div>
+        {/if}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {#each prePlan.acts || [] as act, i}
+            <div class="card bg-base-100 border shadow-sm">
+              <div class="card-body p-3 gap-2">
+                <div class="flex items-start justify-between gap-2">
+                  <h4 class="font-semibold text-sm">{$t('outline.preplan.act', { n: i + 1 })}: {act.name}</h4>
+                  <button class="btn btn-xs btn-primary shrink-0" on:click={() => usePrePlanAct(act)}>{$t('outline.preplan.use')}</button>
+                </div>
+                {#if act.summary}<p class="text-xs text-base-content/80">{act.summary}</p>{/if}
+                <div class="text-xs">
+                  <span class="badge badge-outline badge-sm">{$t('outline.preplan.chapters', { n: act.suggested_chapters })}</span>
+                  {#if act.start_ch}<span class="badge badge-ghost badge-sm ml-1">{$t('outline.preplan.range', { start: act.start_ch, end: act.end_ch })}</span>{/if}
+                </div>
+                {#if act.batch_synopsis}
+                  <details class="text-xs">
+                    <summary class="cursor-pointer text-base-content/70">{$t('outline.preplan.synopsis')}</summary>
+                    <p class="whitespace-pre-wrap mt-1 text-base-content/80">{act.batch_synopsis}</p>
+                  </details>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </div>
+
   <div id="batch-planning" class="card bg-base-200">
     <div class="card-body p-4 gap-3">
       <h3 class="card-title text-base">{$t(batchActionKey)}</h3>
