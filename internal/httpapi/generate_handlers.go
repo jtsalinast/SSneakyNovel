@@ -28,7 +28,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	section := r.PathValue("section")
 	switch section {
-	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile":
+	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces":
 	default:
 		h.writeErrorReq(w, r, http.StatusBadRequest, "unknown_section", section)
 		return
@@ -146,7 +146,11 @@ func (h *Handlers) normalizeSectionGen(req SectionGenRequest) (config.StoryConfi
 		storyIdea = strings.TrimSpace(h.cfg.Story.StoryIdea)
 	}
 	storyCfg.StoryIdea = storyIdea
-	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" {
+	// Theme & Motif sections (motif, inspirational pieces) and the generators
+	// that *produce* a story idea must never require one: they are seeded from
+	// the other novel parameters already entered. Everything else needs the
+	// story idea as its generation seed.
+	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" {
 		return storyCfg, errors.New("story_idea_required")
 	}
 	return storyCfg, nil
@@ -233,6 +237,8 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 			err = h.generateStoryIdeaFromParams(ctx, &storyCfg)
 		case "audience_profile":
 			err = h.generateAudienceProfile(ctx, &storyCfg)
+		case "inspirational_pieces":
+			err = h.generateInspirationalPieces(ctx, &storyCfg)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -286,6 +292,8 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 			err = h.generateStoryIdeaFromParams(ctx, &storyCfg)
 		case "audience_profile":
 			err = h.generateAudienceProfile(ctx, &storyCfg)
+		case "inspirational_pieces":
+			err = h.generateInspirationalPieces(ctx, &storyCfg)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -348,6 +356,11 @@ func sectionLabel(section, lang string) string {
 			return "目标读者画像"
 		}
 		return "ideal reader profile"
+	case "inspirational_pieces":
+		if zh {
+			return "灵感作品"
+		}
+		return "inspirational pieces"
 	default:
 		if zh {
 			return "关系"
@@ -733,6 +746,64 @@ func (h *Handlers) generateAudienceProfile(ctx context.Context, sc *config.Story
 	newCfg := *h.cfg
 	newCfg.Story = *sc
 	newCfg.Story.AudienceProfile = profile
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
+}
+
+// —— inspirational_pieces: reference works that steer style/atmosphere (Theme & Motif block) ——
+
+// generateInspirationalPieces proposes a set of real books/films/games/anime
+// whose tone and craft fit the novel parameters already entered. Like motif
+// and audience_profile it does NOT require a story idea: it is seeded from the
+// other parameters. The result is stored in Story.InspirationalPieces and
+// injected into outline/writing/section prompts via NovelParametersBlock, so
+// it genuinely influences generation (as a craft reference, never copied).
+func (h *Handlers) generateInspirationalPieces(ctx context.Context, sc *config.StoryConfig) error {
+	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
+	prompt := storyParamsContext(sc, h.cfg.Language)
+	if zh {
+		prompt += "\n基于以上小说参数（类型、子类型、主题与母题、基调、冲突规模、世界残酷度、目标读者等；故事构想可有可无），为这部作品推荐 4-6 部真实存在的“灵感作品”（inspirational pieces）：小说、影视、游戏或动漫均可，须与作品的类型气质与叙事手法高度契合。每条一行，格式「《作品名》— 作者/出品方：借鉴点（风格/氛围/结构/技法，一句话）」。只推荐真实存在的作品，不要虚构；不要照搬情节，只作气质与技法参考。"
+	} else {
+		prompt += "\nBased on the novel parameters above (genre, subgenre, theme & motif, tone, conflict scale, world darkness, target audience, etc.; a story idea may be absent), recommend 4-6 real \"inspirational pieces\" for this work — novels, films, games or anime that match its genre temperament and narrative craft. One entry per line, formatted \"Title — author/studio: what to borrow (style/atmosphere/structure/technique, one phrase)\". Only recommend works that actually exist; they are craft references, never plot sources."
+	}
+	// Respect the pinned story output language (EN/ES) for this generated text.
+	switch lang := config.NormalizeOutputLanguage(sc.OutputLanguage); lang {
+	case "en":
+		prompt += " Write every entry in English."
+	case "es":
+		prompt += " Escribe cada entrada en español."
+	}
+	prompt += jsonRule(h.cfg.Language, `{"inspirational_pieces": ["...", "..."]}`)
+
+	var out struct {
+		Pieces []string `json:"inspirational_pieces"`
+	}
+	if err := h.llmJSON(ctx, prompt, &out); err != nil {
+		return err
+	}
+	var valid []string
+	for _, p := range out.Pieces {
+		if p = strings.TrimSpace(p); p != "" {
+			valid = append(valid, p)
+		}
+	}
+	if len(valid) == 0 {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	newCfg.Story.InspirationalPieces = strings.Join(valid, "\n")
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err

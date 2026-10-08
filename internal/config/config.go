@@ -39,6 +39,8 @@ type StoryConfig struct {
 	StoryLength           string `json:"story_length,omitempty"`           // 篇幅：short/novella/novel/epic，联动章节数与结构选项
 	Structure             string `json:"structure,omitempty"`              // 故事结构框架（3幕/英雄之旅等，随篇幅变化）
 	Motif                 string `json:"motif,omitempty"`                  // 文学母题：可随机生成，注入大纲/写作/生成 prompts
+	InspirationalPieces   string `json:"inspirational_pieces,omitempty"`   // 灵感作品（Inspirational pieces）：作为风格/氛围参考注入大纲、写作与区块生成 prompts；可由 LLM 根据已填参数生成，不依赖故事构想
+	OutputLanguage        string `json:"output_language,omitempty"`        // 生成内容语言（Story language）："en" / "es"；为空时跟随项目 Language。强制所有 AI 生成内容（大纲、正文、区块）使用该语言，避免生成中途换语言
 	StoryIdea             string `json:"story_idea,omitempty"`             // 故事构想（Story idea）：作为 AI 生成风格/角色/组织/关系的依据；旧配置中的 "brief" 键由 normalizeLegacyStoryKeys 迁移
 	ConflictScale         string `json:"conflict_scale,omitempty"`         // 冲突规模（借鉴 NovelWriter conflict_scales；"other" 时使用 ConflictOther）
 	ConflictOther         string `json:"conflict_other,omitempty"`         // 自定义冲突规模
@@ -82,6 +84,46 @@ func (s *StoryConfig) EffectiveMotif() string {
 		return m
 	}
 	return strings.TrimSpace(s.Theme)
+}
+
+// —— Story output language (EN / ES) —
+//
+// OutputLanguage lets the author pin the language of every AI-generated text
+// (story idea, sections, outline, prose). Valid values: "en", "es"; empty
+// means "follow the project Language" (zh/en), i.e. legacy behavior.
+
+// NormalizeOutputLanguage maps any accepted spelling to "en"/"es"; unknown or
+// empty values return "" (= follow the project language).
+func NormalizeOutputLanguage(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "en", "english", "inglés", "ingles":
+		return "en"
+	case "es", "spanish", "español", "espanol", "castellano":
+		return "es"
+	default:
+		return ""
+	}
+}
+
+// OutputLanguageName returns the display name for a story output language key.
+func OutputLanguageName(key string) string {
+	switch NormalizeOutputLanguage(key) {
+	case "en":
+		return "English"
+	case "es":
+		return "Español"
+	}
+	return ""
+}
+
+// EffectiveOutputLanguage resolves the story's pinned output language from a
+// full config: "en"/"es" when set; otherwise "" meaning the prompts should
+// keep following the project Language as before.
+func EffectiveOutputLanguage(cfg *Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return NormalizeOutputLanguage(cfg.Story.OutputLanguage)
 }
 
 // —— Novel parameters: length & structure options (borrowed from NovelWriter) —

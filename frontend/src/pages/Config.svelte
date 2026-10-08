@@ -59,7 +59,7 @@
   // what the user typed).
   let sharedStoryDraft = null;   // last localStoryCfg value
 
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
+  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
   // Preserve unsaved edits across workspace-tab switches (this component is
   // recreated on every tab change; without this the Genre field and friends
   // would silently reset to whatever was last saved on the server).
@@ -321,6 +321,16 @@ function addSetting(s) {
 const cur = (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
 if (!cur.includes(s)) localStoryCfg.specific_settings = [...cur, s].join('\n');
 }
+
+// —— Randomize (Story parameters) —
+// Fill the story-parameter fields with a coherent random combination. The
+// genre is picked FIRST because everything downstream depends on it: the
+// subgenre list comes from the chosen genre, and conflicts / protagonists /
+// tones / specific-setting suggestions come from the chosen subgenre (with a
+// genre-level fallback, mirroring the reactive option lists above).
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function maybePick(arr, p = 0.75) { return (arr && arr.length && Math.random() < p) ? pick(arr) : ''; }
+
 async function fetchNovelParams() {
 try {
 const p = await api('GET', '/api/novel-params');
@@ -334,6 +344,62 @@ if (Array.isArray(p.subgenre_presets)) SUBGENRE_PRESETS = p.subgenre_presets;
 novelParamsTick++;
 }
 } catch (e) {}
+}
+
+// —— Randomize (Story parameters) —
+// Fill the story-parameter fields with a coherent random combination. The
+// genre is picked FIRST because everything downstream depends on it: the
+// subgenre list comes from the chosen genre, and conflicts / protagonists /
+// tones / specific-setting suggestions come from the chosen subgenre (with a
+// genre-level fallback, mirroring the reactive option lists above).
+function randomizeStoryParams() {
+  // 1) Genre first — the subgenre options are derived from it.
+  const g = pick(GENRES);
+  selectedGenreKey = g.key;
+  subgenreManual = false;
+  localStoryCfg.type = g.label;
+  // 2) Then a subgenre *of that genre*, so the cascade stays consistent.
+  const sg = pick(g.subgenres);
+  localStoryCfg.subgenre = sg;
+  lastAutoSubgenre = sg;
+  // 3) Fields that depend on the chosen genre/subgenre.
+  const sd = SUBGENRE_DATA[sg] || null;
+  const conflicts = sd ? sd.conflicts : (GENRE_CONFLICTS[g.key] || []);
+  const protags = sd ? sd.protagonists : (GENRE_PROTAGONISTS[g.key] || []);
+  const settings = sd ? sd.settings : (GENRE_SETTINGS[g.key] || []);
+  const tones = sd ? sd.tones : [];
+  localStoryCfg.conflict_scale = pick(conflicts);
+  localStoryCfg.conflict_other = '';
+  localStoryCfg.protagonist_type = pick(protags);
+  localStoryCfg.protagonist_other = '';
+  localStoryCfg.specific_settings = (() => {
+    const shuffled = [...settings].sort(() => Math.random() - 0.5);
+    const n = 2 + Math.floor(Math.random() * Math.min(3, Math.max(1, shuffled.length)));
+    return shuffled.slice(0, n).join('\n');
+  })();
+  refreshCheckedSettings();
+  // Tone: pick from the reactive suggestion list computed for the new
+  // genre/subgenre (toneOpts), falling back to the raw subgenre data.
+  localStoryCfg.tone = (() => {
+    const pool = (toneOpts && toneOpts.length) ? toneOpts : tones;
+    if (!pool || !pool.length) return '';
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, 1 + Math.floor(Math.random() * Math.min(3, pool.length))).join(', ');
+  })();
+  // 4) Length first, then a structure valid for that length (same dependency
+  //    rule the UI enforces via onLengthChange).
+  const len = pick(LENGTH_KEYS);
+  localStoryCfg.story_length = len;
+  const structOptsForLen = structureOptions(len);
+  localStoryCfg.structure = structOptsForLen.length ? pick(structOptsForLen) : DEFAULT_STRUCTURE[len];
+  // 5) Independent enum selects — option values copied verbatim from the UI.
+  localStoryCfg.gender_bias = pick(['random', 'balanced', 'male', 'female']);
+  localStoryCfg.target_audience = pick(['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages']);
+  localStoryCfg.romance_level = pick(['random', 'none', 'subplot', 'moderate', 'central']);
+  localStoryCfg.sexual_content = pick(['random', 'clean', 'fade_to_black', 'explicit']);
+  localStoryCfg.gore_level = pick(['random', 'none', 'mid', 'explicit']);
+  localStoryCfg.world_darkness = pick(['idyllic', 'temperate', 'gritty', 'grim', 'abyssal']);
+  novelParamsTick++;
 }
   let testingApi = false;
 
@@ -392,12 +458,13 @@ novelParamsTick++;
       const owned = new Set();
       for (const sec of finishedSections) {
         if (sec === 'motif') { owned.add('theme'); owned.add('motif'); }
+        else if (sec === 'inspirational_pieces') owned.add('inspirational_pieces');
         else if (sec === 'story_idea') owned.add('story_idea');
         else if (sec === 'audience_profile') owned.add('audience_profile');
         else if (sec === 'style') { owned.add('writing_style'); owned.add('writing_pov'); }
       }
       const merged = {};
-      for (const k of ['theme', 'motif', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov']) {
+      for (const k of ['theme', 'motif', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov']) {
         const sv = (st[k] || '').trim();
         if (!sv) continue;
         if (owned.has(k) || !(localStoryCfg[k] || '').trim()) merged[k] = st[k];
@@ -655,12 +722,13 @@ novelParamsTick++;
     else if (section === 'locations') captureSnapshot(undoKey, { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
     else if (section === 'style') captureStoryFields(undoKey, ['writing_style', 'writing_pov']);
     else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif']);
+    else if (section === 'inspirational_pieces') captureStoryFields(undoKey, ['inspirational_pieces']);
     else if (section === 'story_idea') captureStoryFields(undoKey, ['story_idea']);
     else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile']);
     await persistStoryBeforeGenerate();
     const story = storyPayload();
     const idea = (story.story_idea || '').trim() || ($config?.story?.story_idea || '').trim();
-    if (!idea && section !== 'motif' && section !== 'story_idea' && section !== 'audience_profile' && section !== 'style') { addToast($t('config.story_idea.required'), 'error'); discardUndo(undoKey); return; }
+    if (!idea && section !== 'motif' && section !== 'inspirational_pieces' && section !== 'story_idea' && section !== 'audience_profile' && section !== 'style') { addToast($t('config.story_idea.required'), 'error'); discardUndo(undoKey); return; }
     // Section-level Generate buttons now go through the chat assistant: the
     // message below is matched by the agent's system prompt, which MUST call
     // the generate_section tool with this exact section key. The tool reuses
@@ -674,6 +742,7 @@ novelParamsTick++;
       locations: $t('config.generate.chat.locations'),
       worldview: $t('config.generate.chat.worldview'),
       motif: $t('config.generate.chat.motif'),
+      inspirational_pieces: $t('config.generate.chat.inspirational_pieces'),
       story_idea: $t('config.generate.chat.story_idea'),
       audience_profile: $t('config.generate.chat.audience_profile'),
     };
@@ -752,7 +821,7 @@ novelParamsTick++;
   $: if ($config?.story) {
     const snap = JSON.stringify($config.story);
     if (snap !== storyCfgSnapshot) {
-      localStoryCfg = { conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', locations_enabled: false, ...$config.story };
+      localStoryCfg = { conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', locations_enabled: false, inspirational_pieces: '', output_language: '', ...$config.story };
       if (!localStoryCfg.gender_bias) localStoryCfg.gender_bias = 'random';
       localStoryCfg.locations_enabled = !!$config.story.locations_enabled;
       storyCfgSnapshot = snap;
@@ -1330,7 +1399,9 @@ novelParamsTick++;
     {#if tab === 'novelParams'}
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-2">
-        <h3 class="card-title text-base">{$t('config.story.paramsTitle')}</h3>
+        <h3 class="card-title text-base flex items-center gap-2">{$t('config.story.paramsTitle')}
+          <button type="button" class="btn btn-outline btn-xs" on:click={(e) => { e.stopPropagation(); randomizeStoryParams(); }} disabled={$taskRunning} title={$t('config.story.randomize.hint')}>🎲 {$t('config.story.randomize')}</button>
+        </h3>
         {#if hasAccepted}
           <div class="alert alert-warning text-xs py-1.5 px-3">
             <span>{$t('config.story.acceptedHint')}</span>
@@ -1382,6 +1453,14 @@ novelParamsTick++;
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.author')}</span>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
+          </div>
+          <div>
+            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.language')}</span>
+            <select class="select select-sm w-full" bind:value={localStoryCfg.output_language} disabled={$taskRunning} title={$t('config.tip.language')}>
+              <option value="">{$t('config.story.language.auto')}</option>
+              <option value="en">EN — {$t('config.story.language.en')}</option>
+              <option value="es">ES — {$t('config.story.language.es')}</option>
+            </select>
           </div>
           <div class="col-span-2">
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.tone')}</span>
@@ -1558,6 +1637,22 @@ novelParamsTick++;
           <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.motif.title')}</span>
           <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
         </div>
+        <div class="divider my-0.5 py-0 h-px"></div>
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <span class="text-xs text-base-content/65">{$t('config.inspiration.title')}</span>
+          <div class="flex items-center gap-1.5">
+            <button class="btn btn-accent btn-xs" disabled={!!genBusy['inspirational_pieces']}
+              on:click={(e) => { e.stopPropagation(); generateSection('inspirational_pieces'); }}>
+              {#if genBusy['inspirational_pieces']}
+                <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
+              {:else}✨ {$t('common.generate')}{/if}
+            </button>
+            <button {...undoBtnProps('inspirational_pieces')} on:click={undoClick('inspirational_pieces')}>↩ {$t('common.undo')}</button>
+          </div>
+        </div>
+        <textarea class="textarea textarea-sm w-full h-20 text-xs" bind:value={localStoryCfg.inspirational_pieces}
+          placeholder={$t('config.inspiration.placeholder')} disabled={$taskRunning} title={$t('config.tip.inspiration')}></textarea>
+        <div class="text-xs opacity-60">{$t('config.inspiration.hint')}</div>
       </div>
       <div class="divider my-0.5 py-0 h-px"></div>
       <div class="flex items-center justify-between gap-2 flex-wrap">
