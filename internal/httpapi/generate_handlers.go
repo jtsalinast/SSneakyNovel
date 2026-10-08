@@ -1848,13 +1848,37 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 	for k, v := range story.StructureDescriptions() {
 		structureHints[k] = pick(v)
 	}
+	// Cross-cutting modifier presets (isekai, wuxia, cyberpunk, cozy, noir...):
+	// exposed so the "Specific settings" section can offer their signature
+	// tokens as checkable suggestions whenever the author's Type/Subgenre text
+	// matches one of these modifiers — previously they were invisible unless a
+	// classic genre key happened to resolve.
+	modifierPresets := config.ModifierPresets
+	if len(config.GenreSpecificSettings["isekai"]) > 0 {
+		// animeModifierPresets already contributed genre-keyed entries; merge
+		// them into the same map copy we ship so nothing mutates global state.
+		modifierPresets = make(map[string][]string, len(config.ModifierPresets)+len(config.GenreSpecificSettings))
+		for k, v := range config.ModifierPresets {
+			modifierPresets[k] = v
+		}
+		for _, k := range []string{"isekai", "isekai:villainess", "isekai:otome", "manhwa_system", "regression_rebirth", "mahou_shoujo", "mahou_shonen", "battle_shonen", "dungeon", "battle_royale", "tower_climbing", "slice_of_life", "iyashikei", "school_life", "mecha", "harem", "ecchi", "spokon", "revenge"} {
+			if v, ok := config.GenreSpecificSettings[k]; ok {
+				modifierPresets[k] = v
+			}
+		}
+	}
 	h.writeJSON(w, 200, map[string]any{
-		"conflict_scales":     config.GenreConflictScales,
-		"protagonist_types":   config.GenreProtagonistTypes,
-		"specific_settings":   config.GenreSpecificSettings,
-		"gender_bias_options": []string{"random", "balanced", "male", "female"},
-		"subgenre_presets":    config.SubgenrePresetKeys,
-		"subgenre_hints":      subgenreHints,
-		"structure_hints":     structureHints,
+		"conflict_scales":        config.GenreConflictScales,
+		"protagonist_types":      config.GenreProtagonistTypes,
+		"specific_settings":      config.GenreSpecificSettings,
+		"gender_bias_options":    []string{"random", "balanced", "male", "female"},
+		"subgenre_presets":       config.SubgenrePresetKeys,
+		"subgenre_hints":         subgenreHints,
+		"structure_hints":        structureHints,
+		"length_keys":            config.LengthKeys,
+		"all_structure_keys":     config.AllStructureKeys,
+		"structures_by_length":   config.StructureKeysByLength,
+		"target_words_by_length": config.TargetWordsPresetByLength,
+		"modifier_presets":       modifierPresets,
 	})
 }

@@ -434,7 +434,13 @@ func (h *Handlers) PutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if newCfg.Story.TargetWordsPerChapter <= 0 {
-		newCfg.Story.TargetWordsPerChapter = 2500
+		// Use the preset tied to the selected story length (light novel,
+		// anthology, flash...) instead of a one-size-fits-all default.
+		if preset := config.DefaultTargetWordsForLength(newCfg.Story.StoryLength); preset > 0 {
+			newCfg.Story.TargetWordsPerChapter = preset
+		} else {
+			newCfg.Story.TargetWordsPerChapter = 2500
+		}
 	}
 	newCfg.Language = i18n.NormalizeLanguage(newCfg.Language)
 	if newCfg.Language == "" {
