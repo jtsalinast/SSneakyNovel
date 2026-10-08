@@ -1,5 +1,5 @@
 <script>
-  import { currentPage } from './lib/router.js';
+  import { currentPage, navigate } from './lib/router.js';
   import { progress, taskRunning, contextPage, toastStore, addToast, currentProject, projectLanguage, config, settings, chatSessions, currentChatSession } from './lib/stores.js';
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
@@ -51,7 +51,7 @@
           projectLanguage.set(cur.language);
           setLocale(cur.language);
         }
-        if ($taskRunning) currentPage.set('writing');
+        if ($taskRunning) navigate('writing');
         await Promise.allSettled([
           api('GET', '/api/config').then(config.set),
           api('GET', '/api/progress').then(progress.set),

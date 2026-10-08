@@ -135,6 +135,10 @@ func NovelParametersBlock(cfg *config.Config) string {
 	if v := strings.TrimSpace(sc.Tone); v != "" {
 		add("【基调】"+v, "[TONE] "+v)
 	}
+	if v := strings.TrimSpace(sc.InspirationalPieces); v != "" {
+		add("【灵感作品】"+v+"（作为风格、氛围与叙事手法上的参考坐标：借鉴其气质与技法，但不要照搬其情节、人物或专有设定）",
+			"[INSPIRATIONAL PIECES] "+v+" (use them as style/atmosphere/craft reference points: borrow their tone and techniques, never copy their plots, characters or proprietary settings)")
+	}
 	if v := strings.TrimSpace(sc.Author); v != "" {
 		add("【署名作者】"+v, "[AUTHOR] "+v)
 	}
@@ -206,10 +210,21 @@ func NovelParametersBlock(cfg *config.Config) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	if en {
-		return "NOVEL PARAMETERS (plan the whole book accordingly):\n" + strings.Join(lines, "\n")
+	block := "NOVEL PARAMETERS (plan the whole book accordingly):\n" + strings.Join(lines, "\n")
+	if !en {
+		block = "小说参数（整体规划须遵循）：\n" + strings.Join(lines, "\n")
 	}
-	return "小说参数（整体规划须遵循）：\n" + strings.Join(lines, "\n")
+	// Story output language (EN/ES): when the author pins a generation language
+	// in "Story parameters", every AI text must stay in it — this hard rule is
+	// appended to the same authoritative block used by outline, writing and
+	// section generation, so mid-generation language switches stop happening.
+	switch lang := config.NormalizeOutputLanguage(sc.OutputLanguage); lang {
+	case "en":
+		block += "\n[OUTPUT LANGUAGE - HARD RULE] Write ALL generated content (story idea, sections, characters, worldview, outline summaries, chapter titles and prose) exclusively in English. Never switch to Spanish, Chinese or any other language mid-output."
+	case "es":
+		block += "\n[IDIOMA DE SALIDA - REGLA OBLIGATORIA] Todo el contenido generado por la IA (idea de la historia, secciones, personajes, visión del mundo, esquemas, títulos de capítulos y prosa) debe escribirse EXCLUSIVAMENTE en español. Nunca cambies a inglés, chino ni a otro idioma a mitad de la generación."
+	}
+	return block
 }
 
 func structureLabel(structure, lang string) string {

@@ -47,6 +47,8 @@ var storyFieldSpecs = []storyFieldSpec{
 	{"protagonist_other", "Custom protagonist type", "自定义主角类型", func(s config.StoryConfig) string { return s.ProtagonistOther }, func(c *config.StoryConfig, v string) { c.ProtagonistOther = v }, nil, nil},
 	{"target_audience", "Target audience", "目标读者", func(s config.StoryConfig) string { return s.TargetAudience }, func(c *config.StoryConfig, v string) { c.TargetAudience = v }, nil, nil},
 	{"audience_profile", "Audience profile", "目标读者画像", func(s config.StoryConfig) string { return s.AudienceProfile }, func(c *config.StoryConfig, v string) { c.AudienceProfile = v }, nil, nil},
+	{"inspirational_pieces", "Inspirational pieces (reference works for style/atmosphere)", "灵感作品", func(s config.StoryConfig) string { return s.InspirationalPieces }, func(c *config.StoryConfig, v string) { c.InspirationalPieces = v }, nil, nil},
+	{"output_language", "Story output language (en/es; empty = follow project language)", "生成内容语言（en/es，空=跟随项目语言）", func(s config.StoryConfig) string { return s.OutputLanguage }, func(c *config.StoryConfig, v string) { c.OutputLanguage = config.NormalizeOutputLanguage(v) }, nil, nil},
 	{"romance_level", "Romance level", "恋爱线比重", func(s config.StoryConfig) string { return s.RomanceLevel }, func(c *config.StoryConfig, v string) { c.RomanceLevel = v }, nil, nil},
 	{"sexual_content", "Sexual content level", "性描写尺度", func(s config.StoryConfig) string { return s.SexualContent }, func(c *config.StoryConfig, v string) { c.SexualContent = v }, nil, nil},
 	{"gore_level", "Gore level", "暴力血腥尺度", func(s config.StoryConfig) string { return s.GoreLevel }, func(c *config.StoryConfig, v string) { c.GoreLevel = v }, nil, nil},
