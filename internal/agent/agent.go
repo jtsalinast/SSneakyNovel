@@ -68,6 +68,11 @@ type AgentContext struct {
 	// Handlers.StartSectionGenerateAsync with ownsLock=false. May be nil in
 	// tests/embedded contexts; the generate_section tool reports that clearly.
 	StartSectionGenerate func(req SectionGenRequest) error
+	// StartPrePlanGenerate runs the book-level pre-planning generation as a
+	// detached background task (same engine as POST /api/outline/preplan/generate).
+	// Wired by httpapi to Handlers.StartDetachedPrePlanGenerate. May be nil in
+	// tests/embedded contexts; the generate_section tool reports that clearly.
+	StartPrePlanGenerate func() error
 	// SectionGenCtx, when set, is the context handed to StartSectionGenerate
 	// so the child generation keeps running even after this agent turn's task
 	// lock is released (prevents "context canceled" mid-generation).
@@ -312,6 +317,7 @@ var generateSectionValid = map[string]bool{
 	"style": true, "characters": true, "organizations": true,
 	"relations": true, "locations": true, "worldview": true,
 	"motif": true, "story_idea": true, "audience_profile": true, "inspirational_pieces": true,
+	"pre_planning": true,
 }
 
 // parseGenerateSectionTag looks for the [generate-section:<section>] marker
@@ -589,7 +595,7 @@ func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("- **配置保护**：若某字段用户已在配置页填写（非空），你不得静默覆盖。需要修改时，先在对话中说明当前值与建议值的差异及理由，等用户明确同意后再调用 update_project_config 并传入 confirm_overwrite=true。\n")
 	sb.WriteString("- 当用户要求创建/修改角色、世界观等设定时，直接使用对应的工具完成操作。\n")
 	sb.WriteString("- 当用户要求生成大纲、生成章节等操作时，使用对应的工具。如果是异步工具，告知用户等待。\n")
-	sb.WriteString("- 当用户要求生成某个配置板块（写作风格、角色/人物、组织、关系、地点、世界观、主题与动机、故事构想、读者画像、灵感作品）时——包括点击「生成」按钮发来的消息（如「请生成角色设定」，或带有 [generate-section:<section>] 标记的消息）——必须调用 generate_section 工具；若消息含 [generate-section:X] 标记，section 参数必须直接使用 X（style / characters / organizations / relations / locations / worldview / motif / story_idea / audience_profile / inspirational_pieces），不要自行改写或推断。该工具会依据全部小说参数后台生成并自动写入对应字段。\n")
+	sb.WriteString("- 当用户要求生成某个配置板块（写作风格、角色/人物、组织、关系、地点、世界观、主题与动机、故事构想、读者画像、灵感作品、预规划）时——包括点击「生成」按钮发来的消息（如「请生成角色设定」，或带有 [generate-section:<section>] 标记的消息）——必须调用 generate_section 工具；若消息含 [generate-section:X] 标记，section 参数必须直接使用 X（style / characters / organizations / relations / locations / worldview / motif / story_idea / audience_profile / inspirational_pieces / pre_planning），不要自行改写或推断。该工具会依据全部小说参数后台生成并自动写入对应字段。\n")
 	sb.WriteString("- 在生成大纲之前，提醒用户检查配置页面中的各项设定（故事类型、写作风格、故事梗概、角色、世界观），确认无误后再进行。\n")
 	sb.WriteString("- 在正式开始写作（确认大纲）之前，再次提醒用户确认所有设定，包括角色详情和世界观条目。\n")
 	sb.WriteString("- 执行写操作前，优先用读工具（read_outline、read_chapter 等）确认目标存在且状态符合预期。\n")
@@ -707,7 +713,7 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 	sb.WriteString("- **Config protection**: If a field is already filled in by the user (non-empty), you must NOT overwrite it silently. Explain the diff and your reasoning in chat, wait for explicit user approval, then call update_project_config with confirm_overwrite=true.\n")
 	sb.WriteString("- When the user asks you to create/edit characters, worldview, etc., use the corresponding tool directly.\n")
 	sb.WriteString("- When the user asks for outline/chapter generation, use the corresponding tool. If async, tell the user to wait.\n")
-	sb.WriteString("- When the user asks to generate a config section (writing style, characters, organizations, relations, locations, worldview, theme & motif, story idea, audience profile, inspirational pieces) — including messages triggered by the UI \"Generate\" buttons (e.g. \"please generate characters\", or a message tagged [generate-section:<section>]) — you MUST call the generate_section tool; if the message contains a [generate-section:X] tag, pass X verbatim as the section parameter (style / characters / organizations / relations / locations / worldview / motif / story_idea / audience_profile / inspirational_pieces) without reinterpreting it. It generates in the background using ALL novel parameters and writes the result into the matching fields.\n")
+	sb.WriteString("- When the user asks to generate a config section (writing style, characters, organizations, relations, locations, worldview, theme & motif, story idea, audience profile, inspirational pieces, pre-planning) — including messages triggered by the UI \"Generate\" buttons (e.g. \"please generate characters\", or a message tagged [generate-section:<section>]) — you MUST call the generate_section tool; if the message contains a [generate-section:X] tag, pass X verbatim as the section parameter (style / characters / organizations / relations / locations / worldview / motif / story_idea / audience_profile / inspirational_pieces / pre_planning) without reinterpreting it. It generates in the background using ALL novel parameters and writes the result into the matching fields.\n")
 	sb.WriteString("- Before generating the outline, remind the user to check the Config page (story type, writing style, synopsis, characters, worldview) and confirm everything looks right.\n")
 	sb.WriteString("- Before kicking off actual writing (confirming the outline), remind the user once more to confirm all settings, including character details and worldview entries.\n")
 	sb.WriteString("- Before a write operation, prefer reading first (read_outline, read_chapter, etc.) to confirm the target exists and is in the expected state.\n")
@@ -1538,7 +1544,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_section",
-			Description: "AI 生成小说配置的某一区块（异步），与配置页的 Generate 按钮完全等价：style(写作风格与视角)/characters(角色)/organizations(组织)/relations(关系)/locations(地点)/worldview(世界观条目)/motif(主题与母题)/story_idea(故事构想)/audience_profile(读者画像)/inspirational_pieces(灵感作品)。会先保存传入的小说参数，再基于全部 Novel parameters 生成并写入对应字段/实体。可选参数用于定向生成：character_id/org_id/entry_id(只填充该已有条目的空白字段)、source_id+target_id(只生成这一对角色间的关系)、name+category(worldview 新条目的名称/类别)。",
+			Description: "AI 生成小说配置的某一区块（异步），与配置页的 Generate 按钮完全等价：style(写作风格与视角)/characters(角色)/organizations(组织)/relations(关系)/locations(地点)/worldview(世界观条目)/motif(主题与母题)/story_idea(故事构想)/audience_profile(读者画像)/inspirational_pieces(灵感作品)/pre_planning(预规划：基于 Story structure 生成全书计划、总章数建议、长期走向与各幕批次梗概，写入进度而非配置)。会先保存传入的小说参数，再基于全部 Novel parameters 生成并写入对应字段/实体。可选参数用于定向生成：character_id/org_id/entry_id(只填充该已有条目的空白字段)、source_id+target_id(只生成这一对角色间的关系)、name+category(worldview 新条目的名称/类别)。",
 			Parameters:  `{"section":"characters","character_id":"","org_id":"","entry_id":"","source_id":"","target_id":"","name":"","category":""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1555,9 +1561,22 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "invalid_json", err)
 				}
 				switch params.Section {
-				case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces":
+				case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "pre_planning":
 				default:
 					return "", agentErr(ctx, "unknown_field", fmt.Errorf("unsupported section %q", params.Section))
+				}
+				if params.Section == "pre_planning" {
+					// Book-level plan lives in Progress (not Story config): dedicated
+					// detached runner, no config save/seed needed.
+					runnerPre := ctx.StartPrePlanGenerate
+					if runnerPre == nil {
+						return "", agentErr(ctx, "agent_unavailable", fmt.Errorf("pre-plan generator unavailable"))
+					}
+					if err := runnerPre(); err != nil {
+						return "", agentErr(ctx, "task_running_wait", err)
+					}
+					ctx.logger().InfoKey("log.section_generating", "pre_planning")
+					return agentMsg(ctx, "agent.section_generate_started", "pre_planning"), nil
 				}
 				cfg := ctx.safeCfg()
 				storyCfg := cfg.Story

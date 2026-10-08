@@ -28,7 +28,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	section := r.PathValue("section")
 	switch section {
-	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces":
+	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "pre_planning":
 	default:
 		h.writeErrorReq(w, r, http.StatusBadRequest, "unknown_section", section)
 		return
@@ -78,6 +78,11 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer h.endTask()
+		if section == "pre_planning" {
+			// Book-level plan lives in Progress, not Story: dedicated runner.
+			h.runPrePlanGenerate(h.taskCtx)
+			return
+		}
 		h.runSectionGenerate(req)
 	}()
 
@@ -150,7 +155,7 @@ func (h *Handlers) normalizeSectionGen(req SectionGenRequest) (config.StoryConfi
 	// that *produce* a story idea must never require one: they are seeded from
 	// the other novel parameters already entered. Everything else needs the
 	// story idea as its generation seed.
-	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" {
+	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "pre_planning" {
 		return storyCfg, errors.New("story_idea_required")
 	}
 	return storyCfg, nil
@@ -159,8 +164,58 @@ func (h *Handlers) normalizeSectionGen(req SectionGenRequest) (config.StoryConfi
 // validateSectionGen reports whether the request can run right now (used for
 // synchronous HTTP error responses before starting the task).
 func (h *Handlers) validateSectionGen(req SectionGenRequest) error {
+	if req.Section == "pre_planning" {
+		// Book-level plan: seeded from every novel parameter (notably Story
+		// structure); never requires a story idea and never writes Story
+		// fields, so it is always runnable.
+		return nil
+	}
 	_, err := h.normalizeSectionGen(req)
 	return err
+}
+
+// StartDetachedPrePlanGenerate runs the book-level pre-planning generation as
+// an independent background task, detached from any chat turn — same survival
+// guarantees as StartDetachedSectionGenerate (own cancellable context wired
+// under taskMu so StopTask can still cancel it). Used by the
+// [generate-section:pre_planning] fast path in PostChatMessage. The caller
+// must already hold the task lock; this registers the run as child work.
+func (h *Handlers) StartDetachedPrePlanGenerate() error {
+	if !h.startChildWork() {
+		return errors.New("task_running_wait")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	// Same token wiring as tryStartTask: without llm.WithTaskTokens the LLM
+	// calls inside this detached run report no token activity to the chat
+	// panel (the Pre-planning Generate button looked dead even though the
+	// generation was running).
+	h.taskMu.Lock()
+	genID := h.generationID
+	ctx, _ = llm.WithTaskTokens(ctx, h.logger)
+	h.taskCtx = ctx
+	h.taskCancel = cancel
+	h.taskMu.Unlock()
+	go func() {
+		defer cancel()
+		defer h.endTask()
+		h.logger.InfoKey("log.preplan_generating")
+		err := h.runPrePlanGenerate(ctx)
+		if err != nil && ctx.Err() != nil {
+			h.taskMu.Lock()
+			stale := genID != h.generationID
+			h.taskMu.Unlock()
+			if stale {
+				return
+			}
+		}
+		if err != nil {
+			h.logger.ErrorKey("log.preplan_generate_failed", err)
+			return
+		}
+		h.logger.SuccessKey("log.preplan_generate_done")
+		h.broadcastProgress()
+	}()
+	return nil
 }
 
 // StartDetachedSectionGenerate runs a section generation as an independent
@@ -213,6 +268,9 @@ func (h *Handlers) StartDetachedSectionGenerate(req SectionGenRequest) error {
 // must stay in sync with runSectionGenerate (same sections, same helpers).
 func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context.Context) error {
 	section := req.Section
+	if section == "pre_planning" {
+		return h.runPrePlanGenerate(ctx)
+	}
 	storyCfg, err := h.normalizeSectionGen(req)
 	taskName := "section_generate_" + section
 	h.logger.TaskStart(taskName)
@@ -263,6 +321,10 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 // startChildWork, which take the lock). Returns the generation error.
 func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 	section := req.Section
+	if section == "pre_planning" {
+		// Book-level plan lives in Progress, not Story: dedicated runner.
+		return h.runPrePlanGenerate(h.taskCtx)
+	}
 	storyCfg, err := h.normalizeSectionGen(req)
 	taskName := "section_generate_" + section
 	h.logger.TaskStart(taskName)
@@ -361,6 +423,11 @@ func sectionLabel(section, lang string) string {
 			return "灵感作品"
 		}
 		return "inspirational pieces"
+	case "pre_planning":
+		if zh {
+			return "预规划（全书计划）"
+		}
+		return "pre-planning (book plan)"
 	default:
 		if zh {
 			return "关系"
