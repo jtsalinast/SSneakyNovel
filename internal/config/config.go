@@ -129,28 +129,47 @@ func EffectiveOutputLanguage(cfg *Config) string {
 // —— Novel parameters: length & structure options (borrowed from NovelWriter) —
 
 const (
-	LengthShort   = "short"   // 短篇
-	LengthNovella = "novella" // 中篇
-	LengthNovel   = "novel"   // 长篇（标准）
-	LengthEpic    = "epic"    // 长篇（史诗）
+	LengthFlash      = "flash"       // 微型小说/闪小说
+	LengthShort      = "short"       // 短篇
+	LengthNovelette  = "novelette"   // 短中篇
+	LengthNovella    = "novella"     // 中篇
+	LengthLightNovel = "light_novel" // 轻小说（日系：章节长、节奏快）
+	LengthAnthology  = "anthology"   // 短篇小说集/选集
+	LengthNovel      = "novel"       // 长篇（标准）
+	LengthEpic       = "epic"        // 长篇（史诗）
 )
 
 // LengthKeys is the ordered list of selectable story lengths.
-var LengthKeys = []string{LengthShort, LengthNovella, LengthNovel, LengthEpic}
+var LengthKeys = []string{LengthFlash, LengthShort, LengthNovelette, LengthNovella, LengthLightNovel, LengthAnthology, LengthNovel, LengthEpic}
 
-// StructureKeysByLength maps a story length to its applicable structure frameworks.
+// AllStructureKeys lists every supported narrative-structure framework. The UI
+// offers ALL of them regardless of the selected story length — length only
+// suggests a default; no structure is ever hidden or force-swapped because of it.
+var AllStructureKeys = []string{"three_act", "six_act", "fichtean", "freytag", "seven_point", "heros_journey", "heros_journey_simple", "save_the_cat", "story_circle", "kishotenketsu", "snowflake", "quest", "romance_arc", "episodic"}
+
+// StructureKeysByLength maps a story length to its *recommended* structure
+// frameworks (used for defaults and randomization only; the frontend shows
+// AllStructureKeys so nothing is gated by length).
 var StructureKeysByLength = map[string][]string{
-	LengthShort:   {"three_act", "fichtean", "freytag"},
-	LengthNovella: {"three_act", "seven_point", "heros_journey_simple"},
-	LengthNovel:   {"three_act", "six_act", "save_the_cat", "heros_journey"},
-	LengthEpic:    {"six_act", "heros_journey", "save_the_cat", "episodic"},
+	LengthFlash:      {"three_act", "freytag"},
+	LengthShort:      {"three_act", "fichtean", "freytag"},
+	LengthNovelette:  {"three_act", "seven_point"},
+	LengthNovella:    {"three_act", "seven_point", "heros_journey_simple"},
+	LengthLightNovel: {"kishotenketsu", "episodic", "three_act"},
+	LengthAnthology:  {"episodic"},
+	LengthNovel:      {"three_act", "six_act", "save_the_cat", "heros_journey"},
+	LengthEpic:       {"six_act", "heros_journey", "save_the_cat", "snowflake", "episodic"},
 }
 
 // DefaultStructureForLength returns the recommended structure for a length.
 func DefaultStructureForLength(length string) string {
 	switch length {
-	case LengthShort, LengthNovella:
+	case LengthFlash, LengthShort, LengthNovelette, LengthNovella:
 		return "three_act"
+	case LengthLightNovel:
+		return "kishotenketsu"
+	case LengthAnthology:
+		return "episodic"
 	default:
 		return "six_act"
 	}
@@ -159,16 +178,48 @@ func DefaultStructureForLength(length string) string {
 // SuggestedChaptersByLength gives an outline chapter-count hint per length.
 func SuggestedChaptersByLength(length string) (min, max int) {
 	switch length {
+	case LengthFlash:
+		return 1, 3
 	case LengthShort:
 		return 5, 12
+	case LengthNovelette:
+		return 8, 18
 	case LengthNovella:
 		return 12, 25
+	case LengthLightNovel:
+		return 20, 40
+	case LengthAnthology:
+		return 6, 15
 	case LengthNovel:
 		return 25, 45
 	case LengthEpic:
 		return 45, 90
 	}
 	return 0, 0
+}
+
+// TargetWordsPresetByLength maps a story length to the suggested
+// target_words_per_chapter value applied when the author changes the length
+// (the field stays freely editable afterwards). Light novels use short punchy
+// chapters; flash fiction reads as one continuous piece; anthologies collect
+// self-contained stories.
+var TargetWordsPresetByLength = map[string]int{
+	LengthFlash:      1000,
+	LengthShort:      2000,
+	LengthNovelette:  2500,
+	LengthNovella:    2500,
+	LengthLightNovel: 3500,
+	LengthAnthology:  4000,
+	LengthNovel:      3000,
+	LengthEpic:       3000,
+}
+
+// DefaultTargetWordsForLength returns the suggested target_words_per_chapter
+// preset for a story length, or 0 when the length is unknown / not specified
+// (callers must then keep the current value). The frontend applies it live via
+// /api/novel-params so changing "Story length" updates the word-target field.
+func DefaultTargetWordsForLength(length string) int {
+	return TargetWordsPresetByLength[strings.TrimSpace(length)]
 }
 
 type PromptsConfig struct {
@@ -306,8 +357,22 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	if cfg.Story.TargetWordsPerChapter <= 0 {
-		cfg.Story.TargetWordsPerChapter = 5000
+		// Prefer the preset that matches the chosen story length (light novel,
+		// flash fiction...); fall back to the generic 5000 when no length is set.
+		if preset := DefaultTargetWordsForLength(cfg.Story.StoryLength); preset > 0 {
+			cfg.Story.TargetWordsPerChapter = preset
+		} else {
+			cfg.Story.TargetWordsPerChapter = 5000
+		}
 	}
+
+	// Round 10 — Removed the round-9 "MissingSuggestedSettings" auto-restore
+	// guard: it re-injected every suggested preset token into
+	// Story.SpecificSettings after any save that happened to leave the field
+	// empty, which made the user's own edits look like they were "wiped" (and
+	// made unchecking a suggestion impossible). The frontend now merges the
+	// textarea remainder with the checkbox state before every PUT, so the
+	// stored value is exactly what the author sees in the form.
 
 	cfg.Language = i18n.NormalizeLanguage(cfg.Language)
 
@@ -431,6 +496,11 @@ func DefaultPromptsForLang(lang string) PromptsConfig {
 // Each list always ends with "other", so suggestions help generation without forcing it.
 
 var GenreConflictScales = map[string][]string{
+	// NOTE (round 7): the trailing snake_case tokens that used to leak into
+	// these conflict lists ("urban_setting", "wuxia", "cyberpunk", "noir"...)
+	// were removed — they are specific-settings modifiers and belong in
+	// GenreSpecificSettings below, where the UI renders them as checkable
+	// suggestions instead of polluting the conflict-scale dropdown.
 	"fantasy":     {"Personal Quest", "Kingdom-wide", "World-saving", "Good vs Evil", "Political Intrigue", "Sect/Realm Wars", "other"},
 	"scifi":       {"Personal", "Planetary", "Interstellar", "Galactic", "Humanity vs Technology", "other"},
 	"mystery":     {"Personal Mystery", "Community Secret", "Local Crime", "Family Mystery", "Historical Puzzle", "other"},
@@ -443,7 +513,7 @@ var GenreConflictScales = map[string][]string{
 	"urban":       {"Neighborhood Turf", "Hidden Society Exposure", "Patron Debt", "City-wide Supernatural War", "Ordinary Life vs Calling", "other"},
 	"military":    {"Unit Survival", "Campaign Objective", "Chain-of-Command Conflict", "Insurgency & Occupation", "War vs Conscience", "other"},
 	"postapo":     {"Daily Survival", "Settlement vs Raiders", "Resource Scarcity", "Old-world Remnant Threat", "Rebuilding vs Warlordism", "other"},
-	"adventure":   {"Man vs Nature", "Expedition Rivalry", "Ancient Trap/Trial", "Race Against Time", "Survival in the Unknown", "other"},
+	"adventure":   {"Man vs Nature", "Expedition Rivalry", "Ancient Trap/Trial", "Race Against Time", "Survival in the Unknown", "other", "swashbuckler", "nautical", "picaresque", "mythical_creatures", "expedition_epic_scale"},
 	"wuxia":       {"Jianghu Feud", "Sect Honor", "Martial Supremacy", "Court vs Jianghu", "Righteous vs Unorthodox Paths", "other"},
 	"xianxia":     {"Sect Competition", "Heavenly Tribulation", "Immortal Realm Power Struggle", "Fate vs Defiance", "Dao vs Demon Path", "other"},
 	"cozy":        {"Small-town Gossip", "Community Secret", "Family Mystery", "Holiday Deadline", "Reputation at Stake", "other"},
@@ -469,6 +539,8 @@ var GenreConflictScales = map[string][]string{
 	"mystery:police_procedural": {"Precinct Chain-of-Casework", "Serial Pattern vs Bureau Politics", "Victim Community vs Procedure", "Cold Case Reopened", "other"},
 	"literary":                  {"Self vs Meaning", "Memory vs Truth", "Duty vs Desire", "Identity Unraveling", "Silence Inside a Family", "other"},
 	"romance:romcom":            {"Pride vs Attraction", "Fake Relationship Turns Real", "Rival-to-Lover Escalation", "Timing & Miscommunication Farce", "Career Crossroads vs Love", "other"},
+	// round 6: Drama parent genre (family saga, coming-of-age, psychorealism...)
+	"drama": {"Silence Inside a Family", "Self vs Meaning", "Duty vs Desire", "Identity Unraveling", "Institution vs Individual", "Generational Legacy", "other"},
 }
 
 var GenreProtagonistTypes = map[string][]string{
@@ -510,31 +582,39 @@ var GenreProtagonistTypes = map[string][]string{
 	"mystery:police_procedural": {"By-the-Book Detective", "Burned-Out Veteran Mentor", "Forensics Specialist Who Sees Patterns", "Patrol Officer Promoted Too Fast", "Profiler With Boundary Issues", "other"},
 	"literary":                  {"Unreliable Witness of Their Own Life", "Returnee Facing a Changed Home", "Quiet Professional Near a Breaking Point", "Questioner of Inherited Beliefs", "Caregiver Losing and Finding Themselves", "other"},
 	"romance:romcom":            {"Cynical Romantic Under Cover of Jokes", "Overprepared Planner Meets Chaos", "Rival Who Secretly Reads Their Work", "Best Friend Waiting Too Long", "Fake Partner With Real Cracks", "other"},
+	// round 6: Drama parent genre
+	"drama": {"Matriarch or Patriarch Holding a Fractured Family", "Coming-of-age Everyteen on a Threshold", "Ordinary Person Facing an Unremarkable Crisis", "Idealist Ground Down by an Institution", "Griever Rebuilding a Life After Loss", "other"},
 }
 
 var GenreSpecificSettings = map[string][]string{
-	"fantasy":     {"magic_system", "medieval_setting", "mythical_creatures", "epic_scale", "political_dynasties"},
-	"scifi":       {"interstellar_travel", "advanced_technology", "multiple_species", "space_combat", "ai_singularity"},
-	"mystery":     {"small_community", "amateur_detective", "low_violence", "puzzle_focus", "recurring_characters"},
-	"romance":     {"modern_setting", "relationship_focus", "emotional_journey", "happy_ending", "realistic_world"},
-	"thriller":    {"international_intrigue", "spy_networks", "government_secrets", "double_agents", "global_stakes"},
-	"horror":      {"atmospheric_dread", "isolated_setting", "supernatural_elements", "psychological_terror", "dark_atmosphere", "cosmic_horror"},
-	"historical":  {"ancient_civilizations", "mythological_elements", "tribal_societies", "ancient_religions", "primitive_technology"},
-	"western":     {"frontier_setting", "lawlessness", "honor_code", "survival_focus", "horse_culture"},
-	"litrpg":      {"game_system_rules", "stats_and_levels", "dungeons_and_loot", "guild_politics", "progression_arc", "server_economy"},
-	"urban":       {"hidden_supernatural_society", "modern_city_backdrop", "masquerade_rule", "part_time_hero_life", "night_market_magic"},
-	"military":    {"unit_esprit_de_corps", "chain_of_command", "combined_arms_tactics", "rules_of_engagement", "rotations_and_leave", "war_crimes_inquiry"},
-	"postapo":     {"resource_scarcity", "mutated_fauna_flora", "pre_fall_artifacts", "settlement_politics", "radiation_zones", "water_and_power_grids"},
-	"adventure":   {"expedition_logistics", "ancient_traps_puzzles", "extreme_environments", "rival_explorers", "local_mythology_clues", "treasure_curse"},
-	"wuxia":       {"jianghu_codes", "qi_cultivation", "sects_and_alliances", "neigong_manuals", "tea_house_rumors", "wuxia_martial_choreography"},
-	"xianxia":     {"cultivation_realms", "spirit_roots", "sect_hierarchy", "alchemy_pill_refining", "heavenly_dao_laws", "immortal_realm_geography"},
-	"cozy":        {"small_town_map", "baking_brewing_gardening_hobbies", "community_events", "pet_or_cat_presence", "low_stakes_danger", "found_family"},
-	"heist":       {"crew_specialties", "target_security_layers", "mark_and_distraction", "getaway_routes", "one_job_too_many", "double_cross_timer"},
-	"cyberpunk":   {"megacorporations", "body_augmentation", "netrunning_matrix", "street_economy_implants", "rain_neon_aesthetic", "class_divide_vertical_cities"},
-	"solarpunk":   {"renewable_infrastructure", "community_cooperatives", "rewilded_urbanism", "open_source_tools", "slow_healing_after_collapse", "festivals_and_commons"},
-	"romantasy":   {"fae_or_god courts", "magic_cost_of_intimacy", "arranged_political_marriage", "enemy_to_lover_arc", "prophecy_bond", "court_intrigue_and_seasons"},
-	"dystopian":   {"surveillance_state", "scarce_rations_and_permits", "state_propaganda_media", "resistance_cells", "caste_by_gene_or_record", "forbidden_knowledge_archive"},
-	"space_opera": {"jump_gate_network", "galactic_senate_or_empire", "xeno_first_contact_protocols", "fleet_logistics", "dynastic_politics_in_stars", "precursor_relics"},
+	// Round 7: every parent genre now exposes the cross-cutting modifiers the
+	// author asked for (wuxia/xianxia/litrpg/cyberpunk/solarpunk/space_opera/
+	// romantasy/dystopian/postapo/military/heist/cozy/urban/noir/gothic/
+	// dark_academia/swashbuckler/nautical/picaresque/romcom/mystery_police/
+	// magic_system/medieval_setting/mythical_creatures/epic_scale/scifi tech)
+	// whenever they are thematically compatible with that genre.
+	"fantasy":     {"magic_system", "medieval_setting", "mythical_creatures", "epic_scale", "political_dynasties", "wuxia", "xianxia", "cozy", "urban", "gothic", "dark_academia", "romantasy", "swashbuckler"},
+	"scifi":       {"interstellar_travel", "advanced_technology", "multiple_species", "space_combat", "ai_singularity", "cyberpunk", "solarpunk", "steampunk", "space_opera", "dystopian", "postapo", "military", "superhero", "first_contact_paradigm", "generation_ship_society"},
+	"mystery":     {"small_community", "amateur_detective", "low_violence", "puzzle_focus", "recurring_characters", "noir", "heist", "cozy", "urban", "locked_room_impossible_crime", "mystery_police", "gothic"},
+	"romance":     {"modern_setting", "relationship_focus", "emotional_journey", "happy_ending", "realistic_world", "romcom", "romantasy", "small_town_or_urban_backdrop", "cozy", "urban", "historical_courtship", "dark_academia"},
+	"thriller":    {"international_intrigue", "spy_networks", "government_secrets", "double_agents", "global_stakes", "heist", "noir", "military_intelligence", "urban", "mystery_police", "cyberpunk"},
+	"horror":      {"atmospheric_dread", "isolated_setting", "supernatural_elements", "psychological_terror", "dark_atmosphere", "cosmic_horror", "gothic", "dark_academia", "folk_customs_and_rites", "postapo", "urban"},
+	"historical":  {"ancient_civilizations", "mythological_elements", "tribal_societies", "ancient_religions", "primitive_technology", "medieval_setting", "mythical_creatures", "epic_scale", "court_intrigue", "nautical", "swashbuckler", "military"},
+	"western":     {"frontier_setting", "lawlessness", "honor_code", "survival_focus", "horse_culture", "swashbuckler_frontier_action", "nautical_ports_and_trails", "picaresque", "noir"},
+	"litrpg":      {"game_system_rules", "stats_and_levels", "dungeons_and_loot", "guild_politics", "progression_arc", "server_economy", "isekai", "system_apocalypse", "tower_climbing"},
+	"urban":       {"hidden_supernatural_society", "modern_city_backdrop", "masquerade_rule", "part_time_hero_life", "night_market_magic", "noir", "cyberpunk", "romcom", "cozy"},
+	"military":    {"unit_esprit_de_corps", "chain_of_command", "combined_arms_tactics", "rules_of_engagement", "rotations_and_leave", "war_crimes_inquiry", "postapo", "space_opera", "espionage_intelligence"},
+	"postapo":     {"resource_scarcity", "mutated_fauna_flora", "pre_fall_artifacts", "settlement_politics", "radiation_zones", "water_and_power_grids", "military", "solarpunk", "dystopian"},
+	"adventure":   {"expedition_logistics", "ancient_traps_puzzles", "extreme_environments", "rival_explorers", "local_mythology_clues", "treasure_curse", "swashbuckler", "nautical", "picaresque", "mythical_creatures", "expedition_epic_scale"},
+	"wuxia":       {"jianghu_codes", "qi_cultivation", "sects_and_alliances", "neigong_manuals", "tea_house_rumors", "wuxia_martial_choreography", "epic_scale", "mythical_creatures"},
+	"xianxia":     {"cultivation_realms", "spirit_roots", "sect_hierarchy", "alchemy_pill_refining", "heavenly_dao_laws", "immortal_realm_geography", "epic_scale", "mythical_creatures"},
+	"cozy":        {"small_town_map", "baking_brewing_gardening_hobbies", "community_events", "pet_or_cat_presence", "low_stakes_danger", "found_family", "urban", "seasonal_rhythm"},
+	"heist":       {"crew_specialties", "target_security_layers", "mark_and_distraction", "getaway_routes", "one_job_too_many", "double_cross_timer", "noir", "urban", "cyberpunk"},
+	"cyberpunk":   {"megacorporations", "body_augmentation", "netrunning_matrix", "street_economy_implants", "rain_neon_aesthetic", "class_divide_vertical_cities", "dystopian", "urban", "heist"},
+	"solarpunk":   {"renewable_infrastructure", "community_cooperatives", "rewilded_urbanism", "open_source_tools", "slow_healing_after_collapse", "festivals_and_commons", "postapo", "cozy"},
+	"romantasy":   {"fae_or_god courts", "magic_cost_of_intimacy", "arranged_political_marriage", "enemy_to_lover_arc", "prophecy_bond", "court_intrigue_and_seasons", "magic_system", "epic_scale", "romcom"},
+	"dystopian":   {"surveillance_state", "scarce_rations_and_permits", "state_propaganda_media", "resistance_cells", "caste_by_gene_or_record", "forbidden_knowledge_archive", "postapo", "military", "cyberpunk"},
+	"space_opera": {"jump_gate_network", "galactic_senate_or_empire", "xeno_first_contact_protocols", "fleet_logistics", "dynastic_politics_in_stars", "precursor_relics", "interstellar_travel", "advanced_technology", "military"},
 	// new parent genres (round 3)
 	"graphic_novel":             {"panel_rhythm_matters", "visual_motif_recurs", "silence_and_gutter_time", "color_script_arc", "caption_vs_dialogue_balance", "memoir_or_biography_texture"},
 	"adventure:swashbuckler":    {"sea_code_and_mutiny_risk", "privateer_letters_marques", "crew_share_system", "port_town_underworld", "chase_and_escape_rhythm", "treasure_curse_hook"},
@@ -551,6 +631,66 @@ var GenreSpecificSettings = map[string][]string{
 	"mystery:police_procedural": {"chain_of_custody_detail", "partner_dynamic_carries_case", "department_politics_friction", "procedural_clock_pressure", "victim_not_plot_device"},
 	"literary":                  {"interiority_over_plot", "motif_and_symbol_layering", "moral_ambiguity_no_cartoon_villains", "time_nonlinear_or_elided", "language_as_texture", "open_or_bittersweet_endings_ok"},
 	"romance:romcom":            {"meet_cute_variants", "banter_engine_two_compatible_people", "escalating_set_pieces", "third_act_misunderstanding_kept_short", "family_and_friend_chorus", "guaranteed_happy_ending"},
+	// round 6: Drama parent genre
+	"drama": {"interiority_over_plot", "multi_generational_timeline", "quiet_realism", "moral_ambiguity_no_cartoon_villains", "time_nonlinear_or_elided", "open_or_bittersweet_endings_ok", "found_family_or_bloodline", "institution_as_stage", "letters_or_messages_format", "everyday_life_texture"},
+}
+
+// —— Cross-cutting modifier presets (round 7) ————————————————————————————————
+// These are the subgenre-style modifiers authors most often want to stack on
+// top of a base genre/subgenre (isekai, wuxia, cyberpunk, cozy, noir...). The
+// /api/novel-params endpoint exposes them so the "Specific settings" section
+// can offer them as checkable suggestions no matter which genre is selected —
+// previously they only existed inside the anime preset map and were invisible
+// unless Type+Subgenre text happened to match an anime keyword. Keys mirror
+// config.MatchGenreKey / MatchAnimeModifierKey where those exist; values are
+// fresh snake_case tokens safe to store in Story.SpecificSettings.
+var ModifierPresets = map[string][]string{
+	"litRPG":             {"game_system_rules", "stats_and_levels", "dungeons_and_loot", "guild_politics", "progression_arc", "server_economy"},
+	"wuxia":              {"jianghu_codes", "qi_cultivation", "sects_and_alliances", "neigong_manuals", "tea_house_rumors", "wuxia_martial_choreography"},
+	"xianxia":            {"cultivation_realms", "spirit_roots", "sect_hierarchy", "alchemy_pill_refining", "heavenly_dao_laws", "immortal_realm_geography"},
+	"cyberpunk":          {"megacorporations", "body_augmentation", "netrunning_matrix", "street_economy_implants", "rain_neon_aesthetic", "class_divide_vertical_cities"},
+	"solarpunk":          {"renewable_infrastructure", "community_cooperatives", "rewilded_urbanism", "open_source_tools", "slow_healing_after_collapse", "festivals_and_commons"},
+	"space_opera":        {"jump_gate_network", "galactic_senate_or_empire", "xeno_first_contact_protocols", "fleet_logistics", "dynastic_politics_in_stars", "precursor_relics"},
+	"romantasy":          {"fae_or_god courts", "magic_cost_of_intimacy", "arranged_political_marriage", "enemy_to_lover_arc", "prophecy_bond", "court_intrigue_and_seasons"},
+	"dystopian":          {"surveillance_state", "scarce_rations_and_permits", "state_propaganda_media", "resistance_cells", "caste_by_gene_or_record", "forbidden_knowledge_archive"},
+	"postapo":            {"resource_scarcity", "mutated_fauna_flora", "pre_fall_artifacts", "settlement_politics", "radiation_zones", "water_and_power_grids"},
+	"military":           {"unit_esprit_de_corps", "chain_of_command", "combined_arms_tactics", "rules_of_engagement", "rotations_and_leave", "war_crimes_inquiry"},
+	"heist":              {"crew_specialties", "target_security_layers", "mark_and_distraction", "getaway_routes", "one_job_too_many", "double_cross_timer"},
+	"cozy":               {"small_town_map", "baking_brewing_gardening_hobbies", "community_events", "pet_or_cat_presence", "low_stakes_danger", "found_family"},
+	"urban":              {"hidden_supernatural_society", "modern_city_backdrop", "masquerade_rule", "part_time_hero_life", "night_market_magic"},
+	"noir":               {"noir_atmosphere", "femme_fatale_energy", "doomed_protagonist", "rain_slick_city", "corrupt_institutions", "moral_ambiguity"},
+	"gothic":             {"decaying_estate_setting", "family_sin_and_debt", "ambiguous_supernatural", "isolation_and_weather", "forbidden_kinship", "sanity_slipping_marker"},
+	"dark_academia":      {"gothic_campus_atmosphere", "secret_society_ladder", "mentor_dependence", "forbidden_text_or_archive", "tuition_class_tension", "crime_disguised_as_tradition"},
+	"swashbuckler":       {"sea_code_and_mutiny_risk", "privateer_letters_marques", "crew_share_system", "port_town_underworld", "chase_and_escape_rhythm", "treasure_curse_hook"},
+	"nautical":           {"ship_as_microcosm", "watch_schedule_structure", "weather_is_antagonist", "rope_and_engine_detail", "long_voyage_time_scale", "rescue_or_wreck_inciting"},
+	"picaresque":         {"episodic_con_chain", "satire_of_institutions", "rogue_with_a_code", "disguise_and_alias_layering", "patron_dependency", "road_or_river_progression"},
+	"romcom":             {"meet_cute_variants", "banter_engine_two_compatible_people", "escalating_set_pieces", "third_act_misunderstanding_kept_short", "family_and_friend_chorus", "guaranteed_happy_ending"},
+	"mystery_police":     {"chain_of_custody_detail", "partner_dynamic_carries_case", "department_politics_friction", "procedural_clock_pressure", "victim_not_plot_device"},
+	"magic_system":       {"hard_vs_soft_magic", "magic_cost_and_limits", "spell_schools_or_disciplines", "magic_authority_or_control", "rare_vs_common_magic", "ritual_components"},
+	"medieval_setting":   {"feudal_system", "guilds_and_guildpolitics", "castle_and_manor_life", "religious_influence", "period_authenticity", "travel_and_communication_speed"},
+	"mythical_creatures": {"dragon_ecology_and_politics", "fae_etiquette_and_iron", "beast_bonds_or_familiars", "monster_hunter_economy", "extinct_or_hidden_species", "creation_myths_as_fact"},
+	"epic_scale":         {"world_spanning_journey", "multiple_poVs", "generative_time_span", "factions_and_warfare", "languages_and_maps", "personal_thread_in_history"},
+	"scifi":              {"interstellar_travel", "advanced_technology", "multiple_species", "space_combat", "ai_singularity", "generation_ship_society"},
+	"steampunk":          {"brass_and_steam_tech_level", "guild_or_factory_economy", "class_divide_vertical_cities", "occult_industry_accident", "airship_logistics", "empire_exhibition_era"},
+	"time_travel":        {"travel_rule_or_device", "paradox_cost_visible", "fixed_point_or_fate", "butterfly_side_effects", "era_authenticity_detail", "history_vs_personal_grief"},
+	"superhero":          {"power_cost_or_limitation", "secret_identity_pressure", "collateral_damage_debt", "rogues_gallery_recurring", "public_opinion_metronome", "legacy_symbol_transfer"},
+	"magical_realism":    {"mundane_world_with_wonder", "matter_of_fact_marvels", "cultural_mythos", "poetic_prose", "generational_memory", "political_history_undercurrent"},
+	"first_contact":      {"xeno_language_barrier", "protocol_and_politics", "cultural_misreading", "technology_gap_reveal", "signal_or_arrival_event", "coexistence_terms"},
+	"isekai":             {"summoning_contract_rules", "cheat_ability_with_cost", "new_world_language_customs_gap", "return_home_option_live", "local_politics_knowledge_gap", "reincarnation_or_transport_logic"},
+	"regression":         {"fixed_past_events_catalogue", "butterfly_effect_budget", "aging_body_young_face_tension", "insider_trading_knowledge_edge", "second_chance_relationships", "known_disaster_deadline"},
+	"manhwa_system":      {"status_window_rules", "penalty_quest_enforcement", "hunter_rank_public_registry", "hidden_skill_market", "gate_and_dungeon_ecology", "ranked_society_media"},
+	"villainess":         {"otome_game_script_known_events", "duelist_and_ballroom_etiquette", "curse_or_engagement_deadline", "servant_network_intelligence", "scripted_doom_counterplan", "court_gossip_economy"},
+	"battle_royale":      {"shrinking_map_timer", "supply_drop_schedule", "audience_vote_power", "loadout_balance_rules", "forced_alliance_politics", "arena_ethics_debate"},
+	"tower_climbing":     {"floor_theme_rotation", "gatekeeper_boss_contract", "checkpoint_resurrection_rules", "vertical_city_politics", "climber_guild_cartel", "summit_myth_economy"},
+	"dungeon_core":       {"core_room_layout", "monster_roster", "floor_progression", "dungeon_ecology_tables", "party_meta_and_loot", "safe_room_checkpoint_rules"},
+	"slice_of_life":      {"low_stakes_no_world_threat", "food_weather_and_routine_texture", "found_family_slow_burn", "episodic_season_structure", "seasonal_rhythm", "small_workplace_cast"},
+	"iyashikei":          {"gentle_narrative_no_villain", "nature_hot_spring_food_motifs", "small_regulars_cast_roster", "seasonal_ritual_structure", "healing_arc_without_trauma_porn", "quiet_community_warmth"},
+	"school_life":        {"term_calendar_drives_plot", "uniform_and_seating_codes", "cultural_festival_arc_beats", "teacher_administration_friction", "club_and_committee_politics", "exam_hierarchy_pressure"},
+	"spokon":             {"training_montage_discipline", "match_by_match_bracket_structure", "sport_rule_authenticity", "physical_limits_plot_driver", "team_egos_and_roles", "career_window_pressure"},
+	"mecha":              {"mech_sync_cost_to_pilot", "production_line_logistics", "mobile_suit_vs_frame_doctrine", "war_broadcast_propaganda", "pilot_chain_of_command", "colony_vs_earth_politics"},
+	"harem":              {"cast_archetype_spread", "flag_reading_comedy", "jealousy_without_villainy", "relationship_negotiation_rules", "oblivious_protagonist_engine", "shared_goal_bonds"},
+	"ecchi":              {"comic_timing_over_logic", "boundaries_consent_humor_rules", "serious_core_underneath_gags", "running_gag_inventory", "misreading_signal_comedy", "fan_service_with_limits"},
+	"revenge":            {"evidence_chain_over_years", "identity_change_after_fall", "moral_line_defined_early", "allies_gathered_one_debt_at_a_time", "institutional_wall", "mirror_of_self_target"},
 }
 
 // MatchGenreKey maps a free-form story Type (any language) to a preset genre key, or "" if none matches.
@@ -595,6 +735,8 @@ func MatchGenreKey(storyType string) string {
 		{"romance:romcom", []string{"romantic comedy", "rom-com", "romcom", "爱情喜剧", "甜宠喜剧"}},
 		{"mystery:police_procedural", []string{"police procedural", "detective squad", "cold case", "警匪剧", "刑侦", "罪案小组"}},
 		{"literary", []string{"literary fiction", "literary novel", "existential", "philosophical novel", "纯文学", "文艺小说", "存在主义", "哲学小说"}},
+		// round 6: Drama as a first-class parent genre (checked before generic keys)
+		{"drama", []string{"drama", "family saga", "coming of age", "coming-of-age", "bildungsroman", "psychorealism", "metafiction", "domestic saga", "slice of life drama", "剧情", "家庭史诗", "成长小说", "文艺"}},
 		{"graphic_novel", []string{"graphic novel", "comic", "manga script", "图像小说", "漫画"}},
 		// parent genres after the specific ones
 		{"fantasy", []string{"fantasy", "奇幻", "玄幻", "魔幻"}},
@@ -632,6 +774,20 @@ var SubgenrePresetKeys = []string{
 	"sports romance", "historical fiction", "nautical", "picaresque", "gothic",
 	"folk horror", "space western", "military fantasy", "cozy sci-fi",
 	"zombie apocalypse", "superhero", "steampunk", "dark academia", "swashbuckler",
+	// round 6: new subgenres + Drama parent-genre subgenres
+	"magical realism", "noblebright", "grimdark", "haunted house",
+	"mecha", "regression", "villainess", "otome", "battle royale", "tower climbing", "school life",
+	"spokon", "iyashikei", "ecchi", "harem",
+	// round 8: anime/webnovel modifiers promoted to first-class subgenres per
+	// user request (wuxia/xianxia/romantasy/isekai/revenge/dungeon core/
+	// battle royale/tower climbing/mecha/spokon/ecchi/harem/school life/
+	// iyashikei/villainess/otome/regression already listed above or in earlier
+	// rounds). Mahou-shoujo/shounen and erotica added now.
+	"mahou shoujo", "mahou shonen", "erotica", "slice of life",
+	"family saga", "coming-of-age", "psychorealism", "metafiction", "existentialist fiction",
+	"philosophical", "historical saga", "legal drama", "medical drama", "sports drama",
+	"war drama", "courtroom drama", "domestic drama", "epistolary", "tragedy", "melodrama",
+	"satire", "allegory", "bildungsroman",
 }
 
 // SubgenreHints maps every subgenre preset (see SubgenrePresetKeys) to a
@@ -691,6 +847,46 @@ var SubgenreHints = map[string][2]string{
 	"steampunk":            {"Era victoriana con maquinaria de vapor.", "Victorian era driven by steam machinery."},
 	"dark academia":        {"Universidades elegantes con secretos letales.", "Elegant universities hiding lethal secrets."},
 	"swashbuckler":         {"Duelos, piratas y capas al viento.", "Duels, pirates and caped derring-do."},
+	// round 6: new subgenre hints
+	"magical realism":        {"Lo maravillozo ocurre sin asombro en un mundo realista.", "The marvelous happens matter-of-factly in a realistic world."},
+	"noblebright":            {"Mundo esperanzador donde las acciones mejoran todo.", "Hopeful world where good actions genuinely improve things."},
+	"grimdark":               {"Brutalidad moral donde cada victoria cuesta.", "Moral brutality where every victory exacts its price."},
+	"haunted house":          {"El terror vive dentro de un hogar concreto.", "Terror lives inside one specific home."},
+	"mecha":                  {"Pilotos, máquinas de guerra y sus costes humanos.", "Pilots, war machines and their human cost."},
+	"regression":             {"Volver al pasado con el conocimiento del futuro.", "Returning to the past armed with future knowledge."},
+	"villainess":             {"Reencarnada como villana doomed: reescribe su guion.", "Reborn as the doomed villainess: rewriting her script."},
+	"otome":                  {"Mundo de juego otome: rutas, banderas y corazones.", "Otome-game world: routes, flags and hearts."},
+	"battle royale":          {"Último en pie bajo un reloj que se cierra.", "Last standing under a closing-clock arena."},
+	"tower climbing":         {"Plantas, puertas y pruebas hacia la cima.", "Floors, gates and trials toward the summit."},
+	"school life":            {"Aulas, clubes y ritmos de calendario escolar.", "Classrooms, clubs and school-calendar rhythms."},
+	"spokon":                 {"Deporte como disciplina: entrenamiento y superación.", "Sports as discipline: training and self-mastery."},
+	"iyashikei":              {"Historia sanadora, sin villanos, solo calidez.", "Healing story: no villains, only warmth."},
+	"ecchi":                  {"Comedia de enredos subidos de tono con corazón.", "Risqué comedy of errors with a sincere core."},
+	"harem":                  {"Un protagonista, muchos afectos en equilibrio.", "One lead, many affections in comedic balance."},
+	// round 8: remaining anime/webnovel modifiers as first-class subgenres
+	"mahou shoujo":           {"Magia, transformación y vínculos con corazón adolescente.", "Transformation magic, familiar bonds and a teenage heart."},
+	"mahou shonen":           {"Héroes mágicos jóvenes que aprenden el coste del poder.", "Young magic heroes learning the cost of power."},
+	"slice of life":          {"Sin amenaza mundial: rutina, comida y vínculos.", "No world threat: routine, food and gentle bonds."},
+	"erotica":                {"Intimidad explícita como trama central adulta.", "Explicit intimacy driving an adult-centered plot."},
+	"family saga":            {"Generaciones de una familia sobre un siglo.", "Generations of one family across an era."},
+	"coming-of-age":          {"El umbral doloroso y tierno de crecer.", "The painful, tender threshold of growing up."},
+	"psychorealism":          {"Realismo psicológico: la vida interior como trama.", "Psychological realism: inner life drives the plot."},
+	"metafiction":            {"Ficción consciente de ser ficción.", "Fiction knowingly about being fiction."},
+	"existentialist fiction": {"Elección, absurdo y libertad sin red.", "Choice, absurdity and freedom without safety nets."},
+	"philosophical":          {"Ideas puestas a prueba por personajes vivos.", "Living characters testing big ideas."},
+	"historical saga":        {"Familias arrastradas por eventos históricos.", "Families swept along by historical events."},
+	"legal drama":            {"Tribunales, ética y estrategias legales.", "Courtrooms, ethics and legal strategy."},
+	"medical drama":          {"Hospitales, triaje y decisiones vitales.", "Hospitals, triage and life-or-death calls."},
+	"sports drama":           {"Temporadas, rivales y cuerpos al límite.", "Seasons, rivals and bodies at their limit."},
+	"war drama":              {"La guerra desde sus consecuencias humanas.", "War through its human consequences."},
+	"courtroom drama":        {"Un juicio como escenario completo.", "One trial as the whole stage."},
+	"domestic drama":         {"Conflicto íntimo dentro de un hogar.", "Intimate conflict inside one household."},
+	"epistolary":             {"La historia contada en cartas y documentos.", "The story told through letters and documents."},
+	"tragedy":                {"Un defecto conduce al derrumbe inevitable.", "One flaw drives the inevitable downfall."},
+	"melodrama":              {"Emoción intensa, giros grandes, corazón sincero.", "Big feelings, big reversals, sincere heart."},
+	"satire":                 {"Risa afilada contra instituciones y modas.", "Sharp laughter aimed at institutions and fads."},
+	"allegory":               {"Cada elemento significa otra cosa además.", "Every element means something beyond itself."},
+	"bildungsroman":          {"Formación de una persona a lo largo de los años.", "A person formed across the years of growth."},
 }
 
 // AudienceKeys lists the valid target_audience values. YA/middle-grade moved here

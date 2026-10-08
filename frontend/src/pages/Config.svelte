@@ -3,7 +3,7 @@
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
   import { apiConfig, config, progress, settings, editingCharID, editingWvID, wvFilter, addToast, showConfirm, taskRunning, apiTestResult } from '../lib/stores.js';
-  import { t } from '../lib/i18n/index.js';
+  import { t, uiLocale } from '../lib/i18n/index.js';
   import { resolveChatCompletionsURL } from '../lib/apiUrl.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
   import { GENRES, SUBGENRE_DATA } from '../lib/novelwriterGenres.js';
@@ -95,20 +95,32 @@
 let SUBGENRE_HINTS = {};
 let STRUCTURE_HINTS = {};
 let SUBGENRE_PRESETS = [];
+// Story length / structure catalogs & presets, refreshed from /api/novel-params
+// (backend is the single source of truth: config.LengthKeys,
+// config.AllStructureKeys, config.TargetWordsPresetByLength). The literals
+// below are fallbacks used before the first fetch resolves.
+let LENGTH_KEYS = ['flash', 'short', 'novelette', 'novella', 'light_novel', 'anthology', 'novel', 'epic'];
+let ALL_STRUCTURE_KEYS = ['three_act', 'six_act', 'fichtean', 'freytag', 'seven_point', 'heros_journey', 'heros_journey_simple', 'save_the_cat', 'story_circle', 'kishotenketsu', 'snowflake', 'quest', 'romance_arc', 'episodic'];
+let TARGET_WORDS_BY_LENGTH = { flash: 1000, short: 2000, novelette: 2500, novella: 2500, light_novel: 3500, anthology: 4000, novel: 3000, epic: 3000 };
 let novelParamsTick = 0;
 function subgenreHint(s) { return SUBGENRE_HINTS[(s || '').toLowerCase()] || ''; }
 function structHint(k) { return STRUCTURE_HINTS[k] || ''; }
 
 // Novel parameters: genre presets (mirror of backend config.Genre* maps; "other" is always available).
+// Round 7: the parent-genre mirrors now cover EVERY genre offered in the Genre
+// select (including Drama) and stay in sync with internal/config/config.go —
+// previously only 8 genres were mirrored here, so selecting e.g. "Drama" left
+// the Conflict/Protagonist dropdowns empty until /api/novel-params arrived.
 const GENRE_CONFLICTS = {
-fantasy: ['Personal Quest', 'Kingdom-wide', 'World-saving', 'Good vs Evil', 'Political Intrigue'],
-scifi: ['Personal', 'Planetary', 'Interstellar', 'Galactic'],
+fantasy: ['Personal Quest', 'Kingdom-wide', 'World-saving', 'Good vs Evil', 'Political Intrigue', 'Sect/Realm Wars'],
+scifi: ['Personal', 'Planetary', 'Interstellar', 'Galactic', 'Humanity vs Technology'],
 mystery: ['Personal Mystery', 'Community Secret', 'Local Crime', 'Family Mystery', 'Historical Puzzle'],
 romance: ['Personal Growth', 'Relationship Obstacles', 'Career vs Love', 'Family Issues', 'Past Trauma'],
 thriller: ['International Conspiracy', 'Government Secrets', 'Spy Networks', 'National Security', 'Global Politics'],
-horror: ['Personal Haunting', 'Family Curse', 'Supernatural Threat', 'Psychological Terror', 'Ancient Evil'],
+horror: ['Personal Haunting', 'Family Curse', 'Supernatural Threat', 'Psychological Terror', 'Ancient Evil', 'Cosmic Indifference'],
 historical: ['Tribal Warfare', 'Religious Conflicts', 'Ancient Politics', 'Survival Struggles', 'Civilization Building'],
 western: ['Personal Vendetta', 'Town Protection', 'Range War', 'Law vs Lawlessness', 'Civilization vs Wilderness'],
+drama: ['Silence Inside a Family', 'Self vs Meaning', 'Duty vs Desire', 'Identity Unraveling', 'Institution vs Individual', 'Generational Legacy'],
 };
 const GENRE_PROTAGONISTS = {
 fantasy: ['Chosen One', 'Magic User', 'Knight/Warrior', 'Royal Heir', 'Common Hero', 'Prophesied One'],
@@ -119,16 +131,18 @@ thriller: ['Secret Agent', 'Intelligence Officer', 'Double Agent', 'Spy Handler'
 horror: ['Haunted Individual', 'Investigator', 'Innocent Victim', 'Cursed Person', 'Gothic Hero', 'Tormented Soul'],
 historical: ['Ancient Warrior', 'Priest/Priestess', 'Tribal Leader', 'Ancient Scholar', 'Slave', 'Ancient Ruler'],
 western: ['Sheriff/Marshal', 'Gunslinger', 'Rancher', 'Outlaw', 'Bounty Hunter', 'Frontier Doctor'],
+drama: ['Matriarch or Patriarch Holding a Fractured Family', 'Coming-of-age Everyteen on a Threshold', 'Ordinary Person Facing an Unremarkable Crisis', 'Idealist Ground Down by an Institution', 'Griever Rebuilding a Life After Loss'],
 };
 const GENRE_SETTINGS = {
-fantasy: ['magic_system', 'medieval_setting', 'mythical_creatures', 'epic_scale'],
-scifi: ['interstellar_travel', 'advanced_technology', 'multiple_species', 'space_combat'],
-mystery: ['small_community', 'amateur_detective', 'low_violence', 'puzzle_focus', 'recurring_characters'],
-romance: ['modern_setting', 'relationship_focus', 'emotional_journey', 'happy_ending', 'realistic_world'],
-thriller: ['international_intrigue', 'spy_networks', 'government_secrets', 'double_agents', 'global_stakes'],
-horror: ['atmospheric_dread', 'isolated_setting', 'supernatural_elements', 'psychological_terror', 'dark_atmosphere'],
-historical: ['ancient_civilizations', 'mythological_elements', 'tribal_societies', 'ancient_religions', 'primitive_technology'],
-western: ['frontier_setting', 'lawlessness', 'honor_code', 'survival_focus', 'horse_culture'],
+fantasy: ['magic_system', 'medieval_setting', 'mythical_creatures', 'epic_scale', 'political_dynasties', 'wuxia', 'xianxia', 'cozy', 'urban', 'gothic', 'dark_academia', 'romantasy', 'swashbuckler'],
+scifi: ['interstellar_travel', 'advanced_technology', 'multiple_species', 'space_combat', 'ai_singularity', 'cyberpunk', 'solarpunk', 'steampunk', 'space_opera', 'dystopian', 'postapo', 'military', 'superhero'],
+mystery: ['small_community', 'amateur_detective', 'low_violence', 'puzzle_focus', 'recurring_characters', 'noir', 'heist', 'cozy', 'urban', 'locked_room_impossible_crime', 'mystery_police', 'gothic'],
+romance: ['modern_setting', 'relationship_focus', 'emotional_journey', 'happy_ending', 'realistic_world', 'romcom', 'romantasy', 'small_town_or_urban_backdrop', 'cozy', 'urban', 'historical_courtship', 'dark_academia'],
+thriller: ['international_intrigue', 'spy_networks', 'government_secrets', 'double_agents', 'global_stakes', 'heist', 'noir', 'military_intelligence', 'urban', 'mystery_police', 'cyberpunk'],
+horror: ['atmospheric_dread', 'isolated_setting', 'supernatural_elements', 'psychological_terror', 'dark_atmosphere', 'cosmic_horror', 'gothic', 'dark_academia', 'folk_customs_and_rites', 'postapo', 'urban'],
+historical: ['ancient_civilizations', 'mythological_elements', 'tribal_societies', 'ancient_religions', 'primitive_technology', 'medieval_setting', 'mythical_creatures', 'epic_scale', 'court_intrigue', 'nautical', 'swashbuckler', 'military'],
+western: ['frontier_setting', 'lawlessness', 'honor_code', 'survival_focus', 'horse_culture', 'swashbuckler_frontier_action', 'nautical_ports_and_trails', 'picaresque', 'noir'],
+drama: ['interiority_over_plot', 'multi_generational_timeline', 'quiet_realism', 'moral_ambiguity_no_cartoon_villains', 'time_nonlinear_or_elided', 'open_or_bittersweet_endings_ok', 'found_family_or_bloodline', 'institution_as_stage', 'letters_or_messages_format', 'everyday_life_texture'],
 };
 const GENRE_KEYWORDS = [
 ['fantasy', ['fantasy', '奇幻', '玄幻', '魔幻']],
@@ -186,34 +200,70 @@ const OTHER_GENRE = '__other__';
 let selectedGenreKey = '';   // one of GENRES keys or OTHER_GENRE; '' = not classified yet
 let subgenreManual = false;  // true while the user types a custom subgenre in "Other" mode
 let lastAutoSubgenre = '';   // subgenre we auto-set, so we don't clobber manual edits
+let subgenreOtherMode = false; // explicit "Other" picked in the subgenre dropdown (declared early: initGenreCascade uses it)
+let subgenreOptions = [];      // reactive list rebuilt below (initGenreCascade reads it)
+const OTHER_SUBGENRE = '__other__';
+let subgenreOtherText = '';    // free-text value while subgenreOtherMode is on
 
 function initGenreCascade() {
   const t = (localStoryCfg.type || '').trim();
   // Exact label match first: a known genre ("Fantasy") must never fall into the
   // "Other" box just because keyword matching failed on it.
   const exact = GENRES.find((x) => x.label.toLowerCase() === t.toLowerCase());
-  if (exact) { selectedGenreKey = exact.key; subgenreManual = false; return; }
+  if (exact) { selectedGenreKey = exact.key; subgenreManual = false; subgenreOtherMode = false; return; }
   const g = genreKeyDerived ? GENRES.find((x) => x.key === genreKeyDerived) : null;
-  if (g) { selectedGenreKey = g.key; subgenreManual = false; }
+  if (g) { selectedGenreKey = g.key; subgenreManual = false; subgenreOtherMode = false; }
   else if (t) { selectedGenreKey = OTHER_GENRE; subgenreManual = true; }
   else { selectedGenreKey = ''; subgenreManual = false; }
+  // If the stored subgenre is not in the resolved genre's preset list, keep the
+  // "Other" free-text input visible with the current value so it can be edited.
+  if (selectedGenreKey && selectedGenreKey !== OTHER_GENRE) {
+    const cur = (localStoryCfg.subgenre || '').trim();
+    subgenreOtherMode = !!cur && !subgenreOptions.some((o) => o.toLowerCase() === cur.toLowerCase());
+    if (subgenreOtherMode) subgenreOtherText = cur;
+  }
 }
 initGenreCascade();
 
 $: if (genreKeyDerived !== undefined) { void genreKeyDerived; }
 
-// Keep the parent-genre select in sync when the story type changes externally (load/save).
-$: if (!subgenreManual && genreKeyDerived && genreKeyDerived !== selectedGenreKey && genreKeyDerived !== OTHER_GENRE) {
-  selectedGenreKey = genreKeyDerived;
+// Keep the parent-genre select in sync when the story type changes externally
+// (load/save). Round 11 fix: this used to be gated on `!subgenreManual`, but
+// subgenreManual is also set while the user types a custom SUBGENRE in "Other"
+// free-text mode — so after picking e.g. Drama + custom subgenre, any later
+// save round-trip re-derived the genre from the old `type` text and silently
+// flipped selectedGenreKey back, making the Genre select appear "stuck". The
+// cascade state is now owned exclusively by the Genre select / onGenreChange;
+// this reactive only follows external store updates (never mid-editing of the
+// free-text genre input, which would fight bind:value there).
+let lastStoryTypeSync = '';
+$: if ($config?.story && $config.story.type !== undefined) {
+  const t = String($config.story.type || '');
+  if (t !== lastStoryTypeSync) {
+    lastStoryTypeSync = t;
+    if (selectedGenreKey !== OTHER_GENRE) {
+      const derived = matchGenreKey(t);
+      if (derived && derived !== selectedGenreKey) selectedGenreKey = derived;
+    }
+  }
 }
 
 function onGenreChange() {
   if (selectedGenreKey === OTHER_GENRE) {
+    // Genre "Other": mirror the Subgenre "Other" pattern — keep whatever type
+    // text exists as the starting value of the free-text input below the
+    // select, and clear the subgenre so it doesn't leak the old genre's list.
     localStoryCfg.type = subgenreManual ? localStoryCfg.type : '';
     localStoryCfg.subgenre = '';
     subgenreManual = true;
+    subgenreOtherMode = false;
+    subgenreOtherText = '';
   } else {
+    // Leaving "Other" mode: drop any stale manual flag left over from the
+    // free-text genre input so future saves don't suppress the reactive sync.
     subgenreManual = false;
+    subgenreOtherMode = false;
+    subgenreOtherText = '';
     const g = GENRES.find((x) => x.key === selectedGenreKey);
     if (g) {
       localStoryCfg.type = g.label;
@@ -229,25 +279,155 @@ function onGenreChange() {
   }
 }
 
-function onSubgenreChange() {
-  const g = GENRES.find((x) => x.key === selectedGenreKey);
-  if (g && !g.subgenres.includes(localStoryCfg.subgenre)) {
-    selectedGenreKey = OTHER_GENRE;
-    subgenreManual = true;
+  // Subgenre select handler: choosing the explicit "Other" entry switches to
+  // free-text mode (the parent genre is NOT changed — the old behavior of
+  // kicking the user into Genre=Other whenever an unknown subgenre was typed
+  // is gone). Picking a listed subgenre leaves manual mode.
+  // NOTE: OTHER_SUBGENRE / subgenreOtherText / subgenreOtherMode are declared
+  // early in the script (next to the other cascade state) because
+  // initGenreCascade() runs at module init and reads them; do not redeclare.
+  function onSubgenreSelect(e) {
+    const v = e.target.value;
+    if (v === OTHER_SUBGENRE) {
+      // Round 12: entering "Other" mode starts with an EMPTY free-text field —
+      // exactly like the Genre "Other" input — instead of pre-filling it with
+      // the previously selected subgenre (the reported bug). The stored value
+      // is cleared too, so nothing stale lingers if the user saves right away.
+      // The input stays mounted because the template keys off subgenreOtherMode
+      // (not subgenreSelValue), so clearing localStoryCfg.subgenre can no
+      // longer flip the field back to the plain select mid-typing.
+      subgenreOtherText = '';
+      // Round 12b: do NOT clear localStoryCfg.subgenre here — the save handler
+      // serializes that field, and wiping it would silently drop the user's
+      // previous subgenre if they hit Save before typing. onSubgenreOther()
+      // overwrites it with the typed text as soon as the user writes anything;
+      // an empty box simply keeps the stored value until then.
+      subgenreOtherMode = true;
+      subgenreManual = true;
+      lastAutoSubgenre = '';
+      refreshCheckedSettings();
+      return;
+    }
+    subgenreOtherMode = false;
+    subgenreManual = false;
+    localStoryCfg.subgenre = v;
+    lastAutoSubgenre = '';
+    refreshCheckedSettings();
   }
-}
 
-$: subgenreOptions = (() => {
-  const g = GENRES.find((x) => x.key === selectedGenreKey);
-  return g ? g.subgenres : [];
+  // Display label for a lowercase backend preset key ("mahou shoujo" ->
+  // "Mahou Shoujo"). Used when surfacing presets in the subgenre dropdown.
+  function titleCasePreset(s) {
+    return String(s || '').replace(/(^|[\s-])(\S)/g, (_m, sep, ch) => sep + ch.toUpperCase());
+  }
+
+  // Subgenre "Other": keep the free-text state OUT of localStoryCfg.subgenre.
+  // If we stored the typed text there, every keystroke would make the value
+  // mismatch the current option list, flipping `subgenreSelValue` to
+  // OTHER_SUBGENRE and re-running the reactive $: block — which previously
+  // remounted the input mid-typing (the reported "can't type in Other" bug).
+  // The template now keys off subgenreOtherMode only; onSubgenreOther just
+  // syncs the trimmed text into localStoryCfg.subgenre without touching mode
+  // flags, so the <input> element is never recreated while typing.
+  function onSubgenreOther() {
+    const t = subgenreOtherText.trim();
+    if (t !== localStoryCfg.subgenre) localStoryCfg.subgenre = t;
+    subgenreManual = true;
+    refreshCheckedSettings();
+  }
+
+  // Subgenre options for the selected parent genre. The cascade select always
+  // carries an explicit "Other" entry (OTHER_SUBGENRE): picking it swaps the
+  // select for a free-text input so any custom subgenre can be typed in — same
+  // pattern as the Genre field above.
+  // Round 8: when no parent genre is selected (or it is "Other"), offer the
+  // full backend preset catalog instead of an empty list — the user asked to
+  // find wuxia/xianxia/romantasy/isekai/revenge/mahou shoujo/mahou shonen/
+  // spokon directly in the Subgenre dropdown, not only via the modifier panel.
+  $: subgenreOptions = (() => {
+    void novelParamsTick;
+    const g = GENRES.find((x) => x.key === selectedGenreKey);
+    if (!g) {
+      // No resolved parent genre: title-case every backend preset so the
+      // dropdown stays readable ("mahou shoujo" -> "Mahou Shoujo").
+      return [...new Set(SUBGENRE_PRESETS.map(titleCasePreset))];
+    }
+    const list = [...g.subgenres];
+    // Surface server-provided presets that belong to this genre but are not in
+    // the static list (keeps frontend and backend catalogs consistent).
+    const gk = g.key.toLowerCase();
+    for (const s of SUBGENRE_PRESETS) {
+      const meta = SUBGENRE_DATA[s];
+      if (meta && meta.genre === gk && !list.includes(s)) list.push(s);
+    }
+    // Backend-only modifiers with no NovelWriter metadata (regression,
+    // villainess...): append every preset whose name also appears as a
+    // conflict/protagonist/settings key on the server, so the dropdown stays in
+    // sync with /api/novel-params instead of the static file. Matched
+    // case-insensitively so title-cased labels ("Isekai") resolve too.
+    for (const s of SUBGENRE_PRESETS) {
+      const tc = titleCasePreset(s);
+      if (list.includes(s) || list.includes(tc)) continue;
+      const meta = SUBGENRE_DATA[s] || SUBGENRE_DATA[tc];
+      const keys = [s.toLowerCase().replace(/\s+/g, '_'), s.toLowerCase()];
+      if ((meta && meta.genre === gk) || keys.some((k) => GENRE_CONFLICTS[k] || GENRE_PROTAGONISTS[k] || GENRE_SETTINGS[k])) list.push(tc);
+    }
+    return list;
+  })();
+$: subgenreSelValue = (() => {
+  if (subgenreOtherMode) return OTHER_SUBGENRE;
+  const cur = (localStoryCfg.subgenre || '').trim();
+  if (!cur) return '';
+  // Bug-fix (round 8): case-insensitive membership check. The dropdown now
+  // surfaces title-cased labels ("Mahou Shoujo", "Isekai"...); a stored value
+  // with different capitalization must still resolve to its option instead of
+  // silently flipping the field into free-text "Other" mode.
+  const lc = cur.toLowerCase();
+  return subgenreOptions.some((o) => o.toLowerCase() === lc) ? cur : OTHER_SUBGENRE;
 })();
 
+// Reactive value shown in the genre/subgenre info box: while the "Other"
+// free-text input is active we describe what the user typed (live), otherwise
+// the stored subgenre. Declared as a $: so the template can use it directly.
+$: infoSubgenre = String(subgenreSelValue === OTHER_SUBGENRE ? subgenreOtherText : localStoryCfg.subgenre || '');
+
 // Options derived from the selected subgenre (NovelWriter per-subgenre configs), falling back to genre-level lists.
+// Round 7: genre-key lookups go through `genreKeyForCascade`, which also takes
+// the free-form Subgenre text into account. NovelWriter's SUBGENRE_DATA has no
+// entry for anime/webnovel modifiers (isekai, litRPG, regression, dungeon
+// core...), so previously those selections left Conflict/Protagonist/Tone/
+// Settings empty even though the backend has full presets for them. The
+// backend-derived GENRE_* maps (refreshed from /api/novel-params) do contain
+// those keys — this bridges the two.
+const MODIFIER_SUBGENRE_KEYS = {
+  'lit rpg': 'litrpg', 'litrpg': 'litrpg',
+  'isekai': 'isekai', 'dungeon core': 'dungeon', 'tower climbing': 'tower_climbing',
+  'battle royale': 'battle_royale', 'regression': 'regression_rebirth', 'villainess': 'isekai:villainess',
+  'otome': 'isekai:otome', 'mecha': 'mecha', 'school life': 'school_life', 'spokon': 'spokon',
+  'iyashikei': 'iyashikei', 'ecchi': 'ecchi', 'harem': 'harem', 'revenge': 'revenge',
+  'solo leveling': 'manhwa_system', 'system manhwa': 'manhwa_system',
+};
+function genreKeyForCascade(typeText, subgenreText) {
+  const sg = (subgenreText || '').trim().toLowerCase();
+  const mod = MODIFIER_SUBGENRE_KEYS[sg];
+  if (mod && ((novelParamsTick, GENRE_CONFLICTS[mod] || GENRE_PROTAGONISTS[mod]))) return mod;
+  // Backend MatchGenreKey understands composite keys like "scifi:superhero" and
+  // "horror:gothic" from Type+Subgenre text; try it via the server-refreshed
+  // maps before falling back to the plain Type match.
+  const combo = `${typeText || ''} ${sg}`.trim().toLowerCase();
+  if (sg) {
+    for (const k of Object.keys(GENRE_CONFLICTS)) {
+      if (k.includes(':') && combo.includes(k.split(':')[1])) return k;
+    }
+  }
+  return matchGenreKey(typeText);
+}
+$: cascadeGenreKey = genreKeyForCascade(localStoryCfg.type, localStoryCfg.subgenre);
 $: subgenreCfg = SUBGENRE_DATA[(localStoryCfg.subgenre || '').trim()] || null;
-$: conflictOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.conflicts : (genreKeyDerived ? GENRE_CONFLICTS[genreKeyDerived] : []));
-$: protagonistOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.protagonists : (genreKeyDerived ? GENRE_PROTAGONISTS[genreKeyDerived] : []));
+$: conflictOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.conflicts : (cascadeGenreKey ? GENRE_CONFLICTS[cascadeGenreKey] : []));
+$: protagonistOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.protagonists : (cascadeGenreKey ? GENRE_PROTAGONISTS[cascadeGenreKey] : []));
 $: toneOpts = subgenreCfg ? subgenreCfg.tones : [];
-$: settingSuggestions = (novelParamsTick, subgenreCfg ? subgenreCfg.settings : (genreKeyDerived ? GENRE_SETTINGS[genreKeyDerived] : []));
+$: settingSuggestions = (novelParamsTick, subgenreCfg ? subgenreCfg.settings : (cascadeGenreKey ? GENRE_SETTINGS[cascadeGenreKey] : []));
 
 // Tone: free-text field with per-subgenre suggestions (NovelWriter tones).
 function toneList(v) {
@@ -296,6 +476,60 @@ function onProtSelect(e) {
   else { localStoryCfg.protagonist_type = v; localStoryCfg.protagonist_other = ''; }
 }
 
+// Info box (round 11): one-line description of the selected parent genre,
+// keyed by GENRES[].key. The subgenre side of the box uses the backend
+// subgenre_hints (via subgenreHint()); these static blurbs cover the genre.
+const GENRE_BLURBS = {
+  en: {
+    fantasy: 'Imaginative worlds with magic, mythical creatures or supernatural rules — from epic secondary worlds to urban hidden societies.',
+    scifi: 'Speculative fiction grounded in technology, science or future societies: space opera, cyberpunk, dystopia, first contact…',
+    mystery: 'Crime and puzzles at the center: an investigation drives the plot, from cozy village whodunits to hard-boiled noir and heists.',
+    romance: 'The love story is the main plot — emotional arcs, relationship obstacles and a satisfying ending are promised to the reader.',
+    thriller: 'Pace, danger and suspense: chases, conspiracies and high stakes, whether espionage, legal, domestic or action-driven.',
+    horror: 'Designed to frighten and unsettle: supernatural dread, cosmic insignificance, body terror or the monsters next door.',
+    historical: 'Fiction anchored in a real period, with period-authentic settings, customs and events shaping the characters’ lives.',
+    western: 'Frontier stories of lawlessness, honor codes and open land — classic, spaghetti, weird or transplanted to space.',
+    drama: 'Character-first literary fiction: family sagas, coming-of-age, psychorealism, metafiction, existentialist and philosophical stories.',
+  },
+  zh: {
+    fantasy: '幻想世界：魔法、神话生物或超自然规则——从史诗第二世界到都市隐秘社会。',
+    scifi: '以科技、科学或未来社会为根基的推想小说：太空歌剧、赛博朋克、反乌托邦、初次接触……',
+    mystery: '以罪案与谜团为核心：调查推动情节，从乡村安乐椅推理到硬汉黑色电影式侦探与劫案故事。',
+    romance: '爱情故事即主线情节——情感弧线、关系障碍与令读者满意的结局是这类作品的承诺。',
+    thriller: '节奏、危险与悬念：追逐、阴谋与高风险，无论是谍战、律政、家庭还是动作向。',
+    horror: '以制造恐惧与不安为目的：超自然惊悚、宇宙性渺小、肉体恐怖或身边的怪物。',
+    historical: '扎根于真实历史时期的小说，时代风物、习俗与事件塑造人物命运。',
+    western: '边疆故事：无法无天、荣誉准则与旷野——经典、意大利面式、怪异或移植到太空的西部片。',
+    drama: '以人物为先的文学小说：家族史诗、成长、心理写实、元小说、存在主义与哲思故事。',
+  },
+};
+function genreBlurb(key) {
+  const lang = get(uiLocale) === 'zh' ? 'zh' : 'en';
+  return (GENRE_BLURBS[lang] || GENRE_BLURBS.en)[key] || '';
+}
+
+// restoreSubgenreSelect: return from the "Other" free-text mode to the
+// predefined dropdown of the current genre. (The onSubgenreOther handler is
+// declared next to the cascade state above — do not redeclare it here.)
+function restoreSubgenreSelect() {
+  // Back to the predefined list: keep the current value only if it is valid
+  // (case-insensitive, so a stored "mahou shoujo" snaps to the "Mahou Shoujo"
+  // option instead of being replaced by the first entry).
+  const cur = (localStoryCfg.subgenre || '').trim();
+  const match = subgenreOptions.find((o) => o.toLowerCase() === cur.toLowerCase());
+  if (match) {
+    localStoryCfg.subgenre = match;
+    subgenreManual = false;
+  } else {
+    localStoryCfg.subgenre = subgenreOptions[0] || '';
+    lastAutoSubgenre = localStoryCfg.subgenre;
+    subgenreManual = false;
+  }
+  subgenreOtherMode = false;
+  subgenreOtherText = '';
+  refreshCheckedSettings();
+}
+
 // Specific settings as checkboxes: parse the stored newline-separated list into a set.
 let checkedSettings = new Set();
 let customSettingsText = '';
@@ -341,9 +575,49 @@ if (p.specific_settings) for (const k of Object.keys(p.specific_settings)) GENRE
 if (p.subgenre_hints) SUBGENRE_HINTS = p.subgenre_hints;
 if (p.structure_hints) STRUCTURE_HINTS = p.structure_hints;
 if (Array.isArray(p.subgenre_presets)) SUBGENRE_PRESETS = p.subgenre_presets;
+// Backend is the source of truth for length/structure catalogs and the
+// target-words-per-chapter presets applied when the length changes.
+if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
+if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
+if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
+// Round 7: cross-cutting modifier presets ("Isekai", "Wuxia", "Cozy"...) are
+// now exposed by the backend regardless of the selected genre, so the user
+// can stack them on any combination via checkboxes.
+if (p.modifier_presets) MODIFIER_PRESETS = p.modifier_presets;
 novelParamsTick++;
 }
 } catch (e) {}
+}
+
+// —— Modifier stacking (round 7) —
+// Subgenre-style modifiers that can be layered on top of ANY genre/subgenre
+// selection (isekai, wuxia, cyberpunk, cozy...). Filled from
+// /api/novel-params -> modifier_presets ({modifier: [setting tokens]}). The UI
+// renders each as a collapsible group of checkboxes; checking one appends its
+// settings to specific_settings (deduped), unchecking removes exactly those
+// lines again without touching custom entries.
+let MODIFIER_PRESETS = {};
+function modifierGroups() {
+return Object.keys(MODIFIER_PRESETS).sort((a, b) => a.localeCompare(b)).map((name) => ({ name, settings: MODIFIER_PRESETS[name] || [] }));
+}
+function currentSettingsList() {
+return (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
+}
+function modifierChecked(name) {
+const list = currentSettingsList();
+const s = MODIFIER_PRESETS[name] || [];
+return s.length > 0 && s.every((x) => list.includes(x));
+}
+function toggleModifier(name) {
+const s = MODIFIER_PRESETS[name] || [];
+if (!s.length) return;
+const cur = currentSettingsList();
+if (modifierChecked(name)) {
+localStoryCfg.specific_settings = cur.filter((x) => !s.includes(x)).join('\n');
+} else {
+localStoryCfg.specific_settings = [...new Set([...cur, ...s])].join('\n');
+}
+refreshCheckedSettings();
 }
 
 // —— Randomize (Story parameters) —
@@ -403,22 +677,24 @@ function randomizeStoryParams() {
 }
   let testingApi = false;
 
-  // Novel parameters: structure options depend on the selected story length
-  const LENGTH_KEYS = ['short', 'novella', 'novel', 'epic'];
-  const STRUCTURES_BY_LENGTH = {
-    short: ['three_act', 'fichtean', 'freytag'],
-    novella: ['three_act', 'seven_point', 'heros_journey_simple'],
-    novel: ['three_act', 'six_act', 'save_the_cat', 'heros_journey'],
-    epic: ['six_act', 'heros_journey', 'save_the_cat', 'episodic'],
-  };
-  const DEFAULT_STRUCTURE = { short: 'three_act', novella: 'three_act', novel: 'six_act', epic: 'six_act' };
-  function structureOptions(len) { return STRUCTURES_BY_LENGTH[len] || []; }
-  $: structOpts = structureOptions(localStoryCfg.story_length);
+  // Novel parameters: ALL story structures are always available; the selected
+  // length only suggests a default (and its word-per-chapter preset). The
+  // catalogs below are refreshed from /api/novel-params so the backend stays
+  // the single source of truth.
+  const DEFAULT_STRUCTURE = { flash: 'three_act', short: 'three_act', novelette: 'three_act', novella: 'three_act', light_novel: 'kishotenketsu', anthology: 'episodic', novel: 'six_act', epic: 'six_act' };
+  function structureOptions() { return ALL_STRUCTURE_KEYS; }
+  $: structOpts = structureOptions();
   function onLengthChange() {
-    const opts = structureOptions(localStoryCfg.story_length);
-    if (opts.length && !opts.includes(localStoryCfg.structure)) {
-      localStoryCfg.structure = DEFAULT_STRUCTURE[localStoryCfg.story_length] || opts[0];
-    }
+    // 1) Apply the target-words-per-chapter preset for the new length. The
+    //    field stays freely editable afterwards; unknown lengths keep it as is.
+    const preset = TARGET_WORDS_BY_LENGTH[localStoryCfg.story_length];
+    if (preset) localStoryCfg.target_words_per_chapter = preset;
+    // 2) Suggest a default structure when empty or previously auto-set; manual
+    //    choices and free-text values are never clobbered by a length change.
+    const cur = (localStoryCfg.structure || '').trim();
+    const firstPart = cur.split(',')[0].trim();
+    const wasAuto = !cur || Object.values(DEFAULT_STRUCTURE).includes(firstPart);
+    if (wasAuto) localStoryCfg.structure = DEFAULT_STRUCTURE[localStoryCfg.story_length] || 'three_act';
   }
 
   // AI section generation (based on the story parameters currently in the form)
@@ -821,12 +1097,28 @@ function randomizeStoryParams() {
   $: if ($config?.story) {
     const snap = JSON.stringify($config.story);
     if (snap !== storyCfgSnapshot) {
+      // Preserve the in-progress "Other" subgenre free-text state across
+      // server round-trips (save, generation refresh): re-running
+      // initGenreCascade() here used to flip the field back to the preset
+      // <select> while the user was still typing a custom subgenre.
+      const keepOtherMode = subgenreOtherMode;
+      const keepOtherText = subgenreOtherText;
+      const keepManual = subgenreManual;
       localStoryCfg = { conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', locations_enabled: false, inspirational_pieces: '', output_language: '', ...$config.story };
       if (!localStoryCfg.gender_bias) localStoryCfg.gender_bias = 'random';
       localStoryCfg.locations_enabled = !!$config.story.locations_enabled;
       storyCfgSnapshot = snap;
       refreshCheckedSettings();
       initGenreCascade();
+      if (keepOtherMode) {
+        subgenreOtherMode = true;
+        // Round 12: never re-seed the free-text box from the stored preset
+        // subgenre — that made the "Other" field appear pre-filled with the
+        // previously selected subgenre. Keep exactly what the user has typed
+        // (possibly empty).
+        subgenreOtherText = keepOtherText;
+        subgenreManual = keepManual;
+      }
     }
   }
 
@@ -1431,20 +1723,86 @@ function randomizeStoryParams() {
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.subgenre')}</span>
-            {#if subgenreOptions.length}
-              <select class="select select-sm w-full" bind:value={localStoryCfg.subgenre} on:change={onSubgenreChange} disabled={$taskRunning} title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')}>
+            <!-- Round 11: the select is shown unless the explicit "Other" mode
+                 is active. It used to also test `subgenreSelValue !==
+                 OTHER_SUBGENRE`, which flipped the field to free-text (and hid
+                 the dropdown) whenever a stored subgenre didn't match the
+                 option list — including transiently while typing. -->
+            {#if !subgenreOtherMode}
+              <select class="select select-sm w-full" value={subgenreSelValue} on:change={onSubgenreSelect} disabled={$taskRunning} title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')}>
+                <option value="">{$t('config.story.auto')}</option>
                 {#each subgenreOptions as s}
                   <option value={s}>{s}</option>
                 {/each}
+                <option value={OTHER_SUBGENRE}>{$t('config.story.other')}</option>
               </select>
             {:else}
-              <input type="text" list="subgenre-presets" class="input input-sm w-full" bind:value={localStoryCfg.subgenre} placeholder={$t('config.story.subgenre.placeholder')} disabled={$taskRunning} title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')} />
+              <!-- Free-text subgenre ("Other"): exactly like the Genre field,
+                   an editable input sits BELOW the still-visible dropdown;
+                   choosing a listed subgenre returns to select mode. -->
+              <select class="select select-sm w-full" value={OTHER_SUBGENRE} on:change={onSubgenreSelect} disabled={$taskRunning} title={$t('config.tip.subgenre')}>
+                <option value="">{$t('config.story.auto')}</option>
+                {#each subgenreOptions as s}
+                  <option value={s}>{s}</option>
+                {/each}
+                <option value={OTHER_SUBGENRE}>{$t('config.story.other')}</option>
+              </select>
+              <input type="text" list="subgenre-presets" class="input input-sm w-full mt-1" bind:value={subgenreOtherText} on:input={onSubgenreOther} on:blur={onSubgenreOther} placeholder={$t('config.story.subgenre.placeholder')} disabled={$taskRunning} title={subgenreHint(subgenreOtherText) || $t('config.tip.subgenre')} />
               <datalist id="subgenre-presets">
                 {#each [...new Set([...SUBGENRE_PRESETS, ...Object.keys(SUBGENRE_DATA)])] as s}
                   <option value={s}>{subgenreHint(s)}</option>
                 {/each}
               </datalist>
             {/if}
+          </div>
+          <!-- Info box (round 11): brief explanation of the selected genre and
+               subgenre, right below the two selectors. Subgenre hints come
+               from the backend (/api/novel-params -> subgenre_hints); genre
+               blurbs are static ES/EN one-liners keyed by output language. -->
+          <div class="col-span-2 rounded-md border border-base-content/15 bg-base-100/60 px-3 py-2 text-xs leading-relaxed">
+            {#if localStoryCfg.type || infoSubgenre}
+              <div class="flex flex-wrap gap-x-4 gap-y-1">
+                {#if localStoryCfg.type}
+                  <span><span class="font-semibold opacity-70">{$t('config.story.type')}:</span> {(localStoryCfg.type || '').trim()} — {genreBlurb(selectedGenreKey)}</span>
+                {/if}
+                {#if infoSubgenre}
+                  <span><span class="font-semibold opacity-70">{$t('config.story.subgenre')}:</span> {infoSubgenre.trim()}{#if subgenreHint(infoSubgenre)} — {subgenreHint(infoSubgenre)}{/if}</span>
+                {/if}
+              </div>
+            {:else}
+              <span class="opacity-60">{$t('config.story.infoBox.empty')}</span>
+            {/if}
+          </div>
+          <div class="col-span-2">
+            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.specificSettings')}</span>
+            {#if settingSuggestions.length}
+              <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+                {#each settingSuggestions as s}
+                  <label class="flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={$t('config.tip.specificSettings')}>
+                    <input type="checkbox" class="checkbox checkbox-xs" checked={settingChecked(s)} on:change={() => toggleSetting(s)} disabled={$taskRunning} />
+                    {s.replaceAll('_', ' ')}
+                  </label>
+                {/each}
+              </div>
+            {:else}
+              <p class="text-xs text-base-content/45 mb-1">{$t('config.settings.pickGenre')}</p>
+            {/if}
+            <!-- Cross-cutting subgenre modifiers (round 7): stackable on top of ANY
+                 genre/subgenre combination — Isekai, Wuxia, Cozy, Cyberpunk... -->
+            {#if modifierGroups().length}
+              <details class="mt-1.5" open>
+                <summary class="text-xs text-base-content/65 cursor-pointer select-none">{$t('config.story.modifiers')}</summary>
+                <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+                  {#each modifierGroups() as grp}
+                    <label class="flex items-center gap-1.5 text-xs cursor-pointer" title={subgenreHint(grp.name.toLowerCase()) || grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+                      <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={$taskRunning} />
+                      {grp.name}
+                    </label>
+                  {/each}
+                </div>
+              </details>
+            {/if}
+            <textarea class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.titleField')}</span>
@@ -1585,22 +1943,6 @@ function randomizeStoryParams() {
               {/each}
             </select>
           </div>
-        </div>
-        <div>
-          <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.specificSettings')}</span>
-          {#if settingSuggestions.length}
-            <div class="grid grid-cols-2 gap-x-3 gap-y-1">
-              {#each settingSuggestions as s}
-                <label class="flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={$t('config.tip.specificSettings')}>
-                  <input type="checkbox" class="checkbox checkbox-xs" checked={settingChecked(s)} on:change={() => toggleSetting(s)} disabled={$taskRunning} />
-                  {s.replaceAll('_', ' ')}
-                </label>
-              {/each}
-            </div>
-          {:else}
-            <p class="text-xs text-base-content/45 mb-1">{$t('config.settings.pickGenre')}</p>
-          {/if}
-          <textarea class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
         </div>
         <label class="flex items-center gap-2 text-sm cursor-pointer" title={$t('config.tip.locationsEnabled')}>
           <input type="checkbox" class="toggle toggle-sm toggle-primary" bind:checked={localStoryCfg.locations_enabled} disabled={$taskRunning} />

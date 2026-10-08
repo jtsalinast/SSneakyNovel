@@ -48,6 +48,26 @@ var structureDescriptions = map[string][2]string{ // [zh, en]
 		"章节式/单元剧结构：每章或每组章节为相对独立的单元（案件/冒险），由一条贯穿主线逐步串联收束。",
 		"Episodic structure: each chapter (or group) is a self-contained unit (case/adventure) loosely threaded by an overarching storyline that converges over time.",
 	},
+	"story_circle": {
+		"故事圈(Dan Harmon)：你(舒适区)→需要→进入陌生领域→适应→寻找→得到付出代价→回归→改变。八步闭环，单元剧与长篇兼用。",
+		"Story circle (Dan Harmon): you → need → go → adapt → search → take → return → change. An eight-step loop that works for episodic and serialized stories alike.",
+	},
+	"kishotenketsu": {
+		"起承転結(四段结构)：起(引入)→承(发展铺陈)→転(意外转折)→結(收束呼应)，无强制冲突对抗，适合日常系、轻小说与短篇集。",
+		"Kishōtenketsu (four-act East-Asian structure): introduction → development → surprise/twist → reconciliation. Conflict is optional; suits slice-of-life, light novels and anthologies.",
+	},
+	"snowflake": {
+		"雪花结构：从一句话 premise 逐层扩展(段落→场景列表→人物→大纲)，章节密度随迭代递增，适合史诗与多线叙事。",
+		"Snowflake method: expand a one-sentence premise in layers (paragraph → scene list → characters → outline); chapter density grows with each iteration, ideal for epics and multi-POV books.",
+	},
+	"quest": {
+		"追寻结构(Quest)：明确的目标驱动主角跨越空间/阶段前进，沿途考验逐步揭示目标背后的真相，终点即蜕变。",
+		"Quest structure: a clear goal drives the protagonist across spaces/stages; trials along the way reveal the truth behind the goal, and reaching it brings transformation.",
+	},
+	"romance_arc": {
+		"情感弧线结构：相遇/吸引→靠近与误解→承诺危机→分离低谷→觉醒与奔赴→圆满(或释然)，节拍围绕关系推进。",
+		"Romance arc structure: meet/attract → closeness & misreading → commitment crisis → separation low point → awakening & pursuit → happy ending (or bittersweet release); beats turn on the relationship.",
+	},
 }
 
 // StructureDescriptions exposes the narrative-structure beat summaries
@@ -70,16 +90,36 @@ func lengthLabel(length, lang string) string {
 	min, max := config.SuggestedChaptersByLength(length)
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	switch strings.TrimSpace(length) {
+	case config.LengthFlash:
+		if en {
+			return "flash fiction"
+		}
+		return "微型小说"
 	case config.LengthShort:
 		if en {
 			return "short story"
 		}
 		return "短篇"
+	case config.LengthNovelette:
+		if en {
+			return "novelette"
+		}
+		return "短中篇"
 	case config.LengthNovella:
 		if en {
 			return "novella"
 		}
 		return "中篇"
+	case config.LengthLightNovel:
+		if en {
+			return "light novel"
+		}
+		return "轻小说"
+	case config.LengthAnthology:
+		if en {
+			return "anthology"
+		}
+		return "短篇小说集"
 	case config.LengthNovel:
 		if en {
 			return "novel"
@@ -252,6 +292,16 @@ func structureLabel(structure, lang string) string {
 		return label(en, "Save the Cat 节拍表", "Save the Cat beats")
 	case "episodic":
 		return label(en, "章节式/单元剧", "Episodic")
+	case "story_circle":
+		return label(en, "故事圈", "Story circle")
+	case "kishotenketsu":
+		return label(en, "起承転結", "Kishōtenketsu")
+	case "snowflake":
+		return label(en, "雪花结构", "Snowflake method")
+	case "quest":
+		return label(en, "追寻结构", "Quest structure")
+	case "romance_arc":
+		return label(en, "情感弧线", "Romance arc")
 	}
 	return key
 }

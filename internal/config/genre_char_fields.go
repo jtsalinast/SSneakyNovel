@@ -437,6 +437,14 @@ var animeModifierPresets = map[string][]string{
 		"Solo Climber Starting at Floor One", "Porter Scouting Ahead of Rankers", "Regression-Clear Speedrunner", "Architect Who Designed a Floor", "other", "|",
 		"floor_theme_rotation", "gatekeeper_boss_contract", "checkpoint_resurrection_rules", "vertical_city_politics", "other",
 	},
+	// round 10: erotica as a first-class subgenre (was only a preset key, so
+	// it never appeared in the modifier panel and left conflict/protagonist
+	// dropdowns empty when selected).
+	"erotica": {
+		"Desire vs Consequence", "Boundaries Negotiated in Real Time", "Intimacy vs Reputation Risk", "Fantasy Colliding With Feelings", "other", "|",
+		"Confident Adult Owning Their Wants", "Couple Redefining an Old Agreement", "Newcomer Exploring Consent First", "Estranged Partners Rekindling", "other", "|",
+		"consent_checkpoints_as_beats", "adult_characters_only", "intimacy_drives_plot", "aftermath_and_emotional_texture", "other",
+	},
 }
 
 func buildAnimeModifierPresets() {
