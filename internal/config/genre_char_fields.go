@@ -471,7 +471,334 @@ func buildAnimeModifierPresets() {
 	}
 }
 
-func init() { buildAnimeModifierPresets() }
+// dramaSubgenreKeys lists the Drama parent-genre subgenres that need dedicated
+// conflict/protagonist/settings presets (round 13 audit). Their content mirrors
+// SUBGENRE_DATA in frontend/src/lib/novelwriterGenres.js so both sides stay in
+// sync. Kept as a slice (not a map) because Go forbids referencing other maps
+// during package initialization — buildDramaSubgenrePresets runs from init().
+var dramaSubgenreKeys = []string{
+	"family saga", "coming-of-age", "psychorealism", "metafiction",
+	"existentialist fiction", "philosophical", "historical saga", "legal drama",
+	"medical drama", "sports drama", "war drama", "courtroom drama",
+	"domestic drama", "epistolary", "tragedy", "melodrama", "satire", "allegory",
+	"bildungsroman",
+}
+
+var dramaSubgenrePresets = map[string][]string{
+	"family saga": {
+		"Silence Inside a Family", "Inheritance Torn Apart", "Old Wounds Surfacing Now", "Duty vs Personal Truth", "other", "|",
+		"Matriarch Holding the Line Together", "Black Sheep Returning", "Eldest Child Bearing Expectations", "Adopted Member Seeking Origin", "other", "|",
+		"multi_generational_timeline", "inheritance_and_estate", "secrets_across_eras", "found_family_or_bloodline", "other",
+	},
+	"coming-of-age": {
+		"Identity Unraveling", "Friendship Fraying Under Change", "Expectation vs Self", "First Real Consequence", "other", "|",
+		"Teen Testing Adulthood", "Recent Graduate Adrift", "Young Protege Outgrowing a Mentor", "Quiet Kid Finding a Voice", "other", "|",
+		"threshold_season", "first_autonomy", "peer_and_mentor_influence", "small_world_losing_borders", "other",
+	},
+	"psychorealism": {
+		"Self vs Meaning", "Small Compromise Becoming Defining", "Loneliness in Plain Sight", "Truth Avoided for Years", "other", "|",
+		"Everyday Professional Near a Breaking Point", "Observer Reading a Room", "Caregiver Losing and Finding Themselves", "Neighbor Living an Unremarkable Crisis", "other", "|",
+		"ordinary_life_texture", "interior_perception_over_plot", "quiet_revelations", "social_detail_precision", "other",
+	},
+	"metafiction": {
+		"Control vs the Story's Autonomy", "Life Imitating the Draft", "Which Layer Is Real", "Finishing What Should Stay Open", "other", "|",
+		"Writer Trapped Inside Their Premise", "Character Sensing the Page", "Editor Holding Two Truths", "Reader Who Becomes a Source", "other", "|",
+		"story_about_story_making", "author_surrogate_present", "layered_narrative_levels", "reader_awareness_devices", "other",
+	},
+	"existentialist fiction": {
+		"Self vs Meaning", "Bad Faith vs Authentic Act", "Grief Without Explanation", "Freedom's Nausea", "other", "|",
+		"Stranger to Their Own Life", "Man Cornered by Contingency", "Woman Choosing Without Grounds", "Intellectual Facing the Void", "other", "|",
+		"absurd_everyday", "radical_freedom_weight", "meaning_without_promises", "choice_defines_self", "other",
+	},
+	"philosophical": {
+		"Truth vs Comfort", "Ethics Colliding With Loyalty", "Two Right Answers", "Knowledge That Cannot Be Un-known", "other", "|",
+		"Teacher Facing Their Own Doctrine", "Debater Changing Mid-Argument", "Thinker Living the Hypothesis", "Skeptic Won by Experience", "other", "|",
+		"idea_as_plot_driver", "dialogue_and_debate", "thought_experiment_frames", "ethics_under_pressure", "other",
+	},
+	"historical saga": {
+		"Civilization Building", "Family Divisions Across Generations", "Tradition vs Upheaval", "Legacy Weighing on the Young", "other", "|",
+		"Patriarch or Matriarch Anchoring Eras", "Heir Carrying a Name Across Wars", "Emigrant Rebuilding Elsewhere", "Servant Witnessing Great Houses Fall", "other", "|",
+		"era_defining_events", "family_across_nations", "social_change_as_backdrop", "multi_generational_timeline", "other",
+	},
+	"legal drama": {
+		"Justice Corruption", "Client vs Counsel Interests", "Duty vs Conscience", "Winning vs Doing Right", "other", "|",
+		"Defense Attorney Betting Reputation", "Public Defender Overloaded", "Prosecutor Choosing Justice or Record", "Junior Lawyer Given Impossible File", "other", "|",
+		"law_firm_internal_politics", "ethics_bar_pressure", "client_truth_shifting", "courtroom_drama", "other",
+	},
+	"medical drama": {
+		"Scarce Resources Real People", "Protocol vs Mercy", "Career vs Patient Truth", "Burnout at the Bedside", "other", "|",
+		"Resident Learning Limits", "Attending Haunted by One Case", "Nurse Holding the Ward Together", "Surgeon Facing Their Own Error", "other", "|",
+		"hospital_hierarchy", "triage_ethics", "shift_based_pacing", "patient_story_arcs", "other",
+	},
+	"sports drama": {
+		"Talent vs Discipline", "Team Ego vs Common Goal", "Dream vs Body's Limits", "Rival Generation Handoff", "other", "|",
+		"Veteran Last Season", "Untaught Rookie", "Coach Redeeming Through a Team", "Athlete Body Betraying Them", "other", "|",
+		"season_structure", "training_regimen", "team_egos_and_roles", "career_window_pressure", "other",
+	},
+	"war drama": {
+		"Unit Survival", "Chain-of-Command Conflict", "War vs Conscience", "Insurgency & Occupation", "other", "|",
+		"Junior Officer", "Sergeant NCO", "Medic", "Conscript Turned Veteran", "Civilian Under Occupation", "other", "|",
+		"front_and_home_front", "chain_of_command", "moral_attrition", "survivor_guilt", "other",
+	},
+	"courtroom drama": {
+		"Reasonable Doubt vs Belief", "Truth Suppressed by Procedure", "One Verdict Many Lives", "Fair Trial Under Pressure", "other", "|",
+		"Lead Counsel", "Holdout Juror", "Expert Witness With a Stake", "Court Clerk Seeing Everything", "other", "|",
+		"trial_procedure", "jury_and_testimony", "objection_timing", "public_opinion_pressure", "other",
+	},
+	"domestic drama": {
+		"Routine Cracking Under News", "Loyalty Between Partners", "Money Stress Rewriting Roles", "What a Household Pretends", "other", "|",
+		"Parent Holding Two Jobs and a Secret", "Spouse Rebalancing After Loss", "Sibling Forced Into Guardian Role", "Adult Child Moving Back Home", "other", "|",
+		"single_household_stage", "everyday_financial_pressure", "caregiving_load", "unspoken_arrangements", "other",
+	},
+	"epistolary": {
+		"Distance Kept by Words", "Misreading Written Tone", "The Letter Never Sent", "Truth Emerging Out of Order", "other", "|",
+		"Correspondent Writing Twice Before Sending", "Archivist Ordering the Letters", "Diarist Hiding From Themselves", "Forum Poster Revealed by Timestamps", "other", "|",
+		"letters_or_messages_format", "documents_as_scenes", "missing_pieces_between_pages", "multiple_voices_no_narrator", "other",
+	},
+	"tragedy": {
+		"Fate vs Character", "Right Act Too Late", "Pride Preceding the Fall", "Love That Cannot Save", "other", "|",
+		"Capable Person With One Fatal Blind Spot", "Leader Choosing Pride Once Too Often", "Lover Whose Devotion Becomes Ruin", "Inheritor Repeating a Parent's Mistake", "other", "|",
+		"flaw_driven_downfall", "inevitability_build", "high_stakes_personal", "catharsis_ending", "other",
+	},
+	"melodrama": {
+		"Forbidden Desire vs Duty", "Exposed Hypocrisy", "Reunion After Long Suffering", "Vindication Against Odds", "other", "|",
+		"Wronged Innocent Fighting Back", "Passionate Rebel Against a Household", "Secret Heir Restored", "Sacrificial Caregiver Finally Seen", "other", "|",
+		"heightened_emotion", "clear_villainy_or_wrong", "twists_and_reversals", "sensory_spectacle", "other",
+	},
+	"satire": {
+		"Hypocrisy vs Reality", "Punching at Authority", "Self-destruction of a Movement", "Decency in a Corrupt Game", "other", "|",
+		"Naive Participant in a Ridiculous System", "Cynic Commentating From Inside", "True Believer Whose Faith Breaks Comedy", "Bureaucrat Perfecting Absurdity", "other", "|",
+		"institutional_absurdity", "exaggerated_types", "ironic_narrative_distance", "targets_of_power", "other",
+	},
+	"allegory": {
+		"Virtue vs Institutional Sin", "Path Chosen vs Path Assigned", "Truth Under a Thin Disguise", "Freedom Against Structure", "other", "|",
+		"Figure Carrying an Idea", "Everyman on a Designed Road", "Representative of a Class or Nation", "Seeker in a Modeled World", "other", "|",
+		"symbolic_world_logic", "second_reading_meaning", "types_not_only_individuals", "moral_geometry", "other",
+	},
+	"bildungsroman": {
+		"Inherited Beliefs Questioned", "Ambition vs Integrity", "Belonging on One's Own Terms", "Education by Failure", "other", "|",
+		"Orphan Making Their Own Rules", "Provincial Arriving in the City", "Apprentice Surpassing a Master", "Quiet Child Becoming a Witness", "other", "|",
+		"formative_years_span", "mentors_and_bad_examples", "self_made_identity", "society_shaping_the_person", "other",
+	},
+}
+
+// buildDramaSubgenrePresets splits the drama subgenre presets into the same
+// three Genre* maps used by /api/novel-params, so selecting e.g. "Medical
+// Drama" fills the Conflict/Protagonist/Specific-settings dropdowns exactly
+// like any anime modifier preset does.
+func buildDramaSubgenrePresets() {
+	for key, raw := range dramaSubgenrePresets {
+		var conflicts, protags, settings []string
+		section := 0
+		for _, item := range raw {
+			if item == "|" {
+				section++
+				continue
+			}
+			switch section {
+			case 0:
+				conflicts = append(conflicts, item)
+			case 1:
+				protags = append(protags, item)
+			default:
+				settings = append(settings, item)
+			}
+		}
+		GenreConflictScales[key] = conflicts
+		GenreProtagonistTypes[key] = protags
+		GenreSpecificSettings[key] = settings
+	}
+}
+
+// —— Round 13 audit: first-class subgenres promoted from cross-cutting
+// modifiers ————————————————————————————————————————————————————————————————
+// The user asked these to be selectable directly as Subgenres (wuxia/xianxia/
+// romantasy/isekai/revenge/mahou shoujo/mahou shonen/spokon already covered by
+// earlier rounds; this adds the remaining ones requested: dungeon core via the
+// "dungeon" key, battle royale, slice of life, ecchi, mecha, erotica...). Each
+// entry registers its title-cased display label in SubgenrePresetKeys and
+// merges its signature setting tokens into every parent genre where it is
+// thematically compatible (subgenreLabelParents), so the Specific-settings
+// checkboxes surface them under multiple categories (e.g. Technomagic-style
+// crossovers: Science Fantasy / Cyberfantasy can legitimately live under both
+// fantasy and scifi).
+var subgenreLabelParents = map[string][]string{
+	"Wuxia":                  {"fantasy", "historical", "adventure"},
+	"Xianxia":                {"fantasy", "historical"},
+	"LitRPG":                 {"fantasy", "scifi"},
+	"Isekai":                 {"fantasy", "scifi"},
+	"Dungeon Core":           {"fantasy", "litrpg"},
+	"Tower Climbing":         {"fantasy", "litrpg"},
+	"Regression":             {"fantasy", "scifi", "thriller"},
+	"Villainess":             {"fantasy", "romance"},
+	"Otome":                  {"fantasy", "romance"},
+	"Mahou Shoujo":           {"fantasy"},
+	"Mahou Shonen":           {"fantasy"},
+	"Battle Royale":          {"scifi", "thriller"},
+	"Mecha":                  {"scifi", "military"},
+	"Superhero":              {"scifi", "fantasy"},
+	"Romantasy":              {"romance", "fantasy"},
+	"Erotica":                {"romance", "drama"},
+	"Harem":                  {"romance", "drama", "fantasy"},
+	"Revenge":                {"thriller", "drama", "adventure"},
+	"Slice of Life":          {"drama", "comedy", "cozy"},
+	"School Life":            {"drama"},
+	"Spokon":                 {"drama"},
+	"Iyashikei":              {"drama", "cozy"},
+	"Ecchi":                  {"drama", "comedy"},
+	"Cyberpunk":              {"scifi", "thriller", "urban"},
+	"Steampunk":              {"scifi", "historical", "fantasy"},
+	"Solarpunk":              {"scifi"},
+	"Space Opera":            {"scifi", "adventure"},
+	"Dystopian":              {"scifi", "thriller"},
+	"Post-Apocalyptic":       {"scifi", "horror", "adventure"},
+	"Time Travel":            {"scifi", "adventure", "romance"},
+	"First Contact":          {"scifi"},
+	"Heist":                  {"thriller", "mystery", "adventure"},
+	"Noir":                   {"mystery", "thriller"},
+	"Gothic":                 {"horror", "romance", "fantasy"},
+	"Dark Academia":          {"horror", "mystery", "literary", "drama"},
+	"Swashbuckler":           {"adventure", "historical"},
+	"Nautical":               {"adventure", "historical"},
+	"Picaresque":             {"adventure", "historical", "literary"},
+	"Rom-Com":                {"romance", "comedy"},
+	"Cozy":                   {"mystery", "fantasy", "scifi"},
+	"Urban Fantasy":          {"fantasy", "mystery", "romance"},
+	"Magical Realism":        {"fantasy", "literary", "historical"},
+	"Progression Fantasy":    {"fantasy", "litrpg"},
+	"Epic Fantasy":           {"fantasy", "adventure"},
+	"High Fantasy":           {"fantasy", "adventure"},
+	"Dark Fantasy":           {"fantasy", "horror"},
+	"Sword and Sorcery":      {"fantasy", "adventure"},
+	"Hard Sci-Fi":            {"scifi", "mystery"},
+	"Biopunk":                {"scifi", "horror"},
+	"Cli-Fi":                 {"scifi", "drama"},
+	"Afrofuturism":           {"scifi", "fantasy", "historical"},
+	"Folk Horror":            {"horror", "fantasy", "historical"},
+	"Cosmic Horror":          {"horror", "scifi"},
+	"Haunted House":          {"horror", "mystery"},
+	"Zombie Apocalypse":      {"horror", "scifi", "adventure"},
+	"Police Procedural":      {"mystery", "thriller"},
+	"Locked Room":            {"mystery"},
+	"Hard-Boiled":            {"mystery", "thriller"},
+	"Espionage Thriller":     {"thriller", "adventure"},
+	"Techno-Thriller":        {"thriller", "scifi"},
+	"Political Thriller":     {"thriller", "historical", "drama"},
+	"Legal Thriller":         {"thriller", "mystery", "drama"},
+	"Domestic Thriller":      {"thriller", "mystery", "drama"},
+	"Psychological Thriller": {"thriller", "mystery", "horror"},
+	"Action Thriller":        {"thriller", "adventure"},
+	"Psychological Mystery":  {"mystery", "thriller"},
+	"Historical Mystery":     {"mystery", "historical"},
+	"Amateur Detective":      {"mystery", "cozy"},
+	"Cozy Mystery":           {"mystery"},
+	"Historical Romance":     {"romance", "historical"},
+	"Contemporary Romance":   {"romance", "drama"},
+	"Paranormal Romance":     {"romance", "fantasy", "horror"},
+	"Romantic Suspense":      {"romance", "thriller"},
+	"Small Town Romance":     {"romance", "cozy"},
+	"Erotic Romance":         {"romance"},
+	"Sports Romance":         {"romance", "drama"},
+	"Mafia Romance":          {"romance", "thriller"},
+	"Suspense Romance":       {"romance", "thriller"},
+	"Alien Invasion":         {"scifi", "horror"},
+	"Space Western":          {"western", "scifi"},
+	"Weird Western":          {"western", "horror", "fantasy"},
+	"Classic Western":        {"western", "adventure", "historical"},
+	"Outlaw Western":         {"western", "adventure"},
+	"Cattle Drive Western":   {"western", "adventure"},
+	"Modern Western":         {"western", "drama"},
+	"Traditional Western":    {"western", "historical"},
+	"Spaghetti Western":      {"western", "adventure"},
+	"Ancient History":        {"historical", "adventure", "fantasy"},
+	"Medieval":               {"historical", "fantasy"},
+	"Renaissance":            {"historical"},
+	"Colonial America":       {"historical", "adventure"},
+	"Civil War Era":          {"historical", "drama", "war"},
+	"World War Era":          {"historical", "military", "drama"},
+	"Regency":                {"historical", "romance"},
+	"Gold Rush":              {"historical", "western", "adventure"},
+	"Military":               {"military", "historical", "scifi", "drama"},
+	"Military Fantasy":       {"fantasy", "military"},
+	"Portal Fantasy":         {"fantasy", "adventure"},
+	"Mythic Fantasy":         {"fantasy", "historical"},
+	"Fairy Tale":             {"fantasy", "romance"},
+	"Noblebright":            {"fantasy"},
+	"Grimdark":               {"fantasy", "horror"},
+	"Body Horror":            {"horror", "scifi"},
+	"Slasher Horror":         {"horror", "thriller"},
+	"Supernatural Horror":    {"horror", "fantasy"},
+	"Psychological Horror":   {"horror", "thriller", "mystery"},
+	"Gothic Horror":          {"horror", "gothic"},
+	"Space Adventure":        {"scifi", "adventure"},
+	"Lost World":             {"adventure", "scifi", "horror"},
+	"Survival":               {"adventure", "thriller", "horror"},
+	"Exploration":            {"adventure", "scifi", "historical"},
+	"Disaster":               {"adventure", "thriller", "horror"},
+	"War Epic":               {"war", "historical", "adventure"},
+	"Sea Adventure":          {"adventure", "historical"},
+	"Treasure Hunt":          {"adventure", "fantasy", "mystery"},
+	"Jungle Expedition":      {"adventure", "horror"},
+	"Mountain Climb":         {"adventure", "drama"},
+	"Desert Trek":            {"adventure", "historical"},
+	"Polar Expedition":       {"adventure", "scifi"},
+	"Sky Pirate":             {"adventure", "fantasy", "steampunk"},
+	"Road Trip":              {"adventure", "drama", "comedy"},
+	"Coming-of-age":          {"drama", "adventure", "romance"},
+	"Family Saga":            {"drama", "historical"},
+	"Psychorealism":          {"drama", "literary"},
+	"Metafiction":            {"drama", "literary", "comedy"},
+	"Existentialist Fiction": {"drama", "literary"},
+	"Philosophical":          {"drama", "literary", "scifi"},
+	"Historical Saga":        {"drama", "historical"},
+	"Legal Drama":            {"drama", "thriller"},
+	"Medical Drama":          {"drama", "thriller"},
+	"Sports Drama":           {"drama"},
+	"War Drama":              {"drama", "war", "historical"},
+	"Courtroom Drama":        {"drama", "legal"},
+	"Domestic Drama":         {"drama", "thriller"},
+	"Epistolary":             {"drama", "literary", "horror"},
+	"Tragedy":                {"drama", "literary"},
+	"Melodrama":              {"drama", "romance"},
+	"Satire":                 {"drama", "comedy", "literary"},
+	"Allegory":               {"drama", "literary", "fantasy"},
+	"Bildungsroman":          {"drama", "literary"},
+}
+
+// buildSubgenreLabelPresets registers each display label above in the genre
+// preset maps: appends the subgenre's own snake_case token to every compatible
+// parent genre's specific-settings list (so the checkbox appears there), and
+// ensures the label itself is a known subgenre preset. Runs after
+// buildAnimeModifierPresets so labels can also point at those keys.
+func buildSubgenreLabelPresets() {
+	for label, parents := range subgenreLabelParents {
+		token := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
+		for _, parent := range parents {
+			// Only merge into genres that actually exist as presets; unknown
+			// parent names are silently skipped (they act as free-form tags).
+			list := GenreSpecificSettings[parent]
+			if len(list) == 0 {
+				continue
+			}
+			found := false
+			for _, x := range list {
+				if strings.EqualFold(x, token) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				GenreSpecificSettings[parent] = append(list, token)
+			}
+		}
+	}
+}
+
+func init() {
+	buildAnimeModifierPresets()
+	buildDramaSubgenrePresets()
+	buildSubgenreLabelPresets()
+}
 
 // AnimeModifierMatchWords maps each animeModifierPresets key to lowercase
 // keywords matched against Type+Subgenre text (any language). Order matters

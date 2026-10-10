@@ -210,8 +210,8 @@ var TargetWordsPresetByLength = map[string]int{
 	LengthNovella:    2500,
 	LengthLightNovel: 3500,
 	LengthAnthology:  4000,
-	LengthNovel:      3000,
-	LengthEpic:       3000,
+	LengthNovel:      4000, // round 13: user-requested standard-novel chapter target
+	LengthEpic:       5000, // round 13: epic novels run longer chapters
 }
 
 // DefaultTargetWordsForLength returns the suggested target_words_per_chapter
@@ -501,19 +501,24 @@ var GenreConflictScales = map[string][]string{
 	// were removed — they are specific-settings modifiers and belong in
 	// GenreSpecificSettings below, where the UI renders them as checkable
 	// suggestions instead of polluting the conflict-scale dropdown.
-	"fantasy":     {"Personal Quest", "Kingdom-wide", "World-saving", "Good vs Evil", "Political Intrigue", "Sect/Realm Wars", "other"},
-	"scifi":       {"Personal", "Planetary", "Interstellar", "Galactic", "Humanity vs Technology", "other"},
-	"mystery":     {"Personal Mystery", "Community Secret", "Local Crime", "Family Mystery", "Historical Puzzle", "other"},
-	"romance":     {"Personal Growth", "Relationship Obstacles", "Career vs Love", "Family Issues", "Past Trauma", "other"},
-	"thriller":    {"International Conspiracy", "Government Secrets", "Spy Networks", "National Security", "Global Politics", "other"},
-	"horror":      {"Personal Haunting", "Family Curse", "Supernatural Threat", "Psychological Terror", "Ancient Evil", "Cosmic Indifference", "other"},
-	"historical":  {"Tribal Warfare", "Religious Conflicts", "Ancient Politics", "Survival Struggles", "Civilization Building", "other"},
-	"western":     {"Personal Vendetta", "Town Protection", "Range War", "Law vs Lawlessness", "Civilization vs Wilderness", "other"},
-	"litrpg":      {"System Rules vs Free Will", "Solo vs Guild", "Dungeon Economy", "Server-wide Meta War", "Tutorial to Raid Boss", "other"},
-	"urban":       {"Neighborhood Turf", "Hidden Society Exposure", "Patron Debt", "City-wide Supernatural War", "Ordinary Life vs Calling", "other"},
-	"military":    {"Unit Survival", "Campaign Objective", "Chain-of-Command Conflict", "Insurgency & Occupation", "War vs Conscience", "other"},
-	"postapo":     {"Daily Survival", "Settlement vs Raiders", "Resource Scarcity", "Old-world Remnant Threat", "Rebuilding vs Warlordism", "other"},
-	"adventure":   {"Man vs Nature", "Expedition Rivalry", "Ancient Trap/Trial", "Race Against Time", "Survival in the Unknown", "other", "swashbuckler", "nautical", "picaresque", "mythical_creatures", "expedition_epic_scale"},
+	"fantasy": {"Personal Quest", "Kingdom-wide", "World-saving", "Good vs Evil", "Political Intrigue", "Sect/Realm Wars", "other"},
+	"scifi":   {"Personal", "Planetary", "Interstellar", "Galactic", "Humanity vs Technology", "other"},
+	// Round 15: the separate "thriller" parent was merged into this one
+	// ("Mystery & Thriller" in the UI); conflict scales from both lists kept.
+	"mystery":    {"Personal Mystery", "Community Secret", "Local Crime", "Family Mystery", "Historical Puzzle", "International Conspiracy", "Government Secrets", "Spy Networks", "National Security", "Global Politics", "other"},
+	"romance":    {"Personal Growth", "Relationship Obstacles", "Career vs Love", "Family Issues", "Past Trauma", "other"},
+	"horror":     {"Personal Haunting", "Family Curse", "Supernatural Threat", "Psychological Terror", "Ancient Evil", "Cosmic Indifference", "other"},
+	"historical": {"Tribal Warfare", "Religious Conflicts", "Ancient Politics", "Survival Struggles", "Civilization Building", "other"},
+	"western":    {"Personal Vendetta", "Town Protection", "Range War", "Law vs Lawlessness", "Civilization vs Wilderness", "other"},
+	"litrpg":     {"System Rules vs Free Will", "Solo vs Guild", "Dungeon Economy", "Server-wide Meta War", "Tutorial to Raid Boss", "other"},
+	"urban":      {"Neighborhood Turf", "Hidden Society Exposure", "Patron Debt", "City-wide Supernatural War", "Ordinary Life vs Calling", "other"},
+	"military":   {"Unit Survival", "Campaign Objective", "Chain-of-Command Conflict", "Insurgency & Occupation", "War vs Conscience", "other"},
+	"postapo":    {"Daily Survival", "Settlement vs Raiders", "Resource Scarcity", "Old-world Remnant Threat", "Rebuilding vs Warlordism", "other"},
+	// Round 13: the trailing snake_case tokens that leaked into this conflict
+	// list (swashbuckler, nautical, picaresque...) were removed — they are
+	// specific-settings modifiers; the composite "adventure:*" keys below carry
+	// the real per-subgenre conflict presets.
+	"adventure":   {"Man vs Nature", "Expedition Rivalry", "Ancient Trap/Trial", "Race Against Time", "Survival in the Unknown", "Uncharted Frontier", "other"},
 	"wuxia":       {"Jianghu Feud", "Sect Honor", "Martial Supremacy", "Court vs Jianghu", "Righteous vs Unorthodox Paths", "other"},
 	"xianxia":     {"Sect Competition", "Heavenly Tribulation", "Immortal Realm Power Struggle", "Fate vs Defiance", "Dao vs Demon Path", "other"},
 	"cozy":        {"Small-town Gossip", "Community Secret", "Family Mystery", "Holiday Deadline", "Reputation at Stake", "other"},
@@ -541,14 +546,35 @@ var GenreConflictScales = map[string][]string{
 	"romance:romcom":            {"Pride vs Attraction", "Fake Relationship Turns Real", "Rival-to-Lover Escalation", "Timing & Miscommunication Farce", "Career Crossroads vs Love", "other"},
 	// round 6: Drama parent genre (family saga, coming-of-age, psychorealism...)
 	"drama": {"Silence Inside a Family", "Self vs Meaning", "Duty vs Desire", "Identity Unraveling", "Institution vs Individual", "Generational Legacy", "other"},
+	// Round 14 audit: new parent genres (action, crime, comedy, mythology) and
+	// hybrid subgenre parents that previously only resolved via composite keys.
+	"action":         {"Body Count Escalation", "Collateral Damage Spiral", "Boss Rush Final Showdown", "Revenge Chain", "Ticking Clock Rescue", "Rival Crews Collide", "other"},
+	"comedy":         {"Lie Snowballing Out of Control", "Ego vs Reality Check", "Escalating Prank or Bet", "Social Awkwardness Cascade", "Someone Actually Has Stakes", "other"},
+	"isekai":         {"Adaptation to New World Rules", "Return Home vs Save This One", "Cheat Ability With a Cost", "Local Politics Knowledge Gap", "Demon Lord Countdown", "other"},
+	"regression":     {"Butterfly Effect Budget", "Known Disaster Deadline", "Second-Chance Relationships", "Insider Knowledge Temptation", "Fate Reasserting Itself", "other"},
+	"villainess":     {"Scripted Doom Counterplan", "Engagement Deadline", "Court Gossip Economy", "Duelist Etiquette Wars", "Rewriting the Heroine's Story", "other"},
+	"otome":          {"Capture-Target Rivalry", "Route-Lock Escape", "Etiquette Minefield", "Broken Engagement Fallout", "Heart vs Scripted Ending", "other"},
+	"battle_royale":  {"Shrinking Arena Pressure", "Forced Alliance Politics", "Audience Vote Manipulation", "Trust Nobody Game", "Survivor's Guilt Math", "other"},
+	"tower_climbing": {"Floor-by-Floor Trial Ladder", "Gatekeeper Boss Contract", "Climber Guild Cartel", "Summit Myth Economics", "Checkpoint Death Costs", "other"},
+	"dungeon_core":   {"Hero Incursions vs Core Growth", "Floor Ecology Balance", "Loot Economy Wars", "Adventurer Guild Pressure", "Core Corruption Risk", "other"},
+	"mecha":          {"Pilot Sync Cost", "Colony vs Earth Politics", "War Broadcast Propaganda", "Production Line Logistics", "Child Soldier Chain of Command", "other"},
+	"superhero":      {"Responsibility vs Personal Life", "Hero vs Arch-nemesis Cycle", "Public Trust After Collateral Damage", "Power Corruption Temptation", "Legacy Hero vs New Generation", "other"},
+	"spokon":         {"Talent vs Discipline", "Rival Generation Handoff", "Body Breaking Before Dream", "Team Ego vs Common Goal", "Selection Cutline Pressure", "other"},
+	"slice_of_life":  {"Small Daily Frictions", "Season Change Forcing Adaptation", "Neighbor Misunderstanding", "Quiet Personal Milestone", "Community Event Deadline", "other"},
+	"school_life":    {"Exam Hierarchy Pressure", "Club Politics", "Festival Arc Stakes", "Teacher Administration Friction", "Friendship Group Realignment", "other"},
+	"harem":          {"Jealousy Without Villainy", "Relationship Negotiation Rules", "Oblivious Protagonist Consequences", "Shared Goal Bonds", "Flag Misreading Comedy", "other"},
+	"ecchi":          {"Dignity vs Fan-Service Gravity", "Misreading Every Signal", "Rival Tease Escalation", "Serious Mission Absurd Interruptions", "Boundaries Negotiated Late", "other"},
+	"revenge":        {"Evidence Chain Over Years", "Moral Line Defined Early", "Institutional Wall", "Allies Gathered One Debt at a Time", "Mirror-of-Self Target", "other"},
+	"mahou_shoujo":   {"Secret Identity vs Friendship", "Monster-of-the-Week Escalation", "Witch-Knight Rivalry", "Corrupted Mentor Revelation", "Contract Fine Print", "other"},
+	"mahou_shonen":   {"Spellcraft Ethics vs Raw Talent", "Magic Society Audit", "Mana Exhaustion Real Cost", "Forbidden Spell Temptation", "Dying School Inheritance", "other"},
 }
 
 var GenreProtagonistTypes = map[string][]string{
-	"fantasy":     {"Chosen One", "Magic User", "Knight/Warrior", "Royal Heir", "Common Hero", "Prophesied One", "other"},
-	"scifi":       {"Military Officer", "Merchant Captain", "Explorer", "Diplomat", "Rebel Leader", "Imperial Noble", "other"},
-	"mystery":     {"Amateur Detective", "Librarian", "Shop Owner", "Retired Professional", "Local Resident", "Hobby Enthusiast", "other"},
+	"fantasy": {"Chosen One", "Magic User", "Knight/Warrior", "Royal Heir", "Common Hero", "Prophesied One", "other"},
+	"scifi":   {"Military Officer", "Merchant Captain", "Explorer", "Diplomat", "Rebel Leader", "Imperial Noble", "other"},
+	// Round 15: merged with the former "thriller" parent (see above).
+	"mystery":     {"Amateur Detective", "Librarian", "Shop Owner", "Retired Professional", "Local Resident", "Hobby Enthusiast", "Secret Agent", "Intelligence Officer", "Double Agent", "Spy Handler", "Undercover Operative", "Government Analyst", "other"},
 	"romance":     {"Career Professional", "Single Parent", "Artist/Creative", "Business Owner", "Healthcare Worker", "Teacher/Academic", "other"},
-	"thriller":    {"Secret Agent", "Intelligence Officer", "Double Agent", "Spy Handler", "Undercover Operative", "Government Analyst", "other"},
 	"horror":      {"Haunted Individual", "Investigator", "Innocent Victim", "Cursed Person", "Gothic Hero", "Tormented Soul", "other"},
 	"historical":  {"Ancient Warrior", "Priest/Priestess", "Tribal Leader", "Ancient Scholar", "Slave", "Ancient Ruler", "other"},
 	"western":     {"Sheriff/Marshal", "Gunslinger", "Rancher", "Outlaw", "Bounty Hunter", "Frontier Doctor", "other"},
@@ -584,6 +610,26 @@ var GenreProtagonistTypes = map[string][]string{
 	"romance:romcom":            {"Cynical Romantic Under Cover of Jokes", "Overprepared Planner Meets Chaos", "Rival Who Secretly Reads Their Work", "Best Friend Waiting Too Long", "Fake Partner With Real Cracks", "other"},
 	// round 6: Drama parent genre
 	"drama": {"Matriarch or Patriarch Holding a Fractured Family", "Coming-of-age Everyteen on a Threshold", "Ordinary Person Facing an Unremarkable Crisis", "Idealist Ground Down by an Institution", "Griever Rebuilding a Life After Loss", "other"},
+	// Round 14 audit: new parent genres + hybrid subgenre parents.
+	"action":         {"Ex-Special Forces Operator", "Bounty Hunter With a Code", "Undercover Cop Going Dark", "Martial Artist Chasing One Title", "Bodyguard Out of Hours", "Reluctant Getaway Driver", "other"},
+	"comedy":         {"Lie That Needs Three More Lies", "Butler Running the Whole Scheme", "New Hire Taking Memos Literally", "IT Person Who Has Seen Everything", "Grieving Family Sorting an Estate", "Everyman Facing an Impossible Permit", "other"},
+	"isekai":         {"Summoned Exchange Student", "Reincarnated Actuary", "Trapped Game Developer", "Refusenik Chosen One", "Party Face With Logistics Brain", "Local Guide Teaching the Outsider", "other"},
+	"regression":     {"Regressor Counting Known Disasters", "Second-Chance Parent", "Veteran in a Young Body", "Insider Trader of Fate", "Ex-Hero Starting Over Quietly", "other"},
+	"villainess":     {"Reformed Storybook Villainess", "Engagement-Deadline Heiress", "Otomate Script Knower", "Servant Network Handler", "Duelist Learning Ballroom Law", "other"},
+	"otome":          {"Heroine Rewriting Her Route", "Captured Target's Confused Sister", "Etiquette Coach Turned Player", "Broken-Engagement Socialite", "Scholar of the Scripted World", "other"},
+	"battle_royale":  {"Last-Seat Strategist", "Supply-Runner Optimizer", "Reluctant Solo Carry", "Audience-Favorite Puppet", "Arena Ethics Defector", "other"},
+	"tower_climbing": {"Floor-Rookie Learning Rules", "Gatekeeper Whisperer", "Checkpoint Abuser With Guilt", "Vertical Guild Runner", "Summit Myth Believer", "other"},
+	"dungeon_core":   {"Nascent Dungeon Core", "Hero-Turned-Core Diplomat", "Monster Roster Manager", "Loot Economy Fixer", "Adventurer Guild Liaison", "other"},
+	"mecha":          {"Ace Pilot Burned by Command", "Test Pilot Promoted Too Fast", "Mechanic Keeping the Frame Alive", "Colony Kid in a Warframe", "Sync-Mediated Child Soldier", "other"},
+	"superhero":      {"Late-Debut Hero", "Sidekick Ready to Lead", "Villain Trying to Retire Clean", "Hero Without Public Trust", "Legacy Name Carrying Someone New", "other"},
+	"spokon":         {"Untaught Country Transfer", "Third-Year Last Season", "Walk-on Bench Grinder", "Former Pro-Turned-Coach Failure", "Rival Generation Handoff Kid", "other"},
+	"slice_of_life":  {"Cafe Regular Becoming Staff", "New Tenant in an Old Building", "Freelancer Relearning Routine", "Returnee to a Changed Hometown", "Quiet Mentor With No Agenda", "other"},
+	"school_life":    {"Transfer Student Reading the Room", "Club President Holding Factions", "Exam-Pressure Prodigy", "Teacher Fighting Administration", "Delinquent With Hidden Grades", "other"},
+	"harem":          {"Oblivious Shared-Goal Leader", "Jealous Number One", "The One Who Reads Flags", "Newcomer Archetype Disruptor", "Negotiating Housemate", "other"},
+	"ecchi":          {"Pervert With a Hidden Code", "Straight-Man Surrounded by Chaos", "Unwitting Harem Magnet", "Professional Who Cannot Take a Joke", "Tease Escalation Rival", "other"},
+	"revenge":        {"Fallen Heir Rebuilding Evidence", "Disguised Returnee", "Ally Gathered One Debt at a Time", "Prosecutor Against the Institution", "Target Mirror of the Avenger", "other"},
+	"mahou_shoujo":   {"Ordinary Middle-Schooler Recruited", "Retired Magical Girl Mentoring", "Rival Witch With Sympathetic Goal", "Contract Familiar With Hidden Agenda", "other"},
+	"mahou_shonen":   {"Self-Taught Street Mage", "Academy Dropout Practicing Alone", "Support-Mage Strategist", "Inheritor of a Dying School", "other"},
 }
 
 var GenreSpecificSettings = map[string][]string{
@@ -593,28 +639,29 @@ var GenreSpecificSettings = map[string][]string{
 	// dark_academia/swashbuckler/nautical/picaresque/romcom/mystery_police/
 	// magic_system/medieval_setting/mythical_creatures/epic_scale/scifi tech)
 	// whenever they are thematically compatible with that genre.
-	"fantasy":     {"magic_system", "medieval_setting", "mythical_creatures", "epic_scale", "political_dynasties", "wuxia", "xianxia", "cozy", "urban", "gothic", "dark_academia", "romantasy", "swashbuckler"},
-	"scifi":       {"interstellar_travel", "advanced_technology", "multiple_species", "space_combat", "ai_singularity", "cyberpunk", "solarpunk", "steampunk", "space_opera", "dystopian", "postapo", "military", "superhero", "first_contact_paradigm", "generation_ship_society"},
-	"mystery":     {"small_community", "amateur_detective", "low_violence", "puzzle_focus", "recurring_characters", "noir", "heist", "cozy", "urban", "locked_room_impossible_crime", "mystery_police", "gothic"},
-	"romance":     {"modern_setting", "relationship_focus", "emotional_journey", "happy_ending", "realistic_world", "romcom", "romantasy", "small_town_or_urban_backdrop", "cozy", "urban", "historical_courtship", "dark_academia"},
-	"thriller":    {"international_intrigue", "spy_networks", "government_secrets", "double_agents", "global_stakes", "heist", "noir", "military_intelligence", "urban", "mystery_police", "cyberpunk"},
-	"horror":      {"atmospheric_dread", "isolated_setting", "supernatural_elements", "psychological_terror", "dark_atmosphere", "cosmic_horror", "gothic", "dark_academia", "folk_customs_and_rites", "postapo", "urban"},
-	"historical":  {"ancient_civilizations", "mythological_elements", "tribal_societies", "ancient_religions", "primitive_technology", "medieval_setting", "mythical_creatures", "epic_scale", "court_intrigue", "nautical", "swashbuckler", "military"},
-	"western":     {"frontier_setting", "lawlessness", "honor_code", "survival_focus", "horse_culture", "swashbuckler_frontier_action", "nautical_ports_and_trails", "picaresque", "noir"},
-	"litrpg":      {"game_system_rules", "stats_and_levels", "dungeons_and_loot", "guild_politics", "progression_arc", "server_economy", "isekai", "system_apocalypse", "tower_climbing"},
-	"urban":       {"hidden_supernatural_society", "modern_city_backdrop", "masquerade_rule", "part_time_hero_life", "night_market_magic", "noir", "cyberpunk", "romcom", "cozy"},
-	"military":    {"unit_esprit_de_corps", "chain_of_command", "combined_arms_tactics", "rules_of_engagement", "rotations_and_leave", "war_crimes_inquiry", "postapo", "space_opera", "espionage_intelligence"},
-	"postapo":     {"resource_scarcity", "mutated_fauna_flora", "pre_fall_artifacts", "settlement_politics", "radiation_zones", "water_and_power_grids", "military", "solarpunk", "dystopian"},
-	"adventure":   {"expedition_logistics", "ancient_traps_puzzles", "extreme_environments", "rival_explorers", "local_mythology_clues", "treasure_curse", "swashbuckler", "nautical", "picaresque", "mythical_creatures", "expedition_epic_scale"},
-	"wuxia":       {"jianghu_codes", "qi_cultivation", "sects_and_alliances", "neigong_manuals", "tea_house_rumors", "wuxia_martial_choreography", "epic_scale", "mythical_creatures"},
-	"xianxia":     {"cultivation_realms", "spirit_roots", "sect_hierarchy", "alchemy_pill_refining", "heavenly_dao_laws", "immortal_realm_geography", "epic_scale", "mythical_creatures"},
-	"cozy":        {"small_town_map", "baking_brewing_gardening_hobbies", "community_events", "pet_or_cat_presence", "low_stakes_danger", "found_family", "urban", "seasonal_rhythm"},
-	"heist":       {"crew_specialties", "target_security_layers", "mark_and_distraction", "getaway_routes", "one_job_too_many", "double_cross_timer", "noir", "urban", "cyberpunk"},
-	"cyberpunk":   {"megacorporations", "body_augmentation", "netrunning_matrix", "street_economy_implants", "rain_neon_aesthetic", "class_divide_vertical_cities", "dystopian", "urban", "heist"},
-	"solarpunk":   {"renewable_infrastructure", "community_cooperatives", "rewilded_urbanism", "open_source_tools", "slow_healing_after_collapse", "festivals_and_commons", "postapo", "cozy"},
-	"romantasy":   {"fae_or_god courts", "magic_cost_of_intimacy", "arranged_political_marriage", "enemy_to_lover_arc", "prophecy_bond", "court_intrigue_and_seasons", "magic_system", "epic_scale", "romcom"},
-	"dystopian":   {"surveillance_state", "scarce_rations_and_permits", "state_propaganda_media", "resistance_cells", "caste_by_gene_or_record", "forbidden_knowledge_archive", "postapo", "military", "cyberpunk"},
-	"space_opera": {"jump_gate_network", "galactic_senate_or_empire", "xeno_first_contact_protocols", "fleet_logistics", "dynastic_politics_in_stars", "precursor_relics", "interstellar_travel", "advanced_technology", "military"},
+	"fantasy": {"magic_system", "medieval_setting", "mythical_creatures", "epic_scale", "political_dynasties", "wuxia", "xianxia", "cozy", "urban", "gothic", "dark_academia", "romantasy", "swashbuckler", "science_fantasy", "technomagic", "cyberfantasy"},
+	"scifi":   {"interstellar_travel", "advanced_technology", "multiple_species", "space_combat", "ai_singularity", "cyberpunk", "solarpunk", "steampunk", "space_opera", "dystopian", "postapo", "military", "superhero", "first_contact_paradigm", "generation_ship_society", "science_fantasy", "technomagic", "dieselpunk", "raypunk", "biopunk", "clockpunk", "sandalpunk", "cyberfantasy"},
+	// Round 15: merged with the former "thriller" parent — the UI shows this
+	// single "Mystery & Thriller" genre and offers both token families.
+	"mystery":     {"small_community", "amateur_detective", "low_violence", "puzzle_focus", "recurring_characters", "noir", "heist", "cozy", "urban", "locked_room_impossible_crime", "mystery_police", "gothic", "true_crime_doc_feel", "cold_case_files", "forensic_lab_detail", "international_intrigue", "spy_networks", "government_secrets", "double_agents", "global_stakes", "military_intelligence", "cyberpunk", "legal_thriller_courtroom", "medical_thriller", "survival_thriller", "conspiracy_web", "eco_thriller", "political_assassination_threat"},
+	"romance":     {"modern_setting", "relationship_focus", "emotional_journey", "happy_ending", "realistic_world", "romcom", "romantasy", "small_town_or_urban_backdrop", "cozy", "urban", "historical_courtship", "dark_academia", "mafia_romance", "paranormal_romance", "sports_romance", "road_trip_romance", "regency_courtship"},
+	"horror":      {"atmospheric_dread", "isolated_setting", "supernatural_elements", "psychological_terror", "dark_atmosphere", "cosmic_horror", "gothic", "dark_academia", "folk_customs_and_rites", "postapo", "urban", "final_girl_rules", "creature_design", "possession_possessed_space", "rural_isolation", "sea_horror", "mountain_horror"},
+	"historical":  {"ancient_civilizations", "mythological_elements", "tribal_societies", "ancient_religions", "primitive_technology", "medieval_setting", "mythical_creatures", "epic_scale", "court_intrigue", "nautical", "swashbuckler", "military", "revolution_era", "vikings", "bronze_age_collapse", "dynastic_china", "meiji_japan", "byzantine_politics", "colonial_trade_company", "gold_rush", "industrial_revolution", "enlightenment_salons", "reconstruction_era", "zionism_palestine_mandate", "cold_war_proxy"},
+	"western":     {"frontier_setting", "lawlessness", "honor_code", "survival_focus", "horse_culture", "swashbuckler_frontier_action", "nautical_ports_and_trails", "picaresque", "noir", "cattle_drive", "railroad_expansion", "native_perspective", "gold_rush_boomtown", "border_banditry", "frontier_town_founding"},
+	"litrpg":      {"game_system_rules", "stats_and_levels", "dungeons_and_loot", "guild_politics", "progression_arc", "server_economy", "isekai", "system_apocalypse", "tower_climbing", "dungeon_core", "manhwa_system"},
+	"urban":       {"hidden_supernatural_society", "modern_city_backdrop", "masquerade_rule", "part_time_hero_life", "night_market_magic", "noir", "cyberpunk", "romcom", "cozy", "urban_fantasy", "paranormal_romance", "magical_realism"},
+	"military":    {"unit_esprit_de_corps", "chain_of_command", "combined_arms_tactics", "rules_of_engagement", "rotations_and_leave", "war_crimes_inquiry", "postapo", "space_opera", "espionage_intelligence", "special_operations", "naval_fleet", "air_warfare", "partisan_insurgency", "military_academy"},
+	"postapo":     {"resource_scarcity", "mutated_fauna_flora", "pre_fall_artifacts", "settlement_politics", "radiation_zones", "water_and_power_grids", "military", "solarpunk", "dystopian", "zombie_outbreak", "nuclear_winter", "pandemic_aftermath", "EMP_collapse", "scavenger_economy", "new_tribes_emerging"},
+	"adventure":   {"expedition_logistics", "ancient_traps_puzzles", "extreme_environments", "rival_explorers", "local_mythology_clues", "treasure_curse", "swashbuckler", "nautical", "picaresque", "mythical_creatures", "expedition_epic_scale", "lost_world", "jungle_ruins", "desert_crossing", "polar_endurance", "deep_sea_descent", "mountain_first_ascent", "skyship_race", "underground_river", "port_urban_exotic"},
+	"wuxia":       {"jianghu_codes", "qi_cultivation", "sects_and_alliances", "neigong_manuals", "tea_house_rumors", "wuxia_martial_choreography", "epic_scale", "mythical_creatures", "xianxia", "cultivation_realms"},
+	"xianxia":     {"cultivation_realms", "spirit_roots", "sect_hierarchy", "alchemy_pill_refining", "heavenly_dao_laws", "immortal_realm_geography", "epic_scale", "mythical_creatures", "wuxia", "qi_cultivation"},
+	"cozy":        {"small_town_map", "baking_brewing_gardening_hobbies", "community_events", "pet_or_cat_presence", "low_stakes_danger", "found_family", "urban", "seasonal_rhythm", "bookshop_or_cafe", "holiday_special", "cat_companion", "village_fete"},
+	"heist":       {"crew_specialties", "target_security_layers", "mark_and_distraction", "getaway_routes", "one_job_too_many", "double_cross_timer", "noir", "urban", "cyberpunk", "casino_job", "art_theft_provenance", "train_job", "vault_breaking", "con_artist_long_game"},
+	"cyberpunk":   {"megacorporations", "body_augmentation", "netrunning_matrix", "street_economy_implants", "rain_neon_aesthetic", "class_divide_vertical_cities", "dystopian", "urban", "heist", "cyberfantasy", "technomagic", "post_cyberpunk_net", "corporate_feudalism", "biohack_black_market"},
+	"solarpunk":   {"renewable_infrastructure", "community_cooperatives", "rewilded_urbanism", "open_source_tools", "slow_healing_after_collapse", "festivals_and_commons", "postapo", "cozy", "climate_adaptation", "seed_library", "mycelium_networks", "vertical_farm"},
+	"romantasy":   {"fae_or_god courts", "magic_cost_of_intimacy", "arranged_political_marriage", "enemy_to_lover_arc", "prophecy_bond", "court_intrigue_and_seasons", "magic_system", "epic_scale", "romcom", "chosen_family", "forbidden_love_across_species", "bonded_pair_instead_of_prophecy"},
+	"dystopian":   {"surveillance_state", "scarce_rations_and_permits", "state_propaganda_media", "resistance_cells", "caste_by_gene_or_record", "forbidden_knowledge_archive", "postapo", "military", "cyberpunk", "theocracy_control", "algorithm_governance", "climate_apartheid", "memory_hole_archives"},
+	"space_opera": {"jump_gate_network", "galactic_senate_or_empire", "xeno_first_contact_protocols", "fleet_logistics", "dynastic_politics_in_stars", "precursor_relics", "interstellar_travel", "advanced_technology", "military", "space_western_border", "generation_ship_politics", "alien_alliance_mesh", "trade_route_blockade"},
 	// new parent genres (round 3)
 	"graphic_novel":             {"panel_rhythm_matters", "visual_motif_recurs", "silence_and_gutter_time", "color_script_arc", "caption_vs_dialogue_balance", "memoir_or_biography_texture"},
 	"adventure:swashbuckler":    {"sea_code_and_mutiny_risk", "privateer_letters_marques", "crew_share_system", "port_town_underworld", "chase_and_escape_rhythm", "treasure_curse_hook"},
@@ -633,6 +680,40 @@ var GenreSpecificSettings = map[string][]string{
 	"romance:romcom":            {"meet_cute_variants", "banter_engine_two_compatible_people", "escalating_set_pieces", "third_act_misunderstanding_kept_short", "family_and_friend_chorus", "guaranteed_happy_ending"},
 	// round 6: Drama parent genre
 	"drama": {"interiority_over_plot", "multi_generational_timeline", "quiet_realism", "moral_ambiguity_no_cartoon_villains", "time_nonlinear_or_elided", "open_or_bittersweet_endings_ok", "found_family_or_bloodline", "institution_as_stage", "letters_or_messages_format", "everyday_life_texture"},
+	// Round 14 audit: new parent genres + hybrid subgenre parents (tokens reused
+	// across parents when compatible — e.g. technomagic under fantasy & scifi).
+	"action":         {"set_piece_choreography", "ticking_clock_pressure", "improvised_weapons", "chase_geography", "collateral_damage_stakes", "rival_escalation_ladder", "heist", "swashbuckler", "martial_arts", "disaster_cascade"},
+	"comedy":         {"callback_architecture", "straight_man_anchor_needed", "mistaken_identity_stack", "door_slam_timing", "running_gag_inventory", "trope_aware_cast", "satire_of_institutions", "meet_cute_variants", "banter_engine_two_compatible_people", "escalating_set_pieces", "low_stakes_no_world_threat"},
+	"isekai":         {"summoning_contract_rules", "cheat_ability_with_cost", "new_world_language_customs_gap", "return_home_option_live", "local_politics_knowledge_gap", "reincarnation_or_transport_logic", "game_system_rules", "medieval_setting", "dungeons_and_loot"},
+	"regression":     {"fixed_past_events_catalogue", "butterfly_effect_budget", "aging_body_young_face_tension", "insider_trading_knowledge_edge", "second_chance_relationships", "known_disaster_deadline"},
+	"villainess":     {"otome_game_script_known_events", "duelist_and_ballroom_etiquette", "curse_or_engagement_deadline", "servant_network_intelligence", "scripted_doom_counterplan", "court_gossip_economy", "regency_etiquette", "ball_season_social_ladder"},
+	"otome":          {"capture_target_route_locks", "etiquette_minefield_ballrooms", "broken_engagement_fallout", "scripted_confession_scenes", "rival_heroine_shadow_match", "duelist_and_ballroom_etiquette", "court_gossip_economy"},
+	"battle_royale":  {"shrinking_map_timer", "supply_drop_schedule", "audience_vote_power", "loadout_balance_rules", "forced_alliance_politics", "arena_ethics_debate", "ticking_clock_pressure"},
+	"tower_climbing": {"floor_theme_rotation", "gatekeeper_boss_contract", "checkpoint_resurrection_rules", "vertical_city_politics", "climber_guild_cartel", "summit_myth_economy", "party_roles_complement_gaps"},
+	"dungeon_core":   {"core_room_layout", "monster_roster", "floor_progression", "dungeon_ecology_tables", "party_meta_and_loot", "safe_room_checkpoint_rules", "base_building_resource_math"},
+	"mecha":          {"mech_sync_cost_to_pilot", "production_line_logistics", "mobile_suit_vs_frame_doctrine", "war_broadcast_propaganda", "pilot_chain_of_command", "colony_vs_earth_politics", "combined_arms_tactics"},
+	"superhero":      {"power_cost_or_limitation", "secret_identity_pressure", "collateral_damage_debt", "rogues_gallery_recurring", "public_opinion_metronome", "legacy_symbol_transfer", "urban_vigilante_nightshift"},
+	"spokon":         {"training_montage_discipline", "match_by_match_bracket_structure", "sport_rule_authenticity", "physical_limits_plot_driver", "team_egos_and_roles", "career_window_pressure", "sports_romance_sideplot"},
+	"slice_of_life":  {"low_stakes_no_world_threat", "food_weather_and_routine_texture", "found_family_slow_burn", "episodic_season_structure", "seasonal_rhythm", "small_workplace_cast", "everyday_life_texture"},
+	"school_life":    {"term_calendar_drives_plot", "uniform_and_seating_codes", "cultural_festival_arc_beats", "teacher_administration_friction", "club_and_committee_politics", "exam_hierarchy_pressure"},
+	"harem":          {"cast_archetype_spread", "flag_reading_comedy", "jealousy_without_villainy", "relationship_negotiation_rules", "oblivious_protagonist_engine", "shared_goal_bonds"},
+	"ecchi":          {"comic_timing_over_logic", "boundaries_consent_humor_rules", "serious_core_underneath_gags", "running_gag_inventory", "misreading_signal_comedy", "fan_service_with_limits"},
+	"revenge":        {"evidence_chain_over_years", "identity_change_after_fall", "moral_line_defined_early", "allies_gathered_one_debt_at_a_time", "institutional_wall", "mirror_of_self_target", "rain_slick_city"},
+	"mahou_shoujo":   {"transformation_sequence_rules", "wish_granting_contract_cost", "team_color_coded_roles", "city_masked_by_magical_filter", "mentor_faamiliar_hidden_agenda", "dark_corruption_arc_option"},
+	"mahou_shonen":   {"spell_formula_learning_curve", "magic_law_enforcement_body", "mana_battery_physical_cost", "dueling_protocol_rules", "forbidden_spell_temptation", "magic_academy_track"},
+	"survival":       {"exposure_and_shelter_physics", "calorie_and_water_budget", "rescue_window_uncertainty", "solo_or_group_psychology_breakdown", "extreme_environments", "tool_and_skill_limits"},
+	"lost_world":     {"isolated_ecology_or_civilization", "expedition_denied_evidence", "native_territory_protocols", "exit_route_threatened", "creature_design", "first_contact_paradigm"},
+	"treasure_hunt":  {"clue_chain_across_locations", "rival_hunter_economics", "trap_and_decryption_set_pieces", "provenance_and_theft_ethics", "ancient_traps_puzzles", "treasure_curse"},
+	"road_trip":      {"vehicle_as_home_base", "route_and_border_checkpoints", "town_by_town_episodic_cast", "fuel_money_time_triangle", "detour_episode_generator"},
+	"sci_fantasy":    {"starships_and_sorcery", "technology_indistinguishable_from_magic", "ancient_alien_gods", "blended_worldbuilding_rules", "space_combat", "magic_system"},
+	"technomagic":    {"magic_coded_like_engineering", "spell_circuits_and_runeware", "mana_grid_infrastructure", "licensing_bodies_vs_wild_mages", "advanced_technology", "magic_cost_and_limits"},
+	"cyberfantasy":   {"neon_city_with_spell_market", "digital_grimoires", "augmented_witches", "corporate_pantheons", "megacorporations", "hidden_supernatural_society", "netrunning_matrix"},
+	"martial_arts":   {"dojo_or_school_lineage", "tournament_bracket_structure", "technique_progression_detail", "honor_debt_system", "jianghu_codes", "wuxia_martial_choreography"},
+	"disaster":       {"cascade_failure_engineering", "evacuation_choke_points", "triage_and_supply_math", "warning_ignored_act_one", "weather_is_antagonist", "climate_adaptation"},
+	"mafia_romance":  {"arranged_alliance_marriage", "family_business_danger", "forbidden_love_inside_the_house", "protection_and_control_ambiguity", "omerta_code", "territory_and_protection_economy"},
+	"vampire":        {"feeding_economy_and_ethics", "daylight_weakness_rules", "sire_lineage_politics", "masquerade_modern_cover", "gothic", "paranormal_romance"},
+	"werewolf":       {"moon_cycle_or_trigger_rules", "pack_hierarchy_law", "beast_self_integration_work", "rural_territory_boundaries", "folk_customs_and_rites", "creature_design"},
+	"gold_rush":      {"boomtown_supply_inflation", "claim_staking_law", "stampede_geography", "vigilance_committee_justice", "gold_rush_boomtown", "railroad_expansion"},
 }
 
 // —— Cross-cutting modifier presets (round 7) ————————————————————————————————
@@ -738,16 +819,27 @@ func MatchGenreKey(storyType string) string {
 		// round 6: Drama as a first-class parent genre (checked before generic keys)
 		{"drama", []string{"drama", "family saga", "coming of age", "coming-of-age", "bildungsroman", "psychorealism", "metafiction", "domestic saga", "slice of life drama", "剧情", "家庭史诗", "成长小说", "文艺"}},
 		{"graphic_novel", []string{"graphic novel", "comic", "manga script", "图像小说", "漫画"}},
+		// Round 14 audit: new parent genres and hybrid subgenre keys. Hybrids are
+		// checked before their parents so "science fantasy"/"technomagic" resolve to
+		// the sci_fantasy key instead of falling through to generic fantasy/scifi.
+		{"sci_fantasy", []string{"science fantasy", "science-fiction fantasy", "sci-fi fantasy", "sf fantasy", "technomagic", "techno-magic", "cyberfantasy", "cyber-fantasy", "科技奇幻", "魔导科技", "赛博奇幻"}},
+		{"comedy", []string{"comedy", "comedic", "farce", "parody", "satirical novel", "humor fiction", "喜剧", "搞笑", "讽刺小说", "无厘头"}},
 		// parent genres after the specific ones
 		{"fantasy", []string{"fantasy", "奇幻", "玄幻", "魔幻"}},
 		{"scifi", []string{"sci-fi", "scifi", "science fiction", "科幻"}},
-		{"mystery", []string{"mystery", "detective", "悬疑", "推理", "侦探", "crime fiction"}},
+		// Round 15: "Mystery" and "Thriller" are a single parent genre in the
+		// UI; the backend key stays "mystery" and absorbs the thriller keywords so
+		// previously-saved configs still resolve. The standalone "action", "crime"
+		// and "mythology" parents were folded into adventure/mystery/fantasy.
+		{"mystery", []string{"mystery", "detective", "悬疑", "推理", "侦探", "crime fiction", "thriller", "spy", "惊悚", "谍战"}},
 		{"romance", []string{"romance", "言情", "爱情"}},
-		{"thriller", []string{"thriller", "spy", "惊悚", "谍战"}},
 		{"horror", []string{"horror", "恐怖", "灵异", "克苏鲁", "cosmic horror", "folk horror"}},
 		{"historical", []string{"historical", "history", "历史"}},
 		{"western", []string{"western", "西部"}},
-		{"adventure", []string{"adventure", "exploration", "expedition", "tomb raiding", "盗墓", "探险", "冒险"}},
+		// Round 15: "Action & Adventure" is one parent genre (key "adventure"); it
+		// also matches pure-action text plus the crime/mythology word sets that used
+		// to hit their own parent keys, so those stories keep resolving somewhere.
+		{"adventure", []string{"adventure", "exploration", "expedition", "tomb raiding", "盗墓", "探险", "冒险", "action", "martial arts", "fighting novel", "combat fiction", "warrior tale", "动作", "格斗", "武侠动作", "热血战斗", "mythology", "mythological", "folklore", "folktale", "legend cycle", "fairy tale collection", "神话", "传说", "民间故事", "志怪", "crime", "criminal", "mafia", "gangster", "organized crime", "detective bureau", "犯罪", "黑帮", "刑侦罪案", "警匪"}},
 	}
 	for _, k := range kws {
 		for _, w := range k.words {
@@ -788,6 +880,23 @@ var SubgenrePresetKeys = []string{
 	"philosophical", "historical saga", "legal drama", "medical drama", "sports drama",
 	"war drama", "courtroom drama", "domestic drama", "epistolary", "tragedy", "melodrama",
 	"satire", "allegory", "bildungsroman",
+	// round 14 audit: hybrids, new parents and missing catalog entries. These now
+	// have dedicated character-field presets (genre_char_fields.go) and conflict /
+	// protagonist / settings keys in config.go, so every suggestion chip resolves.
+	"otome", "isekai", "action thriller", "adventure quest", "martial arts", "disaster", "spy action",
+	"survival", "lost world", "treasure hunt", "expedition", "jungle expedition", "desert crossing",
+	"mountain climbing", "polar exploration", "underground exploration", "road trip", "man vs nature",
+	"science fantasy", "technomagic", "cyberfantasy", "dieselpunk", "afrofuturism", "cozy sci-fi",
+	"zombie apocalypse", "vampire", "werewolf", "monster horror", "occult ritual",
+	"organized crime", "detective noir", "legal crime drama", "true crime", "gangster epic",
+	"regency romance", "sports romance", "mafia romance", "medical thriller", "eco thriller", "conspiracy thriller",
+	"parody", "farce", "sitcom ensemble", "dark comedy", "absurdist humor", "workplace comedy",
+	"road trip comedy", "paranormal comedy",
+	"system apocalypse", "vrmmo", "base building", "kingdom building", "gamelit",
+	"fairy tale retelling", "legend", "gods among us", "arthurian legend", "norse mythology",
+	"greek mythology", "egyptian mythology", "slavic folklore", "asian folklore",
+	"victorian", "interwar", "cold war", "dynastic china", "feudal japan", "viking age",
+	"gold rush", "frontier noir",
 }
 
 // SubgenreHints maps every subgenre preset (see SubgenrePresetKeys) to a
@@ -848,21 +957,21 @@ var SubgenreHints = map[string][2]string{
 	"dark academia":        {"Universidades elegantes con secretos letales.", "Elegant universities hiding lethal secrets."},
 	"swashbuckler":         {"Duelos, piratas y capas al viento.", "Duels, pirates and caped derring-do."},
 	// round 6: new subgenre hints
-	"magical realism":        {"Lo maravillozo ocurre sin asombro en un mundo realista.", "The marvelous happens matter-of-factly in a realistic world."},
-	"noblebright":            {"Mundo esperanzador donde las acciones mejoran todo.", "Hopeful world where good actions genuinely improve things."},
-	"grimdark":               {"Brutalidad moral donde cada victoria cuesta.", "Moral brutality where every victory exacts its price."},
-	"haunted house":          {"El terror vive dentro de un hogar concreto.", "Terror lives inside one specific home."},
-	"mecha":                  {"Pilotos, máquinas de guerra y sus costes humanos.", "Pilots, war machines and their human cost."},
-	"regression":             {"Volver al pasado con el conocimiento del futuro.", "Returning to the past armed with future knowledge."},
-	"villainess":             {"Reencarnada como villana doomed: reescribe su guion.", "Reborn as the doomed villainess: rewriting her script."},
-	"otome":                  {"Mundo de juego otome: rutas, banderas y corazones.", "Otome-game world: routes, flags and hearts."},
-	"battle royale":          {"Último en pie bajo un reloj que se cierra.", "Last standing under a closing-clock arena."},
-	"tower climbing":         {"Plantas, puertas y pruebas hacia la cima.", "Floors, gates and trials toward the summit."},
-	"school life":            {"Aulas, clubes y ritmos de calendario escolar.", "Classrooms, clubs and school-calendar rhythms."},
-	"spokon":                 {"Deporte como disciplina: entrenamiento y superación.", "Sports as discipline: training and self-mastery."},
-	"iyashikei":              {"Historia sanadora, sin villanos, solo calidez.", "Healing story: no villains, only warmth."},
-	"ecchi":                  {"Comedia de enredos subidos de tono con corazón.", "Risqué comedy of errors with a sincere core."},
-	"harem":                  {"Un protagonista, muchos afectos en equilibrio.", "One lead, many affections in comedic balance."},
+	"magical realism": {"Lo maravillozo ocurre sin asombro en un mundo realista.", "The marvelous happens matter-of-factly in a realistic world."},
+	"noblebright":     {"Mundo esperanzador donde las acciones mejoran todo.", "Hopeful world where good actions genuinely improve things."},
+	"grimdark":        {"Brutalidad moral donde cada victoria cuesta.", "Moral brutality where every victory exacts its price."},
+	"haunted house":   {"El terror vive dentro de un hogar concreto.", "Terror lives inside one specific home."},
+	"mecha":           {"Pilotos, máquinas de guerra y sus costes humanos.", "Pilots, war machines and their human cost."},
+	"regression":      {"Volver al pasado con el conocimiento del futuro.", "Returning to the past armed with future knowledge."},
+	"villainess":      {"Reencarnada como villana doomed: reescribe su guion.", "Reborn as the doomed villainess: rewriting her script."},
+	"otome":           {"Mundo de juego otome: rutas, banderas y corazones.", "Otome-game world: routes, flags and hearts."},
+	"battle royale":   {"Último en pie bajo un reloj que se cierra.", "Last standing under a closing-clock arena."},
+	"tower climbing":  {"Plantas, puertas y pruebas hacia la cima.", "Floors, gates and trials toward the summit."},
+	"school life":     {"Aulas, clubes y ritmos de calendario escolar.", "Classrooms, clubs and school-calendar rhythms."},
+	"spokon":          {"Deporte como disciplina: entrenamiento y superación.", "Sports as discipline: training and self-mastery."},
+	"iyashikei":       {"Historia sanadora, sin villanos, solo calidez.", "Healing story: no villains, only warmth."},
+	"ecchi":           {"Comedia de enredos subidos de tono con corazón.", "Risqué comedy of errors with a sincere core."},
+	"harem":           {"Un protagonista, muchos afectos en equilibrio.", "One lead, many affections in comedic balance."},
 	// round 8: remaining anime/webnovel modifiers as first-class subgenres
 	"mahou shoujo":           {"Magia, transformación y vínculos con corazón adolescente.", "Transformation magic, familiar bonds and a teenage heart."},
 	"mahou shonen":           {"Héroes mágicos jóvenes que aprenden el coste del poder.", "Young magic heroes learning the cost of power."},
