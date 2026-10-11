@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // Genre-specific character fields, borrowed from NovelWriter's per-genre lore
 // sheets (core/config/genre_configs/*.py). They are *suggestions* injected into
@@ -337,6 +341,18 @@ func SubgenreCharacterExtraFields(subgenre string) []string {
 	return nil
 }
 
+// SubgenreExtraFieldsSnapshot exposes the raw subgenre-label -> extra-fields
+// table for API serialization (/api/novel-params -> subgenre_catalogs). The
+// HTTP layer ships ALL parameters and lets the frontend filter them per
+// selected genre; this copy keeps the internal map unexported-safe.
+func SubgenreExtraFieldsSnapshot() map[string][]string {
+	out := make(map[string][]string, len(subgenreCharacterExtraFields))
+	for k, v := range subgenreCharacterExtraFields {
+		out[k] = append([]string{}, v...)
+	}
+	return out
+}
+
 // —— Anime / manhwa / game-genre modifier presets (round 5) ——————————————————
 // Single source of truth per modifier: [conflict scales..., "|", protagonists..., "|", specific settings...].
 // The "|" separators are stripped at init; every list ends with "other" so the
@@ -617,152 +633,152 @@ func buildDramaSubgenrePresets() {
 // earlier rounds; this adds the remaining ones requested: dungeon core via the
 // "dungeon" key, battle royale, slice of life, ecchi, mecha, erotica...). Each
 // entry registers its title-cased display label in SubgenrePresetKeys and
-// merges its signature setting tokens into every parent genre where it is
-// thematically compatible (subgenreLabelParents), so the Specific-settings
-// checkboxes surface them under multiple categories (e.g. Technomagic-style
-// crossovers: Science Fantasy / Cyberfantasy can legitimately live under both
-// fantasy and scifi).
+// merges its signature setting tokens into its ONE canonical parent genre
+// (subgenreLabelParents). Single-parent rule (round 17): every subgenre belongs
+// to exactly one parent, mirroring the frontend GENRES lists in
+// frontend/src/lib/novelwriterGenres.js — hybrid/crossover labels no longer
+// repeat across parents.
 var subgenreLabelParents = map[string][]string{
-	"Wuxia":                  {"fantasy", "historical", "adventure"},
-	"Xianxia":                {"fantasy", "historical"},
-	"LitRPG":                 {"fantasy", "scifi"},
-	"Isekai":                 {"fantasy", "scifi"},
-	"Dungeon Core":           {"fantasy", "litrpg"},
-	"Tower Climbing":         {"fantasy", "litrpg"},
-	"Regression":             {"fantasy", "scifi", "thriller"},
-	"Villainess":             {"fantasy", "romance"},
-	"Otome":                  {"fantasy", "romance"},
+	"Wuxia":                  {"fantasy"},
+	"Xianxia":                {"fantasy"},
+	"LitRPG":                 {"fantasy"},
+	"Isekai":                 {"fantasy"},
+	"Dungeon Core":           {"fantasy"},
+	"Tower Climbing":         {"fantasy"},
+	"Regression":             {"fantasy"},
+	"Villainess":             {"fantasy"},
+	"Otome":                  {"fantasy"},
 	"Mahou Shoujo":           {"fantasy"},
 	"Mahou Shonen":           {"fantasy"},
-	"Battle Royale":          {"scifi", "thriller"},
-	"Mecha":                  {"scifi", "military"},
-	"Superhero":              {"scifi", "fantasy"},
-	"Romantasy":              {"romance", "fantasy"},
-	"Erotica":                {"romance", "drama"},
-	"Harem":                  {"romance", "drama", "fantasy"},
-	"Revenge":                {"thriller", "drama", "adventure"},
-	"Slice of Life":          {"drama", "comedy", "cozy"},
+	"Battle Royale":          {"scifi"},
+	"Mecha":                  {"scifi"},
+	"Superhero":              {"scifi"},
+	"Romantasy":              {"romance"},
+	"Erotica":                {"romance"},
+	"Harem":                  {"romance"},
+	"Revenge":                {"mystery_thriller"},
+	"Slice of Life":          {"drama"},
 	"School Life":            {"drama"},
 	"Spokon":                 {"drama"},
-	"Iyashikei":              {"drama", "cozy"},
-	"Ecchi":                  {"drama", "comedy"},
-	"Cyberpunk":              {"scifi", "thriller", "urban"},
-	"Steampunk":              {"scifi", "historical", "fantasy"},
+	"Iyashikei":              {"drama"},
+	"Ecchi":                  {"drama"},
+	"Cyberpunk":              {"scifi"},
+	"Steampunk":              {"scifi"},
 	"Solarpunk":              {"scifi"},
-	"Space Opera":            {"scifi", "adventure"},
-	"Dystopian":              {"scifi", "thriller"},
-	"Post-Apocalyptic":       {"scifi", "horror", "adventure"},
-	"Time Travel":            {"scifi", "adventure", "romance"},
+	"Space Opera":            {"scifi"},
+	"Dystopian":              {"scifi"},
+	"Post-Apocalyptic":       {"scifi"},
+	"Time Travel":            {"scifi"},
 	"First Contact":          {"scifi"},
-	"Heist":                  {"thriller", "mystery", "adventure"},
-	"Noir":                   {"mystery", "thriller"},
-	"Gothic":                 {"horror", "romance", "fantasy"},
-	"Dark Academia":          {"horror", "mystery", "literary", "drama"},
-	"Swashbuckler":           {"adventure", "historical"},
-	"Nautical":               {"adventure", "historical"},
-	"Picaresque":             {"adventure", "historical", "literary"},
-	"Rom-Com":                {"romance", "comedy"},
-	"Cozy":                   {"mystery", "fantasy", "scifi"},
-	"Urban Fantasy":          {"fantasy", "mystery", "romance"},
-	"Magical Realism":        {"fantasy", "literary", "historical"},
-	"Progression Fantasy":    {"fantasy", "litrpg"},
-	"Epic Fantasy":           {"fantasy", "adventure"},
-	"High Fantasy":           {"fantasy", "adventure"},
-	"Dark Fantasy":           {"fantasy", "horror"},
-	"Sword and Sorcery":      {"fantasy", "adventure"},
-	"Hard Sci-Fi":            {"scifi", "mystery"},
-	"Biopunk":                {"scifi", "horror"},
-	"Cli-Fi":                 {"scifi", "drama"},
-	"Afrofuturism":           {"scifi", "fantasy", "historical"},
-	"Folk Horror":            {"horror", "fantasy", "historical"},
-	"Cosmic Horror":          {"horror", "scifi"},
-	"Haunted House":          {"horror", "mystery"},
-	"Zombie Apocalypse":      {"horror", "scifi", "adventure"},
-	"Police Procedural":      {"mystery", "thriller"},
-	"Locked Room":            {"mystery"},
-	"Hard-Boiled":            {"mystery", "thriller"},
-	"Espionage Thriller":     {"thriller", "adventure"},
-	"Techno-Thriller":        {"thriller", "scifi"},
-	"Political Thriller":     {"thriller", "historical", "drama"},
-	"Legal Thriller":         {"thriller", "mystery", "drama"},
-	"Domestic Thriller":      {"thriller", "mystery", "drama"},
-	"Psychological Thriller": {"thriller", "mystery", "horror"},
-	"Action Thriller":        {"thriller", "adventure"},
-	"Psychological Mystery":  {"mystery", "thriller"},
-	"Historical Mystery":     {"mystery", "historical"},
-	"Amateur Detective":      {"mystery", "cozy"},
-	"Cozy Mystery":           {"mystery"},
-	"Historical Romance":     {"romance", "historical"},
-	"Contemporary Romance":   {"romance", "drama"},
-	"Paranormal Romance":     {"romance", "fantasy", "horror"},
-	"Romantic Suspense":      {"romance", "thriller"},
-	"Small Town Romance":     {"romance", "cozy"},
+	"Heist":                  {"mystery_thriller"},
+	"Noir":                   {"mystery_thriller"},
+	"Gothic":                 {"horror"},
+	"Dark Academia":          {"horror"},
+	"Swashbuckler":           {"adventure"},
+	"Nautical":               {"adventure"},
+	"Picaresque":             {"adventure"},
+	"Rom-Com":                {"romance"},
+	"Cozy":                   {"mystery"},
+	"Urban Fantasy":          {"fantasy"},
+	"Magical Realism":        {"fantasy"},
+	"Progression Fantasy":    {"fantasy"},
+	"Epic Fantasy":           {"fantasy"},
+	"High Fantasy":           {"fantasy"},
+	"Dark Fantasy":           {"fantasy"},
+	"Sword and Sorcery":      {"fantasy"},
+	"Hard Sci-Fi":            {"scifi"},
+	"Biopunk":                {"scifi"},
+	"Cli-Fi":                 {"scifi"},
+	"Afrofuturism":           {"scifi"},
+	"Folk Horror":            {"horror"},
+	"Cosmic Horror":          {"horror"},
+	"Haunted House":          {"horror"},
+	"Zombie Apocalypse":      {"scifi"},
+	"Police Procedural":      {"mystery_thriller"},
+	"Locked Room":            {"mystery_thriller"},
+	"Hard-Boiled":            {"mystery_thriller"},
+	"Espionage Thriller":     {"mystery_thriller"},
+	"Techno-Thriller":        {"mystery_thriller"},
+	"Political Thriller":     {"mystery_thriller"},
+	"Legal Thriller":         {"mystery_thriller"},
+	"Domestic Thriller":      {"mystery_thriller"},
+	"Psychological Thriller": {"mystery_thriller"},
+	"Action Thriller":        {"mystery_thriller"},
+	"Psychological Mystery":  {"mystery_thriller"},
+	"Historical Mystery":     {"mystery_thriller"},
+	"Amateur Detective":      {"mystery_thriller"},
+	"Cozy Mystery":           {"mystery_thriller"},
+	"Historical Romance":     {"romance"},
+	"Contemporary Romance":   {"romance"},
+	"Paranormal Romance":     {"romance"},
+	"Romantic Suspense":      {"romance"},
+	"Small Town Romance":     {"romance"},
 	"Erotic Romance":         {"romance"},
-	"Sports Romance":         {"romance", "drama"},
-	"Mafia Romance":          {"romance", "thriller"},
-	"Suspense Romance":       {"romance", "thriller"},
-	"Alien Invasion":         {"scifi", "horror"},
-	"Space Western":          {"western", "scifi"},
-	"Weird Western":          {"western", "horror", "fantasy"},
-	"Classic Western":        {"western", "adventure", "historical"},
-	"Outlaw Western":         {"western", "adventure"},
-	"Cattle Drive Western":   {"western", "adventure"},
-	"Modern Western":         {"western", "drama"},
-	"Traditional Western":    {"western", "historical"},
-	"Spaghetti Western":      {"western", "adventure"},
-	"Ancient History":        {"historical", "adventure", "fantasy"},
-	"Medieval":               {"historical", "fantasy"},
+	"Sports Romance":         {"romance"},
+	"Mafia Romance":          {"romance"},
+	"Suspense Romance":       {"romance"},
+	"Alien Invasion":         {"scifi"},
+	"Space Western":          {"western"},
+	"Weird Western":          {"western"},
+	"Classic Western":        {"western"},
+	"Outlaw Western":         {"western"},
+	"Cattle Drive Western":   {"western"},
+	"Modern Western":         {"western"},
+	"Traditional Western":    {"western"},
+	"Spaghetti Western":      {"western"},
+	"Ancient History":        {"historical"},
+	"Medieval":               {"historical"},
 	"Renaissance":            {"historical"},
-	"Colonial America":       {"historical", "adventure"},
-	"Civil War Era":          {"historical", "drama", "war"},
-	"World War Era":          {"historical", "military", "drama"},
-	"Regency":                {"historical", "romance"},
-	"Gold Rush":              {"historical", "western", "adventure"},
-	"Military":               {"military", "historical", "scifi", "drama"},
-	"Military Fantasy":       {"fantasy", "military"},
-	"Portal Fantasy":         {"fantasy", "adventure"},
-	"Mythic Fantasy":         {"fantasy", "historical"},
-	"Fairy Tale":             {"fantasy", "romance"},
+	"Colonial America":       {"historical"},
+	"Civil War Era":          {"historical"},
+	"World War Era":          {"historical"},
+	"Regency":                {"historical"},
+	"Gold Rush":              {"western"},
+	"Military":               {"military"},
+	"Military Fantasy":       {"fantasy"},
+	"Portal Fantasy":         {"fantasy"},
+	"Mythic Fantasy":         {"fantasy"},
+	"Fairy Tale":             {"fantasy"},
 	"Noblebright":            {"fantasy"},
-	"Grimdark":               {"fantasy", "horror"},
-	"Body Horror":            {"horror", "scifi"},
-	"Slasher Horror":         {"horror", "thriller"},
-	"Supernatural Horror":    {"horror", "fantasy"},
-	"Psychological Horror":   {"horror", "thriller", "mystery"},
-	"Gothic Horror":          {"horror", "gothic"},
-	"Space Adventure":        {"scifi", "adventure"},
-	"Lost World":             {"adventure", "scifi", "horror"},
-	"Survival":               {"adventure", "thriller", "horror"},
-	"Exploration":            {"adventure", "scifi", "historical"},
-	"Disaster":               {"adventure", "thriller", "horror"},
-	"War Epic":               {"war", "historical", "adventure"},
-	"Sea Adventure":          {"adventure", "historical"},
-	"Treasure Hunt":          {"adventure", "fantasy", "mystery"},
-	"Jungle Expedition":      {"adventure", "horror"},
-	"Mountain Climb":         {"adventure", "drama"},
-	"Desert Trek":            {"adventure", "historical"},
-	"Polar Expedition":       {"adventure", "scifi"},
-	"Sky Pirate":             {"adventure", "fantasy", "steampunk"},
-	"Road Trip":              {"adventure", "drama", "comedy"},
-	"Coming-of-age":          {"drama", "adventure", "romance"},
-	"Family Saga":            {"drama", "historical"},
-	"Psychorealism":          {"drama", "literary"},
-	"Metafiction":            {"drama", "literary", "comedy"},
-	"Existentialist Fiction": {"drama", "literary"},
-	"Philosophical":          {"drama", "literary", "scifi"},
-	"Historical Saga":        {"drama", "historical"},
-	"Legal Drama":            {"drama", "thriller"},
-	"Medical Drama":          {"drama", "thriller"},
+	"Grimdark":               {"fantasy"},
+	"Body Horror":            {"horror"},
+	"Slasher Horror":         {"horror"},
+	"Supernatural Horror":    {"horror"},
+	"Psychological Horror":   {"horror"},
+	"Gothic Horror":          {"horror"},
+	"Space Adventure":        {"scifi"},
+	"Lost World":             {"adventure"},
+	"Survival":               {"adventure"},
+	"Exploration":            {"adventure"},
+	"Disaster":               {"adventure"},
+	"War Epic":               {"war"},
+	"Sea Adventure":          {"adventure"},
+	"Treasure Hunt":          {"adventure"},
+	"Jungle Expedition":      {"adventure"},
+	"Mountain Climb":         {"adventure"},
+	"Desert Trek":            {"adventure"},
+	"Polar Expedition":       {"adventure"},
+	"Sky Pirate":             {"adventure"},
+	"Road Trip":              {"adventure"},
+	"Coming-of-age":          {"drama"},
+	"Family Saga":            {"drama"},
+	"Psychorealism":          {"drama"},
+	"Metafiction":            {"drama"},
+	"Existentialist Fiction": {"drama"},
+	"Philosophical":          {"drama"},
+	"Historical Saga":        {"drama"},
+	"Legal Drama":            {"drama"},
+	"Medical Drama":          {"drama"},
 	"Sports Drama":           {"drama"},
-	"War Drama":              {"drama", "war", "historical"},
-	"Courtroom Drama":        {"drama", "legal"},
-	"Domestic Drama":         {"drama", "thriller"},
-	"Epistolary":             {"drama", "literary", "horror"},
-	"Tragedy":                {"drama", "literary"},
-	"Melodrama":              {"drama", "romance"},
-	"Satire":                 {"drama", "comedy", "literary"},
-	"Allegory":               {"drama", "literary", "fantasy"},
-	"Bildungsroman":          {"drama", "literary"},
+	"War Drama":              {"drama"},
+	"Courtroom Drama":        {"drama"},
+	"Domestic Drama":         {"drama"},
+	"Epistolary":             {"drama"},
+	"Tragedy":                {"drama"},
+	"Melodrama":              {"drama"},
+	"Satire":                 {"drama"},
+	"Allegory":               {"drama"},
+	"Bildungsroman":          {"drama"},
 }
 
 // buildSubgenreLabelPresets registers each display label above in the genre
@@ -798,6 +814,242 @@ func init() {
 	buildAnimeModifierPresets()
 	buildDramaSubgenrePresets()
 	buildSubgenreLabelPresets()
+	buildCanonicalSubgenreParents()
+	enforceSingleParentSettingTokens()
+}
+
+// canonicalSubgenreParents maps every frontend GENRES subgenre label (see
+// frontend/src/lib/novelwriterGenres.js) to its EXACTLY ONE parent genre key.
+// It is generated at init() from subgenreLabelParents plus frontendOnlySubgenre
+// entries for labels that exist only in the frontend catalog; duplicates are a
+// hard error (panic) so the taxonomy can never silently regress. The frontend
+// derives SUBGENRE_PARENT from its own copy of the same lists and validates it
+// at module load with an equivalent invariant.
+var canonicalSubgenreParents = map[string]string{}
+
+// frontendOnlySubgenre returns the canonical parent for labels present in the
+// frontend GENRES catalog but absent from subgenreLabelParents (which only
+// covers labels with backend presets). Keys are lowercase display labels.
+func frontendOnlySubgenre(label string) (string, bool) {
+	p, ok := frontendOnlySubgenreParents[strings.ToLower(label)]
+	return p, ok
+}
+
+// frontendOnlySubgenreParents completes the taxonomy for frontend catalog
+// labels without dedicated backend presets. Values mirror the `genre` field of
+// SUBGENRE_DATA in novelwriterGenres.js (the two catalogs share the same 185
+// labels; this map covers the ones subgenreLabelParents does not name).
+var frontendOnlySubgenreParents = map[string]string{
+	// fantasy
+	"high fantasy": "fantasy", "epic fantasy": "fantasy", "sword and sorcery": "fantasy",
+	"dark fantasy": "fantasy", "grimdark": "fantasy", "noblebright": "fantasy",
+	"mythic fantasy": "fantasy", "fairy tale": "fantasy", "fairy tale retelling": "fantasy",
+	"magical realism": "fantasy", "progression fantasy": "fantasy", "portal fantasy": "fantasy",
+	"military fantasy": "fantasy", "science fantasy": "fantasy", "technomagic": "fantasy",
+	"cyberfantasy": "fantasy", "gamelit": "fantasy", "mahou shoujo": "fantasy",
+	"mahou shonen": "fantasy", "arthurian legend": "fantasy", "norse mythology": "fantasy",
+	"greek mythology": "fantasy", "egyptian mythology": "fantasy", "slavic folklore": "fantasy",
+	"asian folklore": "fantasy", "gods among us": "fantasy", "legend / epic poem": "fantasy",
+	// scifi
+	"alien invasion": "scifi", "steampunk": "scifi", "biopunk": "scifi", "dieselpunk": "scifi",
+	"cli-fi": "scifi", "afrofuturism": "scifi", "cozy sci-fi": "scifi", "system apocalypse": "scifi",
+	"vrmmo": "scifi", "base building": "scifi", "kingdom building": "scifi",
+	// mystery_thriller
+	"hard-boiled": "mystery_thriller", "cold case": "mystery_thriller",
+	"organized crime / mafia": "mystery_thriller", "gangster epic": "mystery_thriller",
+	"detective noir": "mystery_thriller", "legal crime drama": "mystery_thriller",
+	"true-crime style": "mystery_thriller", "psychological thriller": "mystery_thriller",
+	"domestic thriller": "mystery_thriller", "legal thriller": "mystery_thriller",
+	"political thriller": "mystery_thriller", "espionage thriller": "mystery_thriller",
+	"techno-thriller": "mystery_thriller", "medical thriller": "mystery_thriller",
+	"eco-thriller": "mystery_thriller", "conspiracy thriller": "mystery_thriller",
+	"action thriller": "mystery_thriller",
+	// romance
+	"contemporary romance": "romance", "historical romance": "romance", "regency romance": "romance",
+	"romantic suspense": "romance", "paranormal romance": "romance", "small town romance": "romance",
+	"sports romance": "romance", "mafia romance": "romance", "erotic romance": "romance",
+	// adventure
+	"adventure quest": "adventure", "lost world": "adventure", "treasure hunt": "adventure",
+	"swashbuckler": "adventure", "picaresque": "adventure", "nautical / sea voyage": "adventure",
+	"expedition / exploration": "adventure", "jungle expedition": "adventure",
+	"desert crossing": "adventure", "mountain climbing": "adventure", "polar exploration": "adventure",
+	"underground / subterranean": "adventure", "road trip": "adventure", "man vs nature": "adventure",
+	"disaster": "adventure", "martial arts": "adventure", "spy action": "adventure",
+	// horror
+	"gothic horror": "horror", "cosmic horror": "horror", "psychological horror": "horror",
+	"body horror": "horror", "slasher horror": "horror", "supernatural horror": "horror",
+	"folk horror": "horror", "haunted house": "horror", "vampire": "horror", "werewolf": "horror",
+	"monster horror": "horror", "occult ritual": "horror",
+	// historical
+	"ancient history": "historical", "medieval": "historical", "renaissance": "historical",
+	"colonial america": "historical", "civil war era": "historical", "world war era": "historical",
+	"regency": "historical", "victorian": "historical", "interwar": "historical",
+	"cold war": "historical", "dynastic china": "historical", "feudal japan": "historical",
+	"viking age": "historical",
+	// western
+	"classic western": "western", "traditional western": "western", "modern western": "western",
+	"spaghetti western": "western", "weird western": "western", "space western": "western",
+	"outlaw western": "western", "cattle drive western": "western", "gold rush": "western",
+	"frontier noir": "western",
+	// drama
+	"coming-of-age": "drama", "family saga": "drama", "historical saga": "drama",
+	"psychorealism": "drama", "domestic drama": "drama", "legal drama": "drama",
+	"medical drama": "drama", "sports drama": "drama", "war drama": "drama", "tragedy": "drama",
+	"melodrama": "drama", "existentialist fiction": "drama", "philosophical": "drama",
+	"metafiction": "drama", "epistolary": "drama", "slice of life": "drama",
+	"school life": "drama", "iyashikei": "drama",
+	// comedy
+	"parody": "comedy", "farce": "comedy", "sitcom-style ensemble": "comedy",
+	"dark comedy": "comedy", "absurdist humor": "comedy", "workplace comedy": "comedy",
+	"road-trip comedy": "comedy", "paranormal comedy": "comedy",
+}
+
+// buildCanonicalSubgenreParents assembles the full label->parent taxonomy and
+// panics on any conflicting/duplicate assignment (single-parent invariant).
+// Backend preset buckets use the legacy key "mystery" for the merged
+// "Mystery & Thriller" parent (config.MatchGenreKey maps both "mystery" and
+// "thriller" to it); canonical parents are normalized to the frontend GENRES
+// keys so callers can compare against selectedGenreKeys directly.
+func buildCanonicalSubgenreParents() {
+	normalize := func(p string) string {
+		if p == "mystery" || p == "thriller" {
+			return "mystery_thriller"
+		}
+		return p
+	}
+	for label, parents := range subgenreLabelParents {
+		if len(parents) != 1 {
+			panic(fmt.Sprintf("config: subgenre %q has %d parents; each subgenre must belong to exactly one parent genre", label, len(parents)))
+		}
+		lc := strings.ToLower(label)
+		p := normalize(parents[0])
+		if prev, dup := canonicalSubgenreParents[lc]; dup && prev != p {
+			panic(fmt.Sprintf("config: subgenre %q assigned to both %q and %q", label, prev, p))
+		}
+		canonicalSubgenreParents[lc] = p
+	}
+	for lc, parent := range frontendOnlySubgenreParents {
+		p := normalize(parent)
+		if prev, dup := canonicalSubgenreParents[lc]; dup {
+			if prev != p {
+				panic(fmt.Sprintf("config: subgenre %q assigned to both %q and %q", lc, prev, p))
+			}
+			continue
+		}
+		canonicalSubgenreParents[lc] = p
+	}
+}
+
+// CanonicalParentForSubgenre returns the single canonical parent-genre key for
+// a subgenre display label or snake_case token ("Cozy Mystery", "isekai",
+// "locked_room_impossible_crime"), or "" when the label is unknown. This is the
+// authoritative cross-check used by GetNovelParams to guarantee the UI never
+// surfaces a subgenre under more than one parent genre.
+func CanonicalParentForSubgenre(s string) string {
+	key := normalizeGenreKeyString(s)
+	if key == "" {
+		return ""
+	}
+	if p, ok := canonicalSubgenreParents[key]; ok {
+		return p
+	}
+	// Tokens may carry extra descriptive words ("locked_room_impossible_crime"
+	// for "Locked Room"); try progressively shorter prefixes of the token.
+	parts := strings.Split(key, "_")
+	for n := len(parts) - 1; n >= 1; n-- {
+		if p, ok := canonicalSubgenreParents[strings.Join(parts[:n], "_")]; ok {
+			return p
+		}
+	}
+	return ""
+}
+
+// CanonicalSubgenreParents returns a copy of the full label/token -> canonical
+// parent-genre map (lowercase display labels and their snake_case variants).
+// Shipped to the frontend via /api/novel-params -> subgenre_parents.
+func CanonicalSubgenreParents() map[string]string {
+out := make(map[string]string, len(canonicalSubgenreParents)*2)
+for lc, parent := range canonicalSubgenreParents {
+out[lc] = parent
+out[normalizeGenreKeyString(lc)] = parent
+}
+return out
+}
+
+func normalizeGenreKeyString(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+			lastUnderscore = false
+		default: // spaces, hyphens, slashes, punctuation...
+			if !lastUnderscore && b.Len() > 0 {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+// enforceSingleParentSettingTokens guarantees the single-parent rule on the
+// data the frontend actually consumes (/api/novel-params -> specific_settings):
+// a subgenre's snake_case setting token may live under exactly ONE parent genre
+// key. Earlier rounds merged tokens into several parents for hybrid labels, so
+// selecting e.g. "Mystery & Thriller" surfaced Fantasy subgenres in the
+// dropdown. When a token appears under multiple parents, it is kept only under
+// its canonical one (canonicalSubgenreParents; otherwise the first
+// alphabetically) and removed from the rest. Runs after all preset builders in
+// init().
+func enforceSingleParentSettingTokens() {
+	keys := make([]string, 0, len(GenreSpecificSettings))
+	for k := range GenreSpecificSettings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	owners := map[string][]string{} // token -> sorted genre keys holding it
+	for _, k := range keys {
+		for _, tok := range GenreSpecificSettings[k] {
+			owners[tok] = append(owners[tok], k)
+		}
+	}
+	for _, k := range keys {
+		cleaned := make([]string, 0, len(GenreSpecificSettings[k]))
+		for _, tok := range GenreSpecificSettings[k] {
+			holders := owners[tok]
+			if len(holders) <= 1 {
+				cleaned = append(cleaned, tok)
+				continue
+			}
+			want := CanonicalParentForSubgenre(tok)
+			if want == "" || !containsString(holders, want) {
+				want = holders[0] // keys iterated sorted: first alphabetically wins
+			}
+			if k == want {
+				cleaned = append(cleaned, tok)
+			}
+			// else: foreign duplicate of a token owned by another genre — drop it.
+		}
+		GenreSpecificSettings[k] = cleaned
+	}
+}
+
+func containsString(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // AnimeModifierMatchWords maps each animeModifierPresets key to lowercase

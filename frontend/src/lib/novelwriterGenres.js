@@ -12,28 +12,30 @@
 // - Anime/webnovel slice-of-life items (School Life, Iyashikei, Spokon, Ecchi,
 //   Harem) stay ONLY under Drama; Slice of Life also appears in Comedy. They no
 //   longer leak into every genre list.
-// - Hybrid subgenres intentionally repeat across parents when a reader would
-//   plausibly browse them there: Romantasy (Romance + Fantasy), Science Fantasy
-//   / Technomagic / Cyberfantasy (Fantasy + Sci-Fi), Dystopian &
-//   Post-Apocalyptic (Sci-Fi + Action & Adventure), Superhero / Mecha / Battle
-//   Royale (Sci-Fi + Action & Adventure), Isekai / LitRPG / Dungeon Core /
-//   Tower Climbing / Regression (Fantasy + Sci-Fi + Action & Adventure), Wuxia
-//   / Xianxia (Fantasy + Action & Adventure + Historical), Noir & Heist
-//   (Mystery & Thriller + Crime-fiction siblings inside the same parent),
-//   Revenge (Mystery & Thriller + Drama), Erotica (Romance + Drama).
+// - Round 17 single-parent rule: every subgenre belongs to EXACTLY ONE parent
+//   genre (no more hybrid repeats across lists). Crossovers were assigned to
+//   their canonical home, matching each entry's `genre` field in SUBGENRE_DATA
+//   and the backend config.subgenreLabelParents map: Romantasy -> Romance,
+//   Science Fantasy / Technomagic / Cyberfantasy / LitRPG / GameLit / Isekai /
+//   Dungeon Core / Tower Climbing / Regression / Wuxia / Xianxia / Mahou Shonen
+//   -> Fantasy, Superhero / Mecha / Battle Royale / Zombie Apocalypse -> Sci-Fi,
+//   Heist / Revenge -> Mystery & Thriller, Courtroom Drama -> Drama,
+//   Harem / Erotica / Satire / Slice of Life -> Drama, Rom-Com -> Romance.
+//   The GENRES lists below are deduplicated: 185 unique subgenres, one parent
+//   each.
 // - Historical Fiction is realistic period fiction only: no anime/magical
 //   subgenres here (Mahou Shoujo etc. live under Fantasy).
 export const GENRES = [
-  { key: "fantasy", label: "Fantasy", subgenres: ["High Fantasy", "Epic Fantasy", "Sword and Sorcery", "Dark Fantasy", "Grimdark", "Noblebright", "Urban Fantasy", "Mythic Fantasy", "Fairy Tale", "Fairy Tale Retelling", "Magical Realism", "Progression Fantasy", "Portal Fantasy", "Military Fantasy", "Romantasy", "Science Fantasy", "Technomagic", "Cyberfantasy", "Wuxia", "Xianxia", "LitRPG", "GameLit", "Isekai", "Dungeon Core", "Tower Climbing", "Regression", "Villainess", "Otome", "Mahou Shoujo", "Mahou Shonen", "Arthurian Legend", "Norse Mythology", "Greek Mythology", "Egyptian Mythology", "Slavic Folklore", "Asian Folklore", "Gods Among Us", "Legend / Epic Poem"] },
-  { key: "scifi", label: "Sci-Fi", subgenres: ["Space Opera", "Hard Sci-Fi", "First Contact", "Alien Invasion", "Time Travel", "Cyberpunk", "Steampunk", "Biopunk", "Dieselpunk", "Cli-Fi", "Afrofuturism", "Solarpunk", "Dystopian", "Post-Apocalyptic", "Zombie Apocalypse", "Cozy Sci-Fi", "Mecha", "Superhero", "Battle Royale", "Science Fantasy", "Technomagic", "Cyberfantasy", "LitRPG", "GameLit", "System Apocalypse", "VRMMO", "Base Building", "Kingdom Building", "Isekai", "Dungeon Core", "Tower Climbing", "Regression"] },
-  { key: "mystery_thriller", label: "Mystery & Thriller", subgenres: ["Cozy Mystery", "Police Procedural", "Hard-boiled", "Noir", "Amateur Detective", "Historical Mystery", "Psychological Mystery", "Locked Room", "Cold Case", "Organized Crime / Mafia", "Gangster Epic", "Detective Noir", "Legal Crime Drama", "True-Crime Style", "Courtroom Drama", "Psychological Thriller", "Domestic Thriller", "Legal Thriller", "Political Thriller", "Espionage Thriller", "Techno-Thriller", "Medical Thriller", "Eco-Thriller", "Conspiracy Thriller", "Action Thriller", "Heist", "Revenge"] },
-  { key: "romance", label: "Romance", subgenres: ["Contemporary Romance", "Historical Romance", "Regency Romance", "Romantic Suspense", "Paranormal Romance", "Romantasy", "Small Town Romance", "Rom-Com", "Sports Romance", "Mafia Romance", "Erotic Romance", "Erotica", "Harem"] },
-  { key: "adventure", label: "Action & Adventure", subgenres: ["Adventure Quest", "Survival", "Lost World", "Treasure Hunt", "Swashbuckler", "Picaresque", "Nautical / Sea Voyage", "Expedition / Exploration", "Jungle Expedition", "Desert Crossing", "Mountain Climbing", "Polar Exploration", "Underground / Subterranean", "Road Trip", "Man vs Nature", "Disaster", "Martial Arts", "Spy Action", "Heist", "Revenge", "Battle Royale", "Superhero", "Mecha", "Wuxia", "Mahou Shonen", "LitRPG", "Tower Climbing", "Dungeon Core", "Isekai", "Regression"] },
-  { key: "horror", label: "Horror", subgenres: ["Gothic Horror", "Cosmic Horror", "Psychological Horror", "Body Horror", "Slasher Horror", "Supernatural Horror", "Folk Horror", "Haunted House", "Dark Academia", "Vampire", "Werewolf", "Zombie Apocalypse", "Monster Horror", "Occult Ritual"] },
+  { key: "fantasy", label: "Fantasy", subgenres: ["High Fantasy", "Epic Fantasy", "Sword and Sorcery", "Dark Fantasy", "Grimdark", "Noblebright", "Urban Fantasy", "Mythic Fantasy", "Fairy Tale", "Fairy Tale Retelling", "Magical Realism", "Progression Fantasy", "Portal Fantasy", "Military Fantasy", "Science Fantasy", "Technomagic", "Cyberfantasy", "Wuxia", "Xianxia", "LitRPG", "GameLit", "Isekai", "Dungeon Core", "Tower Climbing", "Regression", "Villainess", "Otome", "Mahou Shoujo", "Mahou Shonen", "Arthurian Legend", "Norse Mythology", "Greek Mythology", "Egyptian Mythology", "Slavic Folklore", "Asian Folklore", "Gods Among Us", "Legend / Epic Poem"] },
+  { key: "scifi", label: "Sci-Fi", subgenres: ["Space Opera", "Hard Sci-Fi", "First Contact", "Alien Invasion", "Time Travel", "Cyberpunk", "Steampunk", "Biopunk", "Dieselpunk", "Cli-Fi", "Afrofuturism", "Solarpunk", "Dystopian", "Post-Apocalyptic", "Zombie Apocalypse", "Cozy Sci-Fi", "Mecha", "Superhero", "Battle Royale", "System Apocalypse", "VRMMO", "Base Building", "Kingdom Building"] },
+  { key: "mystery_thriller", label: "Mystery & Thriller", subgenres: ["Cozy Mystery", "Police Procedural", "Hard-boiled", "Noir", "Amateur Detective", "Historical Mystery", "Psychological Mystery", "Locked Room", "Cold Case", "Organized Crime / Mafia", "Gangster Epic", "Detective Noir", "Legal Crime Drama", "True-Crime Style", "Psychological Thriller", "Domestic Thriller", "Legal Thriller", "Political Thriller", "Espionage Thriller", "Techno-Thriller", "Medical Thriller", "Eco-Thriller", "Conspiracy Thriller", "Action Thriller", "Heist", "Revenge"] },
+  { key: "romance", label: "Romance", subgenres: ["Romantasy", "Contemporary Romance", "Historical Romance", "Regency Romance", "Romantic Suspense", "Paranormal Romance", "Small Town Romance", "Rom-Com", "Sports Romance", "Mafia Romance", "Erotic Romance", "Erotica", "Harem"] },
+  { key: "adventure", label: "Action & Adventure", subgenres: ["Adventure Quest", "Survival", "Lost World", "Treasure Hunt", "Swashbuckler", "Picaresque", "Nautical / Sea Voyage", "Expedition / Exploration", "Jungle Expedition", "Desert Crossing", "Mountain Climbing", "Polar Exploration", "Underground / Subterranean", "Road Trip", "Man vs Nature", "Disaster", "Martial Arts", "Spy Action"] },
+  { key: "horror", label: "Horror", subgenres: ["Gothic Horror", "Cosmic Horror", "Psychological Horror", "Body Horror", "Slasher Horror", "Supernatural Horror", "Folk Horror", "Haunted House", "Dark Academia", "Vampire", "Werewolf", "Monster Horror", "Occult Ritual"] },
   { key: "historical", label: "Historical Fiction", subgenres: ["Ancient History", "Medieval", "Renaissance", "Colonial America", "Civil War Era", "World War Era", "Regency", "Victorian", "Interwar", "Cold War", "Dynastic China", "Feudal Japan", "Viking Age"] },
   { key: "western", label: "Western", subgenres: ["Classic Western", "Traditional Western", "Modern Western", "Spaghetti Western", "Weird Western", "Space Western", "Outlaw Western", "Cattle Drive Western", "Gold Rush", "Frontier Noir"] },
-  { key: "drama", label: "Drama", subgenres: ["Family Saga", "Historical Saga", "Coming-of-age", "Bildungsroman", "Psychorealism", "Domestic Drama", "Legal Drama", "Courtroom Drama", "Medical Drama", "Sports Drama", "War Drama", "Tragedy", "Melodrama", "Existentialist fiction", "Philosophical", "Metafiction", "Epistolary", "Satire", "Allegory", "Slice of Life", "School Life", "Iyashikei", "Spokon", "Ecchi", "Harem", "Erotica"] },
-  { key: "comedy", label: "Comedy", subgenres: ["Rom-Com", "Satire", "Parody", "Farce", "Sitcom-style Ensemble", "Dark Comedy", "Absurdist Humor", "Workplace Comedy", "Road-trip Comedy", "Paranormal Comedy", "Slice of Life"] },
+  { key: "drama", label: "Drama", subgenres: ["Courtroom Drama", "Family Saga", "Historical Saga", "Coming-of-age", "Bildungsroman", "Psychorealism", "Domestic Drama", "Legal Drama", "Medical Drama", "Sports Drama", "War Drama", "Tragedy", "Melodrama", "Existentialist fiction", "Philosophical", "Metafiction", "Epistolary", "Satire", "Allegory", "Slice of Life", "School Life", "Iyashikei", "Spokon", "Ecchi"] },
+  { key: "comedy", label: "Comedy", subgenres: ["Parody", "Farce", "Sitcom-style Ensemble", "Dark Comedy", "Absurdist Humor", "Workplace Comedy", "Road-trip Comedy", "Paranormal Comedy"] },
 ];
 
 export const SUBGENRE_DATA = {
@@ -215,11 +217,11 @@ export const SUBGENRE_DATA = {
   "Workplace Comedy": { genre: "comedy", settings: ["open_floor_noise_politics", "meeting_minutes_weapons", "cc-chain_passive_aggression", "breakroom_economy"], protagonists: ["New Hire Taking Memos Literally", "Middle Manager Buffer God", "IT Person Who Has Seen Everything", "Union Rep With Receipts"], conflicts: ["Reorg vs Sanity", "Promotion Farce", "Client From Hell Ticket", "Reply-All Wars"], tones: ["Fluorescent-witty", "Specific-over-general", "Solidarity-punchline", "Clock-out-relief"] },
   "Road-trip Comedy": { genre: "comedy", settings: ["vehicle_casting_chemistry", "detour_episode_generator", "destination_negotiated_daily", "budget_comedy_engine"], protagonists: ["Two Friends One Rental Too Long", "Family Unit Dissolving Happily", "Best-Man Errand Gone Continental", "Funeral Procession Taking a Wrong Exit"], conflicts: ["Who Navigates, Who Drives, Who Snores", "Surprise Guest at Every Stop", "The Thing in the Trunk", "Arriving Different Than Departed"], tones: ["Miles-laughing", "Odd-couple", "Scenic-derailment", "Arrival-softened"] },
   "Paranormal Comedy": { genre: "comedy", settings: ["ghost_with_administrative_issues", "monster_union_represented", "haunting_zoning_disputes", "prophecy_missed_deadline"], protagonists: ["Skeptical Medium Exhausted by Spirits", "Demon Doing Community Service", "Haunted House HOA President", "Chosen One Who Declined the Call"], conflicts: ["Apocalypse Scheduling Conflicts", "Exorcism Customer Support", "Ley Line Construction Permit", "Ghost Won't Leave, Lease Says Otherwise"], tones: ["Spooky-silly", "Understated-weird", "Whispered-punchline", "Cosmically-bureaucratic"] },
-  "System Apocalypse": { genre: "litrpg", settings: ["system_arrival_global_event", "interface_for_everyone", "level_curve_vs_society_collapse", "quests_replace_law"], protagonists: ["Accountant Optimizing the Stats Screen", "Gym Teacher Suddenly Relevant", "Teen Speedrunner of Reality", "Mayor Trying to Keep Town Functional"], conflicts: ["Guild Feudalism Rising", "Tutorial Period Casualties", "System Rewards vs Human Values", "Is There Anyone Administering This"], tones: ["Numbers-addicted", "Collapse-practical", "Level-up-joy", "Existential-debugging"] },
-  "VRMMO": { genre: "litrpg", settings: ["full_dive_latency_rules", "avatar_body_mismatch", "in_game_economy_fx_rates", "death_penalty_config"], protagonists: ["Pro Guild Raid Leader", "Casual Player Accidentally Famous", "Game Master Playing Fair", "Gold Farmer With a Union Plan"], conflicts: ["Real Bills vs Virtual Grind", "Pay-to-Win Revolt", "Raid Politics Betrayal", "Log-Out When the Body Needs You"], tones: ["Loot-excited", "Meta-strategic", "Chat-log-witty", "Two-worlds-tired"] },
-  "Base Building": { genre: "litrpg", settings: ["resource_node_math", "defense_wave_timers", "population_happiness_metrics", "tech_tree_gate_order"], protagonists: ["Territory Lord Starting One Hut", "Engineer Transplanted to a Frontier", "Settlement Mayor With Gamified Mandates", "Logistics-Obsessed Solo Builder"], conflicts: ["Raid Night Scheduling", "Neighbors and Trade Tariffs", "Labor vs Automation Ethics", "Scaling Past Personal Oversight"], tones: ["Satisfying-progressive", "Spreadsheet-proud", "Cozy-industrial", "Checkpoint-cheerful"] },
-  "Kingdom Building": { genre: "litrpg", settings: ["dynasty_legitimacy_sources", "court_ministry_appointments", "tax_and_granary_systems", "war_justification_doctrine"], protagonists: ["Usurper Queen Proving Competence", "Regent for a Child King", "Commoner Elected Into Nobility", "Exiled Prince Reading Census Data"], conflicts: ["Barons Testing the Crown", "Succession Without Civil War", "Church vs Treasury", "Reforms Faster Than Culture Absorbs"], tones: ["Statecraft-savvy", "Banner-grand", "Ledger-realistic", "Throne-warm"] },
-  "GameLit": { genre: "litrpg", settings: ["game_logic_flavor_only", "no_literal_stats_needed", "party_quest_structure", "difficulty_curve_metaphor"], protagonists: ["Adventurer Treating Dungeons Like Sports", "Tactician Who Talks in Meta Terms", "Retired Hero Coaching Rookies", "Quest-Taker With Union Instincts"], conflicts: ["World Rules Players Must Infer", "Respawn Ethics If Any", "Boss Fight Planning Drama", "Fun vs Winning Debate"], tones: ["Playful-systemic", "Tabletop-warm", "Crunch-lite", "Enthusiast-speed"] },
+  "System Apocalypse": { genre: "scifi", settings: ["system_arrival_global_event", "interface_for_everyone", "level_curve_vs_society_collapse", "quests_replace_law"], protagonists: ["Accountant Optimizing the Stats Screen", "Gym Teacher Suddenly Relevant", "Teen Speedrunner of Reality", "Mayor Trying to Keep Town Functional"], conflicts: ["Guild Feudalism Rising", "Tutorial Period Casualties", "System Rewards vs Human Values", "Is There Anyone Administering This"], tones: ["Numbers-addicted", "Collapse-practical", "Level-up-joy", "Existential-debugging"] },
+  "VRMMO": { genre: "scifi", settings: ["full_dive_latency_rules", "avatar_body_mismatch", "in_game_economy_fx_rates", "death_penalty_config"], protagonists: ["Pro Guild Raid Leader", "Casual Player Accidentally Famous", "Game Master Playing Fair", "Gold Farmer With a Union Plan"], conflicts: ["Real Bills vs Virtual Grind", "Pay-to-Win Revolt", "Raid Politics Betrayal", "Log-Out When the Body Needs You"], tones: ["Loot-excited", "Meta-strategic", "Chat-log-witty", "Two-worlds-tired"] },
+  "Base Building": { genre: "scifi", settings: ["resource_node_math", "defense_wave_timers", "population_happiness_metrics", "tech_tree_gate_order"], protagonists: ["Territory Lord Starting One Hut", "Engineer Transplanted to a Frontier", "Settlement Mayor With Gamified Mandates", "Logistics-Obsessed Solo Builder"], conflicts: ["Raid Night Scheduling", "Neighbors and Trade Tariffs", "Labor vs Automation Ethics", "Scaling Past Personal Oversight"], tones: ["Satisfying-progressive", "Spreadsheet-proud", "Cozy-industrial", "Checkpoint-cheerful"] },
+  "Kingdom Building": { genre: "scifi", settings: ["dynasty_legitimacy_sources", "court_ministry_appointments", "tax_and_granary_systems", "war_justification_doctrine"], protagonists: ["Usurper Queen Proving Competence", "Regent for a Child King", "Commoner Elected Into Nobility", "Exiled Prince Reading Census Data"], conflicts: ["Barons Testing the Crown", "Succession Without Civil War", "Church vs Treasury", "Reforms Faster Than Culture Absorbs"], tones: ["Statecraft-savvy", "Banner-grand", "Ledger-realistic", "Throne-warm"] },
+  "GameLit": { genre: "fantasy", settings: ["game_logic_flavor_only", "no_literal_stats_needed", "party_quest_structure", "difficulty_curve_metaphor"], protagonists: ["Adventurer Treating Dungeons Like Sports", "Tactician Who Talks in Meta Terms", "Retired Hero Coaching Rookies", "Quest-Taker With Union Instincts"], conflicts: ["World Rules Players Must Infer", "Respawn Ethics If Any", "Boss Fight Planning Drama", "Fun vs Winning Debate"], tones: ["Playful-systemic", "Tabletop-warm", "Crunch-lite", "Enthusiast-speed"] },
   "Fairy Tale Retelling": { genre: "fantasy", settings: ["source_tale_kept_recognizable", "villain_or_side_character_refocalized", "moral_logic_translated_modern", "storybook_texture_with_teeth"], protagonists: ["Wolf Given Testimony", "Stepsister Who Read the Contract", "Fairy Godmother Under Labor Dispute", "Prince as Supporting Character"], conflicts: ["Ending Prescribed vs Chosen", "Curse Interpreted Differently", "Kingdom Covering the Original Sin", "Happily Ever After's Fine Print"], tones: ["Once-upon-a-twist", "Velvet-sharp", "Reclaimed", "Lore-loyal-then-deviant"] },
   "Legend / Epic Poem": { genre: "fantasy", settings: ["oral_formula_repetition", "catalogue_of_heroes_passages", "divine_interference_visible", "kleos_glory_economy"], protagonists: ["Hero Sung Larger Than Life", "Bard Deciding What to Omit", "Late-Arriving Cousin of the Legend", "God With a Favorite Lineage"], conflicts: ["Fate vs Fame", "Oath Breaking Cost Calculus", "Return Journey vs Never Returning", "Who Gets the Final Verse"], tones: ["Heightened", "Ring-composed", "Sea-and-shield", "Memorable-lines"] },
   "Gods Among Us": { genre: "fantasy", settings: ["divine_masquerade_modern", "belief_as_fuel_or_currency", "temple_succession_politics", "miracle_plausible_deniability"], protagonists: ["Minor God Driving Delivery Trucks", "Priest Fired by Their Own Deity", "Theologian Field-Researching", "God's Human Child Not Invited"], conflicts: ["Worship Shortage", "Old Pantheon vs New Platforms", "Divine Petulance Casualties", "Retirement for Immortals"], tones: ["Numinous-casual", "Mythic-now", "Awestruck-snarky", "Ritual-grounded"] },
@@ -230,3 +232,101 @@ export const SUBGENRE_DATA = {
   "Slavic Folklore": { genre: "fantasy", settings: ["household_spirit_bargains", "forest_leshy_territory_rules", "kostrom_masked_rituals", "baba_yaga_boundary_etiquette"], protagonists: ["Village Girl Working for the Witch Honestly", "Miller Feeding His Domovoi On Time", "Traveler Who Forgot to Ask Permission", "Witch Caught Between Two Villages"], conflicts: ["Offerings Missed by One Day", "Forest Taking the Wrong Child", "Immortal Prince's wager Games", "Winter Spirits Leaving Spring Early"], tones: ["Root-cellar-dusk", "Bargain-folk", "Fern-and-feather", "Warning-story"] },
   "Asian Folklore": { genre: "fantasy", settings: ["fox_spirit_trickster_ladder", "hungry_ghost_festival_logistics", "dragon_king_rivers_and_seas", "paper_offerings_economy"], protagonists: ["Scholar Lodged in a Haunted Pavilion", "Festival Organizer Negotiating Spirits", "River Boatman Paying the Dragon King", "Fox Spirit Studying Humanity"], conflicts: ["Debt Across Rebirths", "Nine-Tail Advancement Ethics", "Ghost Month Rule Enforcement", "Name Taboos Broken Publicly"], tones: ["Ink-wash", "Lantern-lit", "Polite-with-the-dead", "Transformation-subtle"] },
 };
+
+// —— Round 17 enforcement: single-parent lookup —————————————————————————————
+// Derived index from the GENRES lists above: lowercase subgenre label ->
+// canonical parent genre key. Built after GENRES so it is always in sync with
+// the lists; throws at load time if a subgenre is ever listed under two
+// parents again (fail fast instead of silently cross-listing).
+export const SUBGENRE_PARENT = (() => {
+  const map = {};
+  for (const g of GENRES) {
+    for (const s of g.subgenres) {
+      const lc = String(s).toLowerCase();
+      if (map[lc]) throw new Error(`Duplicate subgenre "${s}" listed under both "${map[lc]}" and "${g.key}"`);
+      map[lc] = g.key;
+    }
+  }
+  // SUBGENRE_DATA.genre is the second source of truth: keep it consistent.
+  for (const [label, meta] of Object.entries(SUBGENRE_DATA)) {
+    const lc = String(label).toLowerCase();
+    if (map[lc] && map[lc] !== meta.genre) {
+      throw new Error(`Subgenre "${label}" has parent "${map[lc]}" in GENRES but "${meta.genre}" in SUBGENRE_DATA`);
+    }
+    if (!map[lc]) map[lc] = meta.genre;
+  }
+  return map;
+})();
+
+/** Canonical single parent-genre key ("fantasy") for a subgenre label/key. */
+export function parentGenreForSubgenre(s) {
+  const k = String(s || '').trim().toLowerCase();
+  if (SUBGENRE_PARENT[k]) return SUBGENRE_PARENT[k];
+  // Backend taxonomy tables ship snake_case tokens ("hard_sci_fi", "rom_com");
+  // normalize them to the same space-separated spelling used as index key so
+  // server-provided parents always resolve against this map.
+  const norm = k.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  return SUBGENRE_PARENT[norm] || '';
+}
+
+// GENRE KEY ALIASES: the backend buckets "Mystery & Thriller" under the legacy
+// keys "mystery" (and formerly "thriller"), while GENRES uses the merged key
+// "mystery_thriller". Every lookup of the backend Genre* maps
+// (conflict_scales / protagonist_types / specific_settings) must go through
+// genreBucketKeys() — without it, selecting "Mystery & Thriller" reads an empty
+// bucket and the UI falls back to showing ALL entries unfiltered.
+const GENRE_KEY_ALIASES = {
+  mystery_thriller: ['mystery_thriller', 'mystery', 'thriller'],
+};
+export function genreBucketKeys(genreKey) {
+  return GENRE_KEY_ALIASES[genreKey] || [genreKey];
+}
+
+// Backend preset keys that are NOT members of the GENRES taxonomy above but
+// still carry their own character-field buckets server-side. Without this
+// table they resolve to no parent, and the old UI fallback treated an
+// unattributed subgenre as "belongs everywhere" — which is exactly why every
+// list appeared under every genre. Each key here maps to EXACTLY ONE parent
+// genre key; adding a duplicate throws at load time (single-parent rule).
+export const EXTRA_SUBGENRE_PARENTS = (() => {
+  const raw = {
+    military: 'adventure',
+    'hard scifi': 'scifi',
+    'suspense romance': 'romance',
+    'historical fiction': 'historical',
+    nautical: 'adventure',
+    gothic: 'horror',
+    expedition: 'adventure',
+    'underground exploration': 'adventure',
+    'organized crime': 'mystery_thriller',
+    'true crime': 'mystery_thriller',
+    'sitcom ensemble': 'comedy',
+    legend: 'fantasy',
+  };
+  for (const [k, v] of Object.entries(raw)) {
+    if (SUBGENRE_PARENT[k]) throw new Error(`Extra subgenre "${k}" already exists in the GENRES taxonomy`);
+    SUBGENRE_PARENT[k] = v; // extend the shared single-parent index
+  }
+  return raw;
+})();
+
+/**
+ * Resolve ANY subgenre spelling (display label with spaces/case/hyphens, or
+ * snake_case token like "cozy_mystery") to its canonical display label in the
+ * GENRES catalog — or "" when it is not part of the taxonomy. Used by the UI
+ * cascade so backend tokens and frontend labels always meet in one key.
+ */
+export function canonicalSubgenreLabel(token) {
+  const norm = String(token || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  if (!norm) return '';
+  for (const g of GENRES) {
+    for (const s of g.subgenres) {
+      if (s.toLowerCase().replace(/[_-]+/g, ' ') === norm) return s;
+    }
+  }
+  // SUBGENRE_DATA may know labels absent from the GENRES lists.
+  for (const label of Object.keys(SUBGENRE_DATA)) {
+    if (label.toLowerCase().replace(/[_-]+/g, ' ') === norm) return label;
+  }
+  return '';
+}

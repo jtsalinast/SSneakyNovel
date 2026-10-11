@@ -508,6 +508,8 @@ export default {
   'config.story.auto': 'Auto (let the AI decide)',
   'config.story.other': 'Other…',
   'config.story.clear': 'Clear selection',
+  'config.story.genreFilteredSection': 'Genre-filtered parameters (new block — use this one)',
+  'config.settings.pickGenre': 'Pick a genre to populate these options.',
   'config.story.targetAudience': 'Target audience',
   'config.story.targetAudience.none': 'Not specified',
   'config.story.targetAudience.kid': 'Children (5-9)',

@@ -7,8 +7,14 @@
   import { resolveChatCompletionsURL } from '../lib/apiUrl.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
   import ComboSelect from '../lib/components/ComboSelect.svelte';
+  import GenreSubgenrePicker from '../lib/components/GenreSubgenrePicker.svelte';
+  // Round 21: brand-new, self-contained cascade block rendered BELOW the legacy
+  // fields (which stay untouched). All filtering lives in lib/subgenreTaxonomy.js.
+  import GenreCascadeFields from '../lib/components/GenreCascadeFields.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
-  import { GENRES, SUBGENRE_DATA } from '../lib/novelwriterGenres.js';
+  import { GENRES, SUBGENRE_DATA, SUBGENRE_PARENT, parentGenreForSubgenre, genreBucketKeys, canonicalSubgenreLabel } from '../lib/novelwriterGenres.js';
+  // Round 19: the cascade now flows EXCLUSIVELY through these two modules.
+  import { buildSubgenreIndex, subgenresForKeys, resolveParent, norm as normSub2, ownersOfTokens } from '../lib/subgenreTaxonomy.js';
 
   // —— Cross-tab generation state: both workspace tabs ("Config" and "Novel
   // parameters") render this same component, but Svelte destroys and recreates
@@ -115,6 +121,17 @@ function structHint(k) { return STRUCTURE_HINTS[k] || ''; }
 // select (including Drama) and stay in sync with internal/config/config.go —
 // previously only 8 genres were mirrored here, so selecting e.g. "Drama" left
 // the Conflict/Protagonist dropdowns empty until /api/novel-params arrived.
+// KEY ALIASES: the backend buckets Mystery & Thriller under the legacy keys
+// "mystery" and "thriller", while GENRES uses "mystery_thriller". The cascade
+// below indexes these maps by SELECTED-GENRE key, so every lookup goes
+// through bucketKeys(): without the alias, selecting "Mystery & Thriller" read
+// GENRE_CONFLICTS["mystery_thriller"] (empty), the union came out empty, and
+// the UI fell back to showing ALL backend entries — the "siguen apareciendo
+// todos los subgéneros de Fantasy en Mystery & Thriller" symptom.
+const GENRE_KEY_ALIASES = {
+  mystery_thriller: ['mystery_thriller', 'mystery', 'thriller'],
+};
+const bucketKeys = (k) => GENRE_KEY_ALIASES[k] || [k];
 const GENRE_CONFLICTS = {
 fantasy: ['Personal Quest', 'Kingdom-wide', 'World-saving', 'Good vs Evil', 'Political Intrigue', 'Sect/Realm Wars'],
 scifi: ['Personal', 'Planetary', 'Interstellar', 'Galactic', 'Humanity vs Technology'],
@@ -208,11 +225,15 @@ let selectedGenreKeys = [];  // GENRES keys (+ OTHER_GENRE); [] = not classified
 let lastGenreText = '';      // free-text typed in the genre combobox ("Other")
 let subgenreManual = false;  // true while the user types a custom subgenre
 let lastAutoSubgenre = '';   // subgenre we auto-set, so we don't clobber manual edits
-let subgenreOptions = [];    // reactive list rebuilt below (initGenreCascade reads it)
 const OTHER_SUBGENRE = '__other__';
 
 // Resolve the stored `type` text into one or more parent-genre keys. Handles
 // multi-label strings ("Fantasy, Romance"), single labels and keyword matches.
+// Round 20: when NONE of the comma-separated parts resolves to a known genre
+// (e.g. the user only typed a subgenre like "cozy mystery" in Type), fall back
+// to matching the WHOLE string — otherwise selectedGenreKeys stays empty and
+// every cascade below silently degrades to browse-everything mode ("siguen
+// apareciendo todos"). The fallback can only ADD keys, never remove them.
 function genreLabelsToKeys(t) {
   const s = String(t || '').trim();
   if (!s) return [];
@@ -226,6 +247,10 @@ function genreLabelsToKeys(t) {
     const derived = matchGenreKey(p);
     if (derived && GENRES.some((x) => x.key === derived)) { if (!keys.includes(derived)) keys.push(derived); }
   }
+  if (!keys.length) {
+    const whole = matchGenreKey(s);
+    if (whole && GENRES.some((x) => x.key === whole)) keys.push(whole);
+  }
   return keys;
 }
 
@@ -237,9 +262,20 @@ function initGenreCascade() {
     lastGenreText = t;
     subgenreManual = false;
   } else if (t) {
-    selectedGenreKeys = [OTHER_GENRE];
-    lastGenreText = t;
-    subgenreManual = true;
+    // Round 20: the Type text is free-form. If it mentions ANY known genre
+    // (even mixed with other words, e.g. "cozy mystery" or "epic fantasy
+    // saga"), cascade as that genre instead of OTHER — otherwise the whole
+    // union ("todos los subgéneros") was shown for any unrecognized text.
+    const byWords = GENRES.filter((g) => t.toLowerCase().includes(g.label.toLowerCase()) || t.toLowerCase().includes(g.key.toLowerCase())).map((g) => g.key);
+    if (byWords.length) {
+      selectedGenreKeys = byWords;
+      lastGenreText = t;
+      subgenreManual = false;
+    } else {
+      selectedGenreKeys = [OTHER_GENRE];
+      lastGenreText = t;
+      subgenreManual = true;
+    }
   } else {
     selectedGenreKeys = [];
     lastGenreText = '';
@@ -304,18 +340,18 @@ function onGenreComboChange(e) {
   refreshCheckedSettings();
 }
 
-// Union of the subgenre lists of every selected parent genre (deduped,
-// case-insensitive), plus backend presets that belong to those genres.
+// NOTE: this helper used to be a SECOND, independent implementation of the
+// subgenre filtering — and it was the broken one. It looked presets up with
+// their raw lowercase key ("mahou shoujo") in an index keyed by normalized
+// tokens, and matched parents against GENRES keys while the backend table
+// stores legacy keys ("mystery" vs "mystery_thriller"). Both misses made it
+// behave as "no parent known → show it anyway", which is exactly why Fantasy
+// subgenres kept appearing under Mystery & Thriller even after the frontend
+// cascade was fixed. It now simply delegates to the ONE reactive source of
+// truth below (subgenreOptions): there is no second filter path anymore.
 function unionSubgenresFor(keys) {
-  const list = [];
-  const seen = new Set();
-  const push = (s) => { const lc = String(s).toLowerCase(); if (s && !seen.has(lc)) { seen.add(lc); list.push(s); } };
-  for (const k of keys) {
-    if (k === OTHER_GENRE) continue;
-    const g = GENRES.find((x) => x.key === k);
-    if (g) for (const s of g.subgenres) push(s);
-  }
-  return list;
+  void novelParamsTick;
+  return subgenreOptionsFor(keys);
 }
 
   // Subgenre combobox handler (round 16): the combobox itself is the
@@ -330,49 +366,125 @@ function unionSubgenresFor(keys) {
     refreshCheckedSettings();
   }
 
+  // Round 19 (final): handler for the new GenreSubgenrePicker component (the
+  // only one wired to the UI now). Same contract as onSubgenreComboChange plus
+  // the resolved canonical parent in e.detail.parent.
+  function onSubgenrePickerChange(e) {
+    const v = String((e.detail && e.detail.value) || '').trim();
+    localStoryCfg.subgenre = v;
+    const known = subgenreOptions.some((o) => o.toLowerCase() === v.toLowerCase());
+    subgenreManual = !!v && !known;
+    lastAutoSubgenre = '';
+    refreshCheckedSettings();
+  }
+
   // Display label for a lowercase backend preset key ("mahou shoujo" ->
   // "Mahou Shoujo"). Used when surfacing presets in the subgenre dropdown.
   function titleCasePreset(s) {
     return String(s || '').replace(/(^|[\s-])(\S)/g, (_m, sep, ch) => sep + ch.toUpperCase());
   }
 
-  // Subgenre options for the selected parent genres: the UNION of every
-  // selected genre's static list, plus backend presets that belong to any of
-  // them, plus (when nothing is resolved / "Other") the full preset catalog.
-  $: subgenreOptions = (() => {
-    void novelParamsTick;
-    const keys = selectedGenreKeys.filter((k) => k !== OTHER_GENRE);
-    if (!keys.length) {
-      // No resolved parent genre: title-case every backend preset so the
-      // dropdown stays readable ("mahou shoujo" -> "Mahou Shoujo").
-      return [...new Set(SUBGENRE_PRESETS.map(titleCasePreset))];
-    }
-    const seen = new Set();
-    const list = [];
-    const push = (s) => { const lc = String(s).toLowerCase(); if (s && !seen.has(lc)) { seen.add(lc); list.push(s); } };
-    for (const k of keys) {
-      const g = GENRES.find((x) => x.key === k);
-      if (g) for (const s of g.subgenres) push(s);
-    }
-    // Surface server-provided presets that belong to a selected genre but are
-    // not in the static lists (keeps frontend and backend catalogs consistent).
-    for (const s of SUBGENRE_PRESETS) {
-      const meta = SUBGENRE_DATA[s] || SUBGENRE_DATA[titleCasePreset(s)];
-      if (meta && keys.includes(meta.genre)) push(s);
-    }
-    // Backend-only modifiers with no NovelWriter metadata (regression,
-    // villainess...): append every preset whose name also appears as a
-    // conflict/protagonist/settings key on the server, so the dropdown stays in
-    // sync with /api/novel-params instead of the static file. Matched
-    // case-insensitively so title-cased labels ("Isekai") resolve too.
-    for (const s of SUBGENRE_PRESETS) {
-      const tc = titleCasePreset(s);
-      if (seen.has(tc.toLowerCase())) continue;
-      const kks = [s.toLowerCase().replace(/\s+/g, '_'), s.toLowerCase()];
-      if (kks.some((k) => GENRE_CONFLICTS[k] || GENRE_PROTAGONISTS[k] || GENRE_SETTINGS[k])) push(tc);
-    }
-    return list;
+  // —— Single-parent taxonomy, FRONTEND-ONLY filtering (redesign) ————————
+  // The backend (/api/novel-params) ships ALL parameters unfiltered: the full
+  // genre buckets (conflict_scales / protagonist_types / specific_settings),
+  // every subgenre preset (subgenre_presets) and a per-subgenre catalog with
+  // its canonical parent (subgenre_catalogs + subgenre_parents). The frontend
+  // is the ONLY place that filters those lists by the selected Genre(s):
+  //   * SUBGENRE_INDEX   — normalized token -> {label, parent} for EVERY known
+  //     subgenre: static GENRES/SUBGENRE_DATA taxonomy merged with the backend
+  //     tables; rebuilt reactively whenever the payload arrives (novelParamsTick
+  //     drives every dependent subscription below).
+  //   * subgenreOptions  — only entries whose canonical parent is one of the
+  //     selected genres.
+  //   * conflict/protagonist/settings suggestions — resolved through the index
+  //     so they can never leak from another genre: when the stored subgenre
+  //     belongs to a different parent than the current genre selection, the
+  //     cascade falls back to the genre-level buckets instead of following the
+  //     foreign subgenre's data.
+  let SUBGENRE_PARENT_TABLE = {};   // /api/novel-params -> subgenre_parents
+  let SUBGENRE_CATALOGS = {};       // /api/novel-params -> subgenre_catalogs
+  // Round 19: the RAW /api/novel-params payload. GenreSubgenrePicker and the
+  // reactive TAX below build the merged single-parent index from this object;
+  // assigning it (a fresh reference per fetch) is what drives the cascade to
+  // recompute — no manual tick bookkeeping needed for the new path.
+  let novelParamsPayload = null;
+  // Round 19 fix: normSub IS the taxonomy module's normalizer. Having two
+  // copies was a bug source — they must stay byte-identical or index lookups
+  // silently miss and the cascade degrades to "show everything".
+  const normSub = normSub2;
+
+  // Round 19 (final): SUBGENRE_INDEX is now a plain object view of the ONE
+  // merged index built by subgenreTaxonomy.buildSubgenreIndex() from the raw
+  // /api/novel-params payload. The previous copy of the merge logic lived
+  // here, did NOT normalize legacy backend parent keys ("mystery"/"thriller"
+  // vs "mystery_thriller") and consulted stale globals — so server-only
+  // presets kept an unresolvable parent and the filter fell back to showing
+  // everything. There is exactly one taxonomy implementation now.
+  $: TAX = buildSubgenreIndex(novelParamsPayload);
+
+  $: SUBGENRE_INDEX = (() => {
+    const idx = {};
+    for (const [k, e] of TAX) idx[k] = e;
+    return idx;
   })();
+
+  function canonicalParentFor(token) {
+    void novelParamsTick;
+    const t = normSub(token);
+    if (!t) return '';
+    const hit = SUBGENRE_INDEX[t];
+    if (hit) return hit.parent;
+    // Tokens may carry extra descriptive words ("locked room impossible crime"
+    // for "Locked Room"): try progressively shorter prefixes, longest first.
+    const parts = t.split(' ');
+    for (let n = parts.length - 1; n >= 1; n--) {
+      const p = SUBGENRE_INDEX[parts.slice(0, n).join(' ')];
+      if (p) return p.parent;
+    }
+    return '';
+  }
+
+  // Backend catalog entry for a subgenre spelling (label or snake_case token),
+  // or null when the server has no dedicated bucket for it.
+  function subgenreCatalogFor(text) {
+    void novelParamsTick;
+    const t = normSub(text);
+    if (!t) return null;
+    const underscored = t.replace(/ /g, '_');
+    if (SUBGENRE_CATALOGS[underscored]) return SUBGENRE_CATALOGS[underscored];
+    for (const k of Object.keys(SUBGENRE_CATALOGS)) {
+      if (normSub(k) === t) return SUBGENRE_CATALOGS[k];
+    }
+    return null;
+  }
+
+  // Subgenre options for the selected parent genres — filtered ENTIRELY in the
+  // frontend from the merged index. A subgenre appears ONLY under its canonical
+  // single parent; presets whose parent cannot be resolved are never dumped
+  // into a genre-filtered dropdown (they show only when no parent genre is
+  // selected, i.e. free-text "Other" or empty Type).
+  //
+  // Single filter path: subgenreOptionsFor(keys) is THE implementation and
+  // subgenreOptions is just its reactive wrapper over the current selection.
+  // (The old code had a second copy of this logic inside unionSubgenresFor,
+  // used by the genre-change handler to decide whether to keep the stored
+  // subgenre; it missed server-only presets and legacy parent keys, which is
+  // why unfiltered entries kept showing up.)
+  function subgenreOptionsFor(rawKeys) {
+    const keys = (rawKeys || []).filter((k) => k !== OTHER_GENRE);
+    // Round 19 (final): delegate to the taxonomy module's single filter —
+    // subgenresForKeys() walks EVERY known source (static GENRES/SUBGENRE_DATA
+    // taxonomy + backend catalogs/parents/presets merged in TAX), resolves each
+    // candidate's canonical parent through resolveParent() (which normalizes
+    // the legacy backend bucket keys "mystery"/"thriller" -> "mystery_thriller")
+    // and DROPS anything whose parent cannot be attributed. The old local copy
+    // of this logic compared raw entry.parent against the selected keys without
+    // alias normalization, so every lookup missed and the UI silently fell back
+    // to listing everything under every genre.
+    return subgenresForKeys(TAX, keys);
+  }
+
+  $: subgenreOptions = subgenreOptionsFor(selectedGenreKeys);
 
   // Combobox option objects for Subgenre: bold label + backend hint as the
   // secondary description line (rich item list). Free-typed values that are
@@ -399,14 +511,17 @@ function unionSubgenresFor(keys) {
   // (whether a preset label or free-typed "Other" text).
   $: infoSubgenre = String(localStoryCfg.subgenre || '');
 
-// Options derived from the selected subgenre (NovelWriter per-subgenre configs), falling back to genre-level lists.
-// Round 7: genre-key lookups go through `genreKeyForCascade`, which also takes
-// the free-form Subgenre text into account. NovelWriter's SUBGENRE_DATA has no
-// entry for anime/webnovel modifiers (isekai, litRPG, regression, dungeon
-// core...), so previously those selections left Conflict/Protagonist/Tone/
-// Settings empty even though the backend has full presets for them. The
-// backend-derived GENRE_* maps (refreshed from /api/novel-params) do contain
-// those keys — this bridges the two.
+// —— Cascade lists: filtered ONLY in the frontend, from the full payload ———
+// The backend sends every bucket unfiltered; these subscriptions decide what
+// the UI shows for the current Genre + Subgenre selection. Resolution order:
+//   1. The selected subgenre's OWN catalog (backend `subgenre_catalogs`,
+//      falling back to the static SUBGENRE_DATA), but ONLY when its canonical
+//      parent belongs to the current genre selection — a stale foreign
+//      subgenre can never hijack the lists of another genre.
+//   2. Otherwise the union of the selected genres' buckets (multi-select).
+//   3. With no resolved parent genre, the modifier-key heuristic on the raw
+//      text keeps anime/webnovel presets usable as standalone selections
+//      ("Isekai" typed alone still populates Conflict/Protagonist/Settings).
 const MODIFIER_SUBGENRE_KEYS = {
   'lit rpg': 'litrpg', 'litrpg': 'litrpg',
   'isekai': 'isekai', 'dungeon core': 'dungeon', 'tower climbing': 'tower_climbing',
@@ -415,27 +530,52 @@ const MODIFIER_SUBGENRE_KEYS = {
   'iyashikei': 'iyashikei', 'ecchi': 'ecchi', 'harem': 'harem', 'revenge': 'revenge',
   'solo leveling': 'manhwa_system', 'system manhwa': 'manhwa_system',
 };
-function genreKeyForCascade(typeText, subgenreText) {
-  const sg = (subgenreText || '').trim().toLowerCase();
+$: cascadeGenreKey = (() => {
+  void novelParamsTick;
+  const sg = normSub(localStoryCfg.subgenre);
+  // Modifier presets carry their own buckets server-side; use them only when
+  // the taxonomy cannot attribute the subgenre to a selected parent anyway.
   const mod = MODIFIER_SUBGENRE_KEYS[sg];
-  if (mod && ((novelParamsTick, GENRE_CONFLICTS[mod] || GENRE_PROTAGONISTS[mod]))) return mod;
-  // Backend MatchGenreKey understands composite keys like "scifi:superhero" and
-  // "horror:gothic" from Type+Subgenre text; try it via the server-refreshed
-  // maps before falling back to the plain Type match.
-  const combo = `${typeText || ''} ${sg}`.trim().toLowerCase();
-  if (sg) {
-    for (const k of Object.keys(GENRE_CONFLICTS)) {
-      if (k.includes(':') && combo.includes(k.split(':')[1])) return k;
-    }
+  if (mod && !canonicalParentFor(sg) && (GENRE_CONFLICTS[mod] || GENRE_PROTAGONISTS[mod])) return mod;
+  return matchGenreKey(localStoryCfg.type);
+})();
+
+// Catalog for the currently selected subgenre — honored ONLY when its single
+// canonical parent is among the selected genres (or nothing is selected).
+$: subgenreCfg = (() => {
+  void novelParamsTick;
+  const text = String(localStoryCfg.subgenre || '').trim();
+  if (!text) return null;
+  const keys = selectedGenreKeys.filter((k) => k !== OTHER_GENRE);
+  const parent = canonicalParentFor(text);
+  if (parent && keys.length && !keys.includes(parent)) return null; // foreign/stale
+  const cat = subgenreCatalogFor(text);
+  if (cat && (cat.conflicts?.length || cat.protagonists?.length || cat.settings?.length)) {
+    return { conflicts: cat.conflicts || [], protagonists: cat.protagonists || [], settings: cat.settings || [], tones: [] };
   }
-  return matchGenreKey(typeText);
-}
-$: cascadeGenreKey = genreKeyForCascade(localStoryCfg.type, localStoryCfg.subgenre);
-$: subgenreCfg = SUBGENRE_DATA[(localStoryCfg.subgenre || '').trim()] || null;
-$: conflictOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.conflicts : (cascadeGenreKey ? GENRE_CONFLICTS[cascadeGenreKey] : []));
-$: protagonistOpts = (novelParamsTick, subgenreCfg ? subgenreCfg.protagonists : (cascadeGenreKey ? GENRE_PROTAGONISTS[cascadeGenreKey] : []));
+  const sd = SUBGENRE_DATA[text] || SUBGENRE_DATA[canonicalSubgenreLabel(text)];
+  return sd || null;
+})();
+
+// Union of the selected parent genres' buckets (deduped, order preserved).
+$: genreUnion = (() => {
+  void novelParamsTick;
+  const keys = selectedGenreKeys.filter((k) => k !== OTHER_GENRE);
+  const mk = (map) => {
+    const out = [];
+    const seen = new Set();
+    for (const k of (keys.length ? keys : cascadeGenreKey ? [cascadeGenreKey] : [])) {
+      for (const x of (map[k] || [])) { const lc = String(x).toLowerCase(); if (!seen.has(lc)) { seen.add(lc); out.push(x); } }
+    }
+    return out;
+  };
+  return { conflicts: mk(GENRE_CONFLICTS), protagonists: mk(GENRE_PROTAGONISTS), settings: mk(GENRE_SETTINGS) };
+})();
+
+$: conflictOpts = (subgenreCfg && subgenreCfg.conflicts.length) ? subgenreCfg.conflicts : genreUnion.conflicts;
+$: protagonistOpts = (subgenreCfg && subgenreCfg.protagonists.length) ? subgenreCfg.protagonists : genreUnion.protagonists;
 $: toneOpts = subgenreCfg ? subgenreCfg.tones : [];
-$: settingSuggestions = (novelParamsTick, subgenreCfg ? subgenreCfg.settings : (cascadeGenreKey ? GENRE_SETTINGS[cascadeGenreKey] : []));
+$: settingSuggestions = (subgenreCfg && subgenreCfg.settings.length) ? subgenreCfg.settings : genreUnion.settings;
 
 // Tone: free-text field with per-subgenre suggestions (NovelWriter tones).
 function toneList(v) {
@@ -688,6 +828,13 @@ for (const k of Object.keys(p.conflict_scales)) GENRE_CONFLICTS[k] = p.conflict_
 for (const k of Object.keys(p.protagonist_types)) GENRE_PROTAGONISTS[k] = p.protagonist_types[k].filter((x) => x !== 'other');
 if (p.specific_settings) for (const k of Object.keys(p.specific_settings)) GENRE_SETTINGS[k] = p.specific_settings[k];
 if (p.subgenre_hints) SUBGENRE_HINTS = p.subgenre_hints;
+// Round 18: authoritative single-parent taxonomy computed by the backend
+// (snake_case token -> canonical genre key). Consulted by canonicalParentFor()
+// for presets that only exist server-side.
+if (p.subgenre_parents && typeof p.subgenre_parents === 'object') SUBGENRE_PARENT_TABLE = p.subgenre_parents;
+// Backend per-subgenre catalogs (conflicts/protagonists/settings + canonical
+// parent). The UI filters everything client-side from these lists.
+if (p.subgenre_catalogs && typeof p.subgenre_catalogs === 'object') SUBGENRE_CATALOGS = p.subgenre_catalogs;
 if (p.structure_hints) STRUCTURE_HINTS = p.structure_hints;
 if (Array.isArray(p.subgenre_presets)) SUBGENRE_PRESETS = p.subgenre_presets;
 // Backend is the source of truth for length/structure catalogs and the
@@ -699,6 +846,10 @@ if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
 // now exposed by the backend regardless of the selected genre, so the user
 // can stack them on any combination via checkboxes.
 if (p.modifier_presets) MODIFIER_PRESETS = p.modifier_presets;
+// Round 19: keep the RAW payload — the new cascade modules (subgenreTaxonomy
+// + GenreSubgenrePicker) build their merged single-parent index directly from
+// it, and re-run automatically whenever this assignment happens.
+novelParamsPayload = p;
 novelParamsTick++;
 }
 } catch (e) {}
@@ -1843,6 +1994,27 @@ function randomizeStoryParams() {
                  backend presets). Typing filters the list; any unmatched text
                  becomes the custom ("Other") subgenre in place — no separate
                  free-text box needed anymore. -->
+            <!-- Round 19 (final): the Subgenre field renders through
+                 GenreSubgenrePicker — the new from-scratch component that
+                 filters EXCLUSIVELY via lib/subgenreTaxonomy.js. It receives
+                 the raw /api/novel-params payload plus the selected genre keys,
+                 builds its own merged single-parent index and lists a subgenre
+                 ONLY under its canonical parent. The legacy ComboSelect block
+                 is kept below, commented out, for reference. -->
+            <GenreSubgenrePicker
+              paramsPayload={novelParamsPayload}
+              genreKeys={selectedGenreKeys}
+              hints={SUBGENRE_HINTS}
+              otherLabel={$t('config.story.other')}
+              placeholder={$t('config.story.subgenre.placeholder')}
+              emptyLabel={$t('config.story.auto')}
+              clearLabel={$t('config.story.clear')}
+              disabled={$taskRunning}
+              title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')}
+              bind:value={localStoryCfg.subgenre}
+              on:change={onSubgenrePickerChange}
+            />
+            <!--
             <ComboSelect
               options={subgenreComboOpts}
               allowOther={true}
@@ -1855,6 +2027,7 @@ function randomizeStoryParams() {
               bind:value={localStoryCfg.subgenre}
               on:change={onSubgenreComboChange}
             />
+            -->
           </div>
           <!-- Info box (round 11): brief explanation of the selected genre and
                subgenre, right below the two selectors. Subgenre hints come
@@ -2060,6 +2233,49 @@ function randomizeStoryParams() {
           <input type="checkbox" class="toggle toggle-sm toggle-primary" bind:checked={localStoryCfg.locations_enabled} disabled={$taskRunning} />
           {$t('config.story.locationsEnabled')}
         </label>
+
+        <!-- ===== Round 21: NEW genre-filtered cascade block (from scratch) =====
+             Rendered BELOW all legacy fields — nothing above was removed or
+             rewired. It binds to the SAME localStoryCfg object and filters
+             Subgenre / Specific Settings / Conflict Scale / Protagonist Type
+             exclusively through lib/subgenreTaxonomy.js against the FULL
+             unfiltered /api/novel-params payload. Use THIS block; whichever
+             field you edit last wins on save (same storage format). -->
+        <GenreCascadeFields
+          paramsPayload={novelParamsPayload}
+          genreKeys={selectedGenreKeys}
+          bind:cfg={localStoryCfg}
+          disabled={$taskRunning}
+          otherLabel={$t('config.story.other')}
+          placeholderGenre={$t('config.story.type.placeholder')}
+          placeholderSub={$t('config.story.subgenre.placeholder')}
+          placeholderConflict={$t('config.story.conflict.placeholder')}
+          placeholderProtag={$t('config.story.protagonist.placeholder')}
+          emptyLabel={$t('config.story.auto')}
+          clearLabel={$t('config.story.clear')}
+          hints={SUBGENRE_HINTS}
+          labels={{
+            sectionTitle: $t('config.story.genreFilteredSection'),
+            genre: $t('config.story.type'),
+            subgenre: $t('config.story.subgenre'),
+            conflict: $t('config.story.conflict'),
+            protagonist: $t('config.story.protagonist'),
+            settings: $t('config.story.specificSettings'),
+            pickGenre: $t('config.settings.pickGenre'),
+          }}
+          on:genreChange={(e) => {
+            // Keep the legacy block's derived keys in sync when the NEW block
+            // changes the genre selection (cfg.type is already written by the
+            // component; this only refreshes selectedGenreKeys).
+            const keys = (e.detail.keys || []).filter(Boolean);
+            selectedGenreKeys = keys.length ? keys : [];
+            lastGenreText = localStoryCfg.type;
+            initGenreCascade();
+          }}
+          on:subChange={onSubgenrePickerChange}
+          on:settingsChange={() => refreshCheckedSettings()}
+        />
+
         <div class="flex justify-end">
           <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
         </div>
