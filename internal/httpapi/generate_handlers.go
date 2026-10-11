@@ -471,12 +471,15 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 		wroteParams = true
 	}
 	if t := strings.TrimSpace(sc.Subgenre); t != "" {
-		if zh {
-			b.WriteString("子类型：" + t + "\n")
-		} else {
-			b.WriteString("Subgenre: " + t + "\n")
+		// Multi-select: "Cozy Mystery, Noir" -> every entry on its own line.
+		for _, part := range config.SplitSubgenreList(t) {
+			if zh {
+				b.WriteString("子类型：" + part + "\n")
+			} else {
+				b.WriteString("Subgenre: " + part + "\n")
+			}
+			wroteParams = true
 		}
-		wroteParams = true
 	}
 	if t := strings.TrimSpace(sc.Theme); t != "" {
 		if zh {
@@ -612,7 +615,20 @@ func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.S
 		}
 	}
 	addPair("类型", "Genre", sc.Type)
-	addPair("子类型", "Subgenre", sc.Subgenre)
+	// Multi-select subgenres: list every comma-separated entry.
+	if subs := config.SplitSubgenreList(sc.Subgenre); len(subs) > 0 {
+		parts := make([]string, 0, len(subs))
+		for _, s := range subs {
+			if zh {
+				parts = append(parts, "子类型："+s)
+			} else {
+				parts = append(parts, "Subgenre: "+s)
+			}
+		}
+		b.WriteString(strings.Join(parts, "\n") + "\n")
+	} else {
+		addPair("子类型", "Subgenre", sc.Subgenre)
+	}
 	addPair("书名/工作名", "Working title", sc.Title)
 	addPair("主题与母题", "Theme & motif", strings.TrimSpace(sc.EffectiveMotif()+" | "+sc.Theme))
 	addPair("基调", "Tone", sc.Tone)

@@ -325,20 +325,57 @@ func GenreCharacterExtraFields(genreKey string, zh bool) (keys []string, desc st
 }
 
 // SubgenreCharacterExtraFields returns character extra fields suggested by the
-// free-form subgenre text (case-insensitive substring match against known
-// subgenre presets). Returns nil when nothing matches, so callers fall back to
-// the parent-genre fields — suggestions never force anything.
+// free-form subgenre text. The text may hold a COMMA-SEPARATED LIST of
+// subgenres ("Cozy Mystery, Noir"): each part is matched independently and the
+// union of their fields is returned, deduplicated in first-seen order.
+// Matching is case-insensitive; a part also matches when it contains a known
+// preset key as a phrase ("locked room impossible crime" -> "cozy mystery"
+// style keys stay exact-ish via substring). Returns nil when nothing matches,
+// so callers fall back to the parent-genre fields — suggestions never force
+// anything.
 func SubgenreCharacterExtraFields(subgenre string) []string {
-	t := strings.ToLower(strings.TrimSpace(subgenre))
-	if t == "" {
+	parts := splitSubgenreList(subgenre)
+	if len(parts) == 0 {
 		return nil
 	}
-	for key, fields := range subgenreCharacterExtraFields {
-		if strings.Contains(t, key) {
-			return fields
+	var out []string
+	seen := map[string]bool{}
+	for _, t := range parts {
+		for key, fields := range subgenreCharacterExtraFields {
+			if strings.Contains(t, key) {
+				for _, f := range fields {
+					if !seen[f] {
+						seen[f] = true
+						out = append(out, f)
+					}
+				}
+			}
 		}
 	}
-	return nil
+	return out
+}
+
+// SplitSubgenreList normalizes a stored subgenre value into its individual
+// entries: comma/semicolon/slash/newline separated, lowercased, trimmed,
+// empties dropped. Exported so prompt builders can iterate every selected
+// subgenre (multi-select support).
+func SplitSubgenreList(subgenre string) []string { return splitSubgenreList(subgenre) }
+
+func splitSubgenreList(subgenre string) []string {
+	raw := strings.FieldsFunc(strings.ToLower(subgenre), func(r rune) bool {
+		return r == ',' || r == ';' || r == '/' || r == '\n' || r == '\r'
+	})
+	out := make([]string, 0, len(raw))
+	seen := map[string]bool{}
+	for _, p := range raw {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // SubgenreExtraFieldsSnapshot exposes the raw subgenre-label -> extra-fields

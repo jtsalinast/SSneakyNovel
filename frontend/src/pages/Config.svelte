@@ -370,12 +370,22 @@ function unionSubgenresFor(keys) {
   // only one wired to the UI now). Same contract as onSubgenreComboChange plus
   // the resolved canonical parent in e.detail.parent.
   function onSubgenrePickerChange(e) {
+    // Round 22: multi-select subgenres. The picker/cascade component sends the
+    // normalized comma-joined chip list in e.detail.value (and `chips` when
+    // available). "Known" means EVERY chip resolves in the filtered option
+    // list; free-text chips mark the field as manual, same as before.
     const v = String((e.detail && e.detail.value) || '').trim();
     localStoryCfg.subgenre = v;
-    const known = subgenreOptions.some((o) => o.toLowerCase() === v.toLowerCase());
-    subgenreManual = !!v && !known;
+    const chips = (e.detail && e.detail.chips) || splitSub(v);
+    const known = chips.length > 0 && chips.every(
+      (c) => subgenreOptions.some((o) => String(o).toLowerCase() === c.toLowerCase() || (o && o.label && o.label.toLowerCase() === c.toLowerCase())),
+    );
+    subgenreManual = chips.length > 0 && !known;
     lastAutoSubgenre = '';
     refreshCheckedSettings();
+  }
+  function splitSub(t) {
+    return String(t || '').split(/[,;/\n\r]+/).map((x) => x.trim()).filter(Boolean);
   }
 
   // Display label for a lowercase backend preset key ("mahou shoujo" ->

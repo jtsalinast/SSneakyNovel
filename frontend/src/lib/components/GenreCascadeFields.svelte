@@ -22,6 +22,7 @@
   import { GENRES, SUBGENRE_DATA } from '../novelwriterGenres.js';
   import {
     buildSubgenreIndex, subgenresForKeys, resolveParent, norm, cascadeForSelection,
+    splitSubgenreText, subgenreBelongsToAny,
   } from '../subgenreTaxonomy.js';
 
   const dispatch = createEventDispatcher();
@@ -62,6 +63,12 @@
   // present, otherwise whatever the parent already knows (legacy block).
   $: effectiveKeys = String(cfg.type || '').trim() ? myGenreKeys : (genreKeys || []);
 
+  function labelToKey(label) {
+    return GENRES.find(
+      (x) => x.label.toLowerCase() === label.toLowerCase() || x.key.toLowerCase() === label.toLowerCase(),
+    )?.key || '__other__';
+  }
+
   function onGenreChange(e) {
     const v = String(e.detail.value || '');
     const parts = v.split(',').map((x) => x.trim()).filter(Boolean);
@@ -69,31 +76,46 @@
       (p) => !GENRES.some((x) => x.label.toLowerCase() === p.toLowerCase() || x.key.toLowerCase() === p.toLowerCase()),
     );
     cfg.type = [...parts.filter((p) => !unknown.includes(p)), ...unknown].join(', ');
-    // Point-7 behaviour: drop the subgenre if it no longer belongs to the union.
-    const keys = parts.length
-      ? parts.map((p) => GENRES.find((x) => x.label.toLowerCase() === p.toLowerCase() || x.key.toLowerCase() === p.toLowerCase())?.key || '__other__')
-      : [];
+    // Point-7 behaviour (round 22, multi-subgenre): keep ONLY the chips that
+    // still belong to the new genre union; drop the ones that don't. If every
+    // chip is orphaned the field resets to Auto — same semantics as before,
+    // but per-chip instead of all-or-nothing.
+    const keys = parts.map(labelToKey);
     const union = subgenresForKeys(index, keys);
-    const cur = String(cfg.subgenre || '').trim();
-    if (cur && !union.some((s) => s.toLowerCase() === cur.toLowerCase())) cfg.subgenre = '';
+    const kept = splitSubgenreText(cfg.subgenre).filter(
+      (c) => union.some((s) => s.toLowerCase() === c.toLowerCase()) || subgenreBelongsToAny(index, c, keys),
+    );
+    if (kept.join(', ') !== splitSubgenreText(cfg.subgenre).join(', ')) {
+      cfg.subgenre = kept.join(', ');
+    }
     dispatch('genreChange', { keys, value: cfg.type });
   }
 
-  // —— Subgenre options (single filter path: subgenresForKeys) ————————————
+  // —— Subgenre combobox (MULTI-SELECT, round 22) ————————————————————————
+  // Same interaction as the Genre field: chips + free text. The stored format
+  // is a comma-separated list of labels ("Cozy Mystery, Noir"), identical to
+  // how Type stores multiple genres and to what the backend now understands
+  // (config.SplitSubgenreList). Options are filtered by EVERY selected genre's
+  // union; already-picked chips stay in the option list even if a later genre
+  // change would no longer offer them (they get dropped from the VALUE only
+  // when none of them belongs to the new selection anymore — see onGenreChange).
   $: index = buildSubgenreIndex(paramsPayload);
   $: filteredLabels = subgenresForKeys(index, effectiveKeys);
   $: subOpts = (() => {
     const opts = filteredLabels.map((s) => ({
       value: s, label: s, desc: hints[norm(s)] || hints[String(s).toLowerCase()] || '',
     }));
-    const cur = String(cfg.subgenre || '').trim();
-    if (cur && !opts.some((o) => o.value.toLowerCase() === cur.toLowerCase())) {
-      opts.push({ value: cur, label: cur, desc: hints[norm(cur)] || '' });
+    for (const cur of splitSubgenreText(cfg.subgenre)) {
+      if (!opts.some((o) => o.value.toLowerCase() === cur.toLowerCase())) {
+        opts.push({ value: cur, label: cur, desc: hints[norm(cur)] || '' });
+      }
     }
     return opts;
   })();
 
   // —— Dependent cascade fields (Specific Settings / Conflict / Protagonist) —
+  // Passes the FULL multi-select text: cascadeForSelection resolves each chip
+  // and unions their own catalogs when every chip belongs to the selection.
   $: cascade = cascadeForSelection(
     paramsPayload,
     { conflicts: {}, protagonists: {}, settings: {}, subgenreData: SUBGENRE_DATA },
@@ -119,8 +141,11 @@
   }
 
   function onSubChange(e) {
-    cfg.subgenre = String(e.detail.value || '').trim();
-    dispatch('subChange', { value: cfg.subgenre, parent: resolveParent(index, cfg.subgenre) });
+    // Multi-select: normalize the joined chip list ("Cozy Mystery, Noir").
+    const chips = splitSubgenreText(String(e.detail.value || ''));
+    cfg.subgenre = chips.join(', ');
+    const first = chips[0] || '';
+    dispatch('subChange', { value: cfg.subgenre, chips, parent: resolveParent(index, first) });
   }
   function onConflictChange(e) { cfg.conflict_scale = String(e.detail.value || '').trim(); }
   function onProtagChange(e) { cfg.protagonist_type = String(e.detail.value || '').trim(); }
@@ -151,6 +176,7 @@
       <span class="text-xs text-base-content/65 mb-0.5 block">{labels.subgenre || 'Subgenre'}</span>
       <ComboSelect
         options={subOpts}
+        multiple={true}
         allowOther={true}
         otherLabel={otherLabel}
         placeholder={placeholderSub}

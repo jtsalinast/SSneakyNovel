@@ -167,7 +167,11 @@ func NovelParametersBlock(cfg *config.Config) string {
 		}
 	}
 	if v := strings.TrimSpace(sc.Subgenre); v != "" {
-		add("【子类型】"+v, "[SUBGENRE] "+v)
+		// Multi-select support: the stored value may be a comma-separated list
+		// ("Cozy Mystery, Noir"); every entry is surfaced to the AI.
+		for _, part := range config.SplitSubgenreList(v) {
+			add("【子类型】"+part, "[SUBGENRE] "+part)
+		}
 	}
 	if v := strings.TrimSpace(sc.Theme); v != "" {
 		add("【主题】"+v, "[THEME] "+v)
