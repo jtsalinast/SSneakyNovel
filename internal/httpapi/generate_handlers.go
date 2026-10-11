@@ -1856,9 +1856,19 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 		}
 		return p[0]
 	}
-	subgenreHints := make(map[string]string, len(config.SubgenreHints))
+	subgenreHints := make(map[string]string, 2*len(config.SubgenreHints))
 	for k, v := range config.SubgenreHints {
 		subgenreHints[k] = pick(v)
+		// Round 27 (key-normalization fix): the frontend subgenre combobox
+		// looks hints up by snake_case token ("cozy_mystery", "lit_rpg"),
+		// while SubgenreHints keys are display labels with spaces. Without a
+		// normalized alias every label-keyed hint silently missed and chips
+		// rendered without a description. Ship both spellings.
+		if tok := strings.ToLower(strings.NewReplacer(" ", "_", "-", "_").Replace(k)); tok != k {
+			if _, exists := subgenreHints[tok]; !exists {
+				subgenreHints[tok] = pick(v)
+			}
+		}
 	}
 	// Per-subgenre catalogs (normalized token -> lists + canonical parent).
 	// The frontend used to keep its own duplicated copy of these tables; now
@@ -1952,17 +1962,17 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.writeJSON(w, 200, map[string]any{
-		"conflict_scales":        config.GenreConflictScales,
-		"protagonist_types":      config.GenreProtagonistTypes,
-		"specific_settings":      config.GenreSpecificSettings,
-		"gender_bias_options":    []string{"random", "balanced", "male", "female"},
-		"subgenre_presets":       config.SubgenrePresetKeys,
-		"subgenre_hints":         subgenreHints,
+		"conflict_scales":     config.GenreConflictScales,
+		"protagonist_types":   config.GenreProtagonistTypes,
+		"specific_settings":   config.GenreSpecificSettings,
+		"gender_bias_options": []string{"random", "balanced", "male", "female"},
+		"subgenre_presets":    config.SubgenrePresetKeys,
+		"subgenre_hints":      subgenreHints,
 		// Full per-subgenre cascade catalogs (token -> {conflicts,
 		// protagonists, settings, genre}): the backend ships ALL parameters
 		// and the frontend is the only place that filters them by the
 		// selected parent genre(s).
-		"subgenre_catalogs":      subgenreCatalogs,
+		"subgenre_catalogs": subgenreCatalogs,
 		// Round 18: authoritative single-parent taxonomy (snake_case token ->
 		// canonical parent genre key), consumed by the frontend as the definitive
 		// source for which Subgenres appear under which Genre.

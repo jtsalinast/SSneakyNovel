@@ -72,7 +72,7 @@
     role="tooltip"
     style="position: fixed; left: {popX}px; top: {popY}px; width: 240px; max-width: calc(100vw - 16px);"
     class="z-[9999] rounded-md border border-base-content/20 bg-base-100 px-2.5 py-2 text-[11px] font-normal leading-snug shadow-lg text-left whitespace-normal normal-case tracking-normal pointer-events-auto"
-  >{text}</span>
+  >{#each String(text).split(/\n{2,}/) as para, i}{#if i > 0}<br /><br />{/if}{para}{/each}</span>
 {/if}
 
 <style>
