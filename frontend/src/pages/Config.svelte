@@ -2023,24 +2023,12 @@ function randomizeStoryParams() {
             />
           </div>
           -->
-          <!-- Info box (round 11): brief explanation of the selected genre and
-               subgenre, right below the two selectors. Subgenre hints come
-               from the backend (/api/novel-params -> subgenre_hints); genre
-               blurbs are static ES/EN one-liners keyed by output language. -->
-          <div class="col-span-2 rounded-md border border-base-content/15 bg-base-100/60 px-3 py-2 text-xs leading-relaxed">
-            {#if localStoryCfg.type || infoSubgenre}
-              <div class="flex flex-wrap gap-x-4 gap-y-1">
-                {#if localStoryCfg.type}
-                  <span><span class="font-semibold opacity-70">{$t('config.story.type')}:</span> {(localStoryCfg.type || '').trim()}{#each genreBlurbLines() as b} — {b}{/each}</span>
-                {/if}
-                {#if infoSubgenre}
-                  <span><span class="font-semibold opacity-70">{$t('config.story.subgenre')}:</span> {infoSubgenre.trim()}{#if subgenreHint(infoSubgenre)} — {subgenreHint(infoSubgenre)}{/if}</span>
-                {/if}
-              </div>
-            {:else}
-              <span class="opacity-60">{$t('config.story.infoBox.empty')}</span>
-            {/if}
-          </div>
+          <!-- Info box (round 11) REMOVED (round 27, user request): the
+               "col-span-2 rounded-md border ... text-xs leading-relaxed" panel
+               under "Story parameters" is gone — its content now lives in the
+               lateral ⓘ tooltips inside GenreCascadeFields (multi-selection
+               aware). The helpers it used (genreBlurbLines/infoSubgenre) remain
+               defined but unused for reference. -->
           <!-- LEGACY SPECIFIC-SETTINGS SECTION (round 23 — replaced by the
                filtered checkboxes/modifiers/custom box inside GenreCascadeFields):
           <div class="col-span-2">

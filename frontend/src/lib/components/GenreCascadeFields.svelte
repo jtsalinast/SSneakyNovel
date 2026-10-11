@@ -299,13 +299,29 @@
   // when none of them belongs to the new selection anymore — see onGenreChange).
   $: index = buildSubgenreIndex(paramsPayload);
   $: filteredLabels = subgenresForKeys(index, effectiveKeys);
+  // Round 27 hint lookup: the backend ships SubgenreHints keyed by display
+  // label ("cozy mystery") AND — since this round — a snake_case alias
+  // ("cozy_mystery"). Free-text chips may arrive in any spelling, so we try
+  // every normalization here instead of relying on the server alone.
+  function hintFor(text) {
+    const src = hints || {};
+    const raw = String(text || '');
+    const cands = [
+      norm(raw),                    // "cozy mystery" (spaces, lowercase)
+      raw.trim().toLowerCase(),     // as-is lowercase
+      norm(raw).replace(/ +/g, '_'),// "cozy_mystery"
+      raw.trim().toLowerCase().replace(/[ -]+/g, '_'),
+    ];
+    for (const k of cands) { if (src[k]) return src[k]; }
+    return '';
+  }
   $: subOpts = (() => {
     const opts = filteredLabels.map((s) => ({
-      value: s, label: s, desc: hints[norm(s)] || hints[String(s).toLowerCase()] || '',
+      value: s, label: s, desc: hintFor(s),
     }));
     for (const cur of splitSubgenreText(cfg.subgenre)) {
       if (!opts.some((o) => o.value.toLowerCase() === cur.toLowerCase())) {
-        opts.push({ value: cur, label: cur, desc: hints[norm(cur)] || '' });
+        opts.push({ value: cur, label: cur, desc: hintFor(cur) });
       }
     }
     return opts;
