@@ -2088,6 +2088,16 @@ function randomizeStoryParams() {
               emptyLabel={$t('config.story.auto')}
               clearLabel={$t('config.story.clear')}
               hints={SUBGENRE_HINTS}
+              tips={{
+                genre: $t('config.tip.genre'),
+                subgenre: $t('config.tip.subgenre'),
+                conflict: $t('config.tip.conflict'),
+                protagonist: $t('config.tip.protagonist'),
+                specificSettings: $t('config.tip.specificSettings'),
+                tone: $t('config.tip.tone'),
+                length: $t('config.tip.length'),
+                structure: $t('config.tip.structure'),
+              }}
               labels={{
                 sectionTitle: $t('config.story.genreFilteredSection'),
                 genre: $t('config.story.type'),
@@ -2098,6 +2108,7 @@ function randomizeStoryParams() {
                 settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
                 modifiers: $t('config.story.modifiers'),
                 pickGenre: $t('config.settings.pickGenre'),
+                pickSubgenre: $t('config.settings.pickSubgenre'),
                 tone: $t('config.story.tone'),
                 tonePlaceholder: $t('config.story.tone.placeholder'),
                 length: $t('config.story.length'),
