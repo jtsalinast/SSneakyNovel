@@ -1844,6 +1844,74 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 	for k, v := range config.SubgenreHints {
 		subgenreHints[k] = pick(v)
 	}
+	// Per-subgenre catalogs (normalized token -> lists + canonical parent).
+	// The frontend used to keep its own duplicated copy of these tables; now
+	// the backend ships everything and the UI only filters client-side from
+	// this payload (single source of truth). Keys are normalized so
+	// "Cozy Mystery" and "cozy_mystery" resolve alike.
+	normTok := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		s = strings.ReplaceAll(s, " ", "_")
+		s = strings.ReplaceAll(s, "-", "_")
+		return s
+	}
+	withoutOther := func(list []string) []string {
+		out := make([]string, 0, len(list))
+		for _, x := range list {
+			if x != "other" {
+				out = append(out, x)
+			}
+		}
+		return out
+	}
+	type subcatalog struct {
+		Conflicts    []string `json:"conflicts"`
+		Protagonists []string `json:"protagonists"`
+		Settings     []string `json:"settings"`
+		Genre        string   `json:"genre"`
+	}
+	subgenreCatalogs := map[string]subcatalog{}
+	putSubCatalog := func(key string, c subcatalog) {
+		if key == "" {
+			return
+		}
+		if prev, ok := subgenreCatalogs[key]; ok &&
+			len(prev.Conflicts)+len(prev.Protagonists)+len(prev.Settings) >=
+				len(c.Conflicts)+len(c.Protagonists)+len(c.Settings) {
+			return // existing entry is at least as rich — keep it
+		}
+		if c.Genre == "" {
+			c.Genre = subgenreCatalogs[key].Genre
+		}
+		subgenreCatalogs[key] = c
+	}
+	// 1) Subgenres that carry their own full preset bucket (anime modifiers,
+	// drama subgenres, promoted first-class subgenres...).
+	for _, tok := range config.SubgenrePresetKeys {
+		k := normTok(tok)
+		putSubCatalog(k, subcatalog{
+			Conflicts:    withoutOther(config.GenreConflictScales[k]),
+			Protagonists: withoutOther(config.GenreProtagonistTypes[k]),
+			Settings:     withoutOther(config.GenreSpecificSettings[k]),
+			Genre:        config.CanonicalParentForSubgenre(k),
+		})
+	}
+	// 2) Classic NovelWriter subgenres without a dedicated bucket: ship the
+	// extra character-field keys as settings so the cascade stays populated.
+	for k, fields := range config.SubgenreExtraFieldsSnapshot() {
+		key := normTok(k)
+		c := subcatalog{Settings: fields, Genre: config.CanonicalParentForSubgenre(key)}
+		if base, ok := subgenreCatalogs[key]; ok {
+			c.Conflicts, c.Protagonists = base.Conflicts, base.Protagonists
+			if len(c.Settings) == 0 {
+				c.Settings = base.Settings
+			}
+			if c.Genre == "" {
+				c.Genre = base.Genre
+			}
+		}
+		putSubCatalog(key, c)
+	}
 	structureHints := make(map[string]string)
 	for k, v := range story.StructureDescriptions() {
 		structureHints[k] = pick(v)
@@ -1874,6 +1942,15 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 		"gender_bias_options":    []string{"random", "balanced", "male", "female"},
 		"subgenre_presets":       config.SubgenrePresetKeys,
 		"subgenre_hints":         subgenreHints,
+		// Full per-subgenre cascade catalogs (token -> {conflicts,
+		// protagonists, settings, genre}): the backend ships ALL parameters
+		// and the frontend is the only place that filters them by the
+		// selected parent genre(s).
+		"subgenre_catalogs":      subgenreCatalogs,
+		// Round 18: authoritative single-parent taxonomy (snake_case token ->
+		// canonical parent genre key), consumed by the frontend as the definitive
+		// source for which Subgenres appear under which Genre.
+		"subgenre_parents":       config.CanonicalSubgenreParents(),
 		"structure_hints":        structureHints,
 		"length_keys":            config.LengthKeys,
 		"all_structure_keys":     config.AllStructureKeys,

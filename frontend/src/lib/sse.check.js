@@ -26,7 +26,7 @@ const context = vm.createContext({
 });
 for (const name of ['taskRunning', 'currentTaskName', 'taskTokenUsage', 'streamingContent',
   'streamingChapterIdx', 'progress', 'settings', 'chatSessions', 'currentChatSession',
-  'logEntries', 'lastFailedTask']) {
+  'logEntries', 'lastFailedTask', 'chatTurnEnd']) {
   context[name] = { value: null, set(v) { this.value = v; }, update(fn) { this.value = fn(this.value); } };
 }
 vm.runInContext(script + '\nconnectSSE();', context);
