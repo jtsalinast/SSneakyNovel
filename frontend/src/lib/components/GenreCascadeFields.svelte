@@ -63,6 +63,7 @@
       historical: 'Fiction anchored in a real period, with period-authentic settings, customs and events shaping the characters’ lives.',
       western: 'Frontier stories of lawlessness, honor codes and open land — classic, spaghetti, weird or transplanted to space.',
       drama: 'Character-first literary fiction: family sagas, coming-of-age, psychorealism, metafiction, existentialist and philosophical stories.',
+      comedy: 'Fiction whose primary promise is laughter — parody, farce, sitcom ensembles, dark and absurdist humor, workplace and paranormal comedy.',
       adventure: 'Movement-driven fiction: quests, exploration, survival and treasure hunts where the journey and its dangers are the plot.',
       mystery_thriller: 'Crime, puzzles and suspense: investigations from cozy whodunits to hard-boiled noir, plus chases, conspiracies and high-stakes thrillers.',
     },
@@ -76,6 +77,7 @@
       historical: '扎根于真实历史时期的小说，时代风物、习俗与事件塑造人物命运。',
       western: '边疆故事：无法无天、荣誉准则与旷野——经典、意大利面式、怪异或移植到太空的西部片。',
       drama: '以人物为先的文学小说：家族史诗、成长、心理写实、元小说、存在主义与哲思故事。',
+      comedy: '以笑声为首要承诺的小说：戏仿、闹剧、情景喜剧群像、黑色与荒诞幽默、职场与超自然喜剧。',
       adventure: '以行动驱动的虚构：冒险、探索、求生与寻宝——旅程与危险即情节。',
       mystery_thriller: '罪案、谜团与悬念：从安乐椅推理到硬汉黑色侦探，外加追逐、阴谋与高风险惊悚。',
     },
@@ -306,10 +308,13 @@
   function hintFor(text) {
     const src = hints || {};
     const raw = String(text || '');
+    const flat = raw.toLowerCase().replace(/\s+/g, ' ').trim(); // collapse spaces
     const cands = [
-      norm(raw),                    // "cozy mystery" (spaces, lowercase)
-      raw.trim().toLowerCase(),     // as-is lowercase
-      norm(raw).replace(/ +/g, '_'),// "cozy_mystery"
+      norm(raw),                        // "cozy mystery" (spaces, lowercase)
+      flat,                             // "road-trip comedy" (hyphens kept, spaces collapsed)
+      flat.replace(/-+/g, ' '),         // "road trip comedy" (hyphens -> spaces)
+      flat.replace(/-+/g, '_'),         // "road_trip_comedy"
+      norm(raw).replace(/ +/g, '_'),    // "cozy_mystery"
       raw.trim().toLowerCase().replace(/[ -]+/g, '_'),
     ];
     for (const k of cands) { if (src[k]) return src[k]; }

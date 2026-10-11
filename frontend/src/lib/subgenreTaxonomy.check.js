@@ -128,3 +128,25 @@ assert.deepEqual(splitSubgenreText(null), []);
 assert.ok(subgenreBelongsToAny(idx, 'High Fantasy, Heist', ['mystery_thriller']), 'multi-chip membership failed');
 assert.ok(!subgenreBelongsToAny(idx, 'High Fantasy, Epic Quest', ['mystery_thriller']), 'foreign multi-chip wrongly accepted');
 console.log('round 22 multi-subgenre assertions passed ✓');
+
+// —— round 28: every frontend GENRES label must resolve a hint from the
+// backend SubgenreHints payload (fixture generated from internal/config's
+// SubgenreHints map, including the snake_case aliases GetNovelParams ships;
+// hyphen variants normalized client-side by GenreCascadeFields.hintFor).
+{
+  const fs = await import('node:fs');
+  const hints = JSON.parse(fs.readFileSync(new URL('./__fixtures__/subgenre_hints.json', import.meta.url), 'utf8'));
+  const hintKeys = Object.keys(hints);
+  const flat = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const variants = (label) => {
+    const f = flat(label);
+    return [f, f.replace(/-+/g, ' '), f.replace(/-+/g, '_'), f.replace(/ /g, '_')];
+  };
+  const resolve = (label) => hintKeys.some((k) => variants(k).some((vk) => variants(label).includes(vk)));
+  const missing = [];
+  for (const g of GENRES) for (const s of g.subgenres) {
+    if (!resolve(s)) missing.push(g.label + ' / ' + s);
+  }
+  assert.deepStrictEqual(missing, [], 'subgenre hints coverage broken:\n' + missing.join('\n'));
+  console.log('round28 hint coverage: all ' + GENRES.reduce((a, g) => a + g.subgenres.length, 0) + ' labels resolved ✓');
+}
