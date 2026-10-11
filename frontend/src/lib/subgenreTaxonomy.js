@@ -179,11 +179,27 @@ export function ownersOfTokens(index, tokens) {
   return owners;
 }
 
-/** True when `text` resolves to a subgenre owned by one of `genreKeys`. */
+/** True when ANY entry of the (possibly comma-separated) subgenre text resolves
+ *  to a subgenre owned by one of `genreKeys`. Multi-select storage ("Cozy
+ *  Mystery, Noir") counts as belonging when at least one chip matches. */
 export function subgenreBelongsToAny(index, text, genreKeys) {
-  const p = resolveParent(index, text);
-  if (!p) return false;
-  return (genreKeys || []).map(normParent).includes(p);
+  const parts = splitSubgenreText(text);
+  if (!parts.length) return false;
+  const keys = (genreKeys || []).map(normParent);
+  return parts.some((p) => {
+    const par = resolveParent(index, p);
+    return !!par && keys.includes(par);
+  });
+}
+
+// Split a stored subgenre value into its individual chips: comma/semicolon/
+// slash/newline separated, trimmed, empties dropped. Mirrors the backend's
+// config.SplitSubgenreList so both sides agree on the multi-select format.
+export function splitSubgenreText(text) {
+  return String(text || '')
+    .split(/[,;/\n\r]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
 
 // —— Genre-level bucket normalization (round 21) ————————————————————

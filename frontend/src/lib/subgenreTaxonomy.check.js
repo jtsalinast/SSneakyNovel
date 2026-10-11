@@ -4,6 +4,7 @@ import assert from 'node:assert';
 import { GENRES } from './novelwriterGenres.js';
 import {
   buildSubgenreIndex, subgenresForKeys, resolveParent, subgenreBelongsToAny, norm,
+  splitSubgenreText,
 } from './subgenreTaxonomy.js';
 
 const idx = buildSubgenreIndex(null);
@@ -116,3 +117,14 @@ console.log('subgenreTaxonomy.check.js: all assertions passed ✓');
   assert.ok(c5.settings.includes('magic_system') && c5.settings.includes('small_community'));
 }
 console.log('round 21 cascade assertions passed ✓');
+
+// —— Round 22: multi-select subgenre storage ————————————————
+// splitSubgenreText must mirror backend config.SplitSubgenreList: commas,
+// semicolons, slashes and newlines all separate chips; blanks are dropped.
+assert.deepEqual(splitSubgenreText('Cozy Mystery, Noir; Heist/Thriller\nSpy'), ['Cozy Mystery', 'Noir', 'Heist', 'Thriller', 'Spy']);
+assert.deepEqual(splitSubgenreText(''), []);
+assert.deepEqual(splitSubgenreText(null), []);
+// A multi-chip string belongs to a genre set when ANY chip matches.
+assert.ok(subgenreBelongsToAny(idx, 'High Fantasy, Heist', ['mystery_thriller']), 'multi-chip membership failed');
+assert.ok(!subgenreBelongsToAny(idx, 'High Fantasy, Epic Quest', ['mystery_thriller']), 'foreign multi-chip wrongly accepted');
+console.log('round 22 multi-subgenre assertions passed ✓');
