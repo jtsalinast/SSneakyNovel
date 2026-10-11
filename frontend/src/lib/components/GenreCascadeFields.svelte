@@ -22,6 +22,7 @@
   import { createEventDispatcher } from 'svelte';
   import { get } from 'svelte/store';
   import { uiLocale, translate } from '../i18n/index.js';
+  import { CONFLICT_TERMS_EN, PROTAGONIST_TERMS_EN } from '../termDescriptions.js';
   import { GENRES, SUBGENRE_DATA } from '../novelwriterGenres.js';
   import {
     buildSubgenreIndex, subgenresForKeys, resolveParent, norm, cascadeForSelection,
@@ -153,6 +154,19 @@
       trickster: 'Ingenio sobre fuerza: estafadores, bardos y manipuladores de corte que improvisan su ascenso peldaño a peldaño.',
     },
   };
+  // —— Exact-term description tables (round 26) ————————————————————————————
+  // The keyword-family resolvers below are only a generic fallback: the real
+  // Conflict-scale / Protagonist-type vocabularies shipped by the backend
+  // (config.GenreConflictScales / GenreProtagonistTypes) contain hundreds of
+  // specific terms ("Heavenly Tribulation", "Netrunner", "Dungeon Economy"…)
+  // that matched no family and therefore rendered WITHOUT any second-line
+  // description. CONFLICT_TERMS_EN / PROTAGONIST_TERMS_EN (lib/termDescriptions.js)
+  // now cover every term in those catalogs verbatim (case-insensitive exact
+  // lookup), so each combobox row always shows its own explanation.
+
+  const CONFLICT_TERMS = { en: CONFLICT_TERMS_EN, es: CONFLICT_TERMS_EN };
+  const PROTAGONIST_TERMS = { en: PROTAGONIST_TERMS_EN, es: PROTAGONIST_TERMS_EN };
+
   function famKey(text) {
     const t = String(text || '').toLowerCase();
     const has = (...ws) => ws.some((w) => t.includes(w));
@@ -183,8 +197,13 @@
     if (has('trickster', 'con ', 'con-artist', 'grifter', 'bard', 'schemer', 'impostor', 'jester', 'charmer')) return 'trickster';
     return '';
   }
-  function itemDesc(text, fams, keyFn) {
+  function itemDesc(text, fams, keyFn, exactTable) {
     const lang = get(uiLocale) === 'zh' ? 'es' : 'en'; // family catalogs ship EN + ES
+    const tbl = exactTable ? (exactTable[lang] || exactTable.en) : null;
+    if (tbl) {
+      const k = String(text || '').trim().toLowerCase();
+      if (tbl[k]) return tbl[k];
+    }
     const k = keyFn(text);
     return k ? (fams[lang] || fams.en)[k] || '' : '';
   }
@@ -301,8 +320,8 @@
     cfg.subgenre,
     effectiveKeys,
   );
-  $: conflictOpts = (cascade.conflicts || []).map((c) => ({ value: c, label: c, desc: itemDesc(c, CONFLICT_FAMILIES, famKey) }));
-  $: protagOpts = (cascade.protagonists || []).map((p) => ({ value: p, label: p, desc: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey) }));
+  $: conflictOpts = (cascade.conflicts || []).map((c) => ({ value: c, label: c, desc: itemDesc(c, CONFLICT_FAMILIES, famKey, CONFLICT_TERMS) }));
+  $: protagOpts = (cascade.protagonists || []).map((p) => ({ value: p, label: p, desc: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey, PROTAGONIST_TERMS) }));
   $: settingOpts = cascade.settings || [];
 
   // Checked-state helpers over cfg.specific_settings (newline-separated tokens,
@@ -481,20 +500,13 @@
         on:change={onSubChange}
       />
     </div>
-    <div class="rounded border border-base-content/10 px-2 py-1.5 text-[11px] leading-relaxed opacity-70">
-      {#each effectiveKeys.filter(k => k !== '__other__') as k}
-        <div>{#if cascade.source === 'subgenre'}{labels.fromSubgenre || 'From subgenre:'} {:else}{labels.fromGenres || 'From genres:'} {/if}
-          {k.replaceAll('_', ' ')}</div>
-      {/each}
-      {#if !effectiveKeys.filter(k => k !== '__other__').length}
-        <div>{labels.pickGenre || 'Pick a genre to filter these lists.'}</div>
-      {/if}
-    </div>
+    <!-- Round 26: the "From genres:" info box under the Genre combobox was
+         removed per user request (class rounded border ... opacity-70). -->
 
     <div>
       <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
         {labels.conflict || 'Conflict scale'}
-        <a class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</a>
+        <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</span>
       </span>
       <ComboSelect
         options={conflictOpts}
@@ -513,7 +525,7 @@
     <div>
       <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
         {labels.protagonist || 'Protagonist type'}
-        <a class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</a>
+        <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</span>
       </span>
       <ComboSelect
         options={protagOpts}
@@ -535,7 +547,7 @@
     <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
       {labels.settings || 'Specific settings'}
       <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
-      {#if showSettingShortcuts}<a class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</a>{/if}
+      {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
     </span>
     {#if showSettingShortcuts}
       <div class="grid grid-cols-2 gap-x-3 gap-y-1">
