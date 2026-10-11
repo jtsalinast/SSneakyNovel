@@ -115,20 +115,34 @@
     return options.some((o) => o.value.toLowerCase() === s || displayOf(o).toLowerCase() === s);
   }
 
-  // Info panel: description of the highlighted row, else of the current
-  // selection (free-text values get no description).
-  $: infoText = (() => {
-    if (activeRow && (activeRow.kind === 'opt' || activeRow.kind === 'other')) return activeRow.desc || '';
-    const cur = optByValue(multiple ? selected[selected.length - 1] : value);
-    return cur ? cur.desc || '' : '';
-  })();
+  // Round 25: the info panel that used to render *below* the combobox
+  // (mt-1 text-[11px] ... line-clamp-3) was removed per user request — all
+  // descriptions now surface exclusively through the side ⓘ popover.
 
   // Field-level explanation shown by the clickable ⓘ icon next to the input:
-  // description of the highlighted/selected item, else the generic field tip.
+  //   • nothing selected/highlighted → generic field tip;
+  //   • one or more catalog items selected → their title + description joined
+  //     (round 25: with several genres/subgenres selected, the popover shows
+  //     the description of ALL of them, not just the last one);
+  //   • free-text "Other" value → otherTip.
   $: tipText = (() => {
-    if (infoText) return infoText;
-    const cur = multiple ? selected[selected.length - 1] : value;
-    if (cur && !isKnown(cur)) return otherTip;
+    if (activeRow && activeRow.kind === 'other') return otherTip;
+    if (activeRow && activeRow.kind === 'opt' && activeRow.desc) {
+      return `${activeRow.label}: ${activeRow.desc}`;
+    }
+    const parts = [];
+    if (multiple) {
+      for (const v of selected) {
+        const o = optByValue(v);
+        if (o && o.desc) parts.push(`${displayOf(o)}: ${o.desc}`);
+        else if (!isKnown(v)) parts.push(otherTip);
+      }
+    } else if (value) {
+      const o = optByValue(value);
+      if (o && o.desc) parts.push(`${displayOf(o)}: ${o.desc}`);
+      else if (!isKnown(value)) parts.push(otherTip);
+    }
+    if (parts.length) return parts.join('\n\n');
     return fieldTip || '';
   })();
 
@@ -431,7 +445,6 @@
     </ul>
   {/if}
 
-  {#if infoText}
-    <div class="mt-1 text-[11px] leading-snug opacity-70 border-l-2 border-base-content/20 pl-2 line-clamp-3">{infoText}</div>
-  {/if}
+  <!-- Round 25: the info panel below the combobox was removed per user
+       request; descriptions now only appear in the side ⓘ popover. -->
 </div>
