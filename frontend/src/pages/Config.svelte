@@ -8,6 +8,9 @@
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
   import ComboSelect from '../lib/components/ComboSelect.svelte';
   import GenreSubgenrePicker from '../lib/components/GenreSubgenrePicker.svelte';
+  // Round 21: brand-new, self-contained cascade block rendered BELOW the legacy
+  // fields (which stay untouched). All filtering lives in lib/subgenreTaxonomy.js.
+  import GenreCascadeFields from '../lib/components/GenreCascadeFields.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
   import { GENRES, SUBGENRE_DATA, SUBGENRE_PARENT, parentGenreForSubgenre, genreBucketKeys, canonicalSubgenreLabel } from '../lib/novelwriterGenres.js';
   // Round 19: the cascade now flows EXCLUSIVELY through these two modules.
@@ -2230,6 +2233,49 @@ function randomizeStoryParams() {
           <input type="checkbox" class="toggle toggle-sm toggle-primary" bind:checked={localStoryCfg.locations_enabled} disabled={$taskRunning} />
           {$t('config.story.locationsEnabled')}
         </label>
+
+        <!-- ===== Round 21: NEW genre-filtered cascade block (from scratch) =====
+             Rendered BELOW all legacy fields — nothing above was removed or
+             rewired. It binds to the SAME localStoryCfg object and filters
+             Subgenre / Specific Settings / Conflict Scale / Protagonist Type
+             exclusively through lib/subgenreTaxonomy.js against the FULL
+             unfiltered /api/novel-params payload. Use THIS block; whichever
+             field you edit last wins on save (same storage format). -->
+        <GenreCascadeFields
+          paramsPayload={novelParamsPayload}
+          genreKeys={selectedGenreKeys}
+          bind:cfg={localStoryCfg}
+          disabled={$taskRunning}
+          otherLabel={$t('config.story.other')}
+          placeholderGenre={$t('config.story.type.placeholder')}
+          placeholderSub={$t('config.story.subgenre.placeholder')}
+          placeholderConflict={$t('config.story.conflict.placeholder')}
+          placeholderProtag={$t('config.story.protagonist.placeholder')}
+          emptyLabel={$t('config.story.auto')}
+          clearLabel={$t('config.story.clear')}
+          hints={SUBGENRE_HINTS}
+          labels={{
+            sectionTitle: $t('config.story.genreFilteredSection'),
+            genre: $t('config.story.type'),
+            subgenre: $t('config.story.subgenre'),
+            conflict: $t('config.story.conflict'),
+            protagonist: $t('config.story.protagonist'),
+            settings: $t('config.story.specificSettings'),
+            pickGenre: $t('config.settings.pickGenre'),
+          }}
+          on:genreChange={(e) => {
+            // Keep the legacy block's derived keys in sync when the NEW block
+            // changes the genre selection (cfg.type is already written by the
+            // component; this only refreshes selectedGenreKeys).
+            const keys = (e.detail.keys || []).filter(Boolean);
+            selectedGenreKeys = keys.length ? keys : [];
+            lastGenreText = localStoryCfg.type;
+            initGenreCascade();
+          }}
+          on:subChange={onSubgenrePickerChange}
+          on:settingsChange={() => refreshCheckedSettings()}
+        />
+
         <div class="flex justify-end">
           <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
         </div>

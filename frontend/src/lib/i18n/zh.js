@@ -512,6 +512,8 @@ export default {
   'config.story.auto': '自动（由 AI 决定）',
   'config.story.other': '其他……',
   'config.story.clear': '清除选择',
+  'config.story.genreFilteredSection': '按类型筛选的参数（新板块——请使用此项）',
+  'config.settings.pickGenre': '选择一个类型以填充这些选项。',
   'config.story.targetAudience': '目标读者',
   'config.story.targetAudience.none': '未指定',
   'config.story.targetAudience.kid': '儿童（5-9岁）',

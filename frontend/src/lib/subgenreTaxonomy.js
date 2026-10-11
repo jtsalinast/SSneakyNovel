@@ -185,3 +185,97 @@ export function subgenreBelongsToAny(index, text, genreKeys) {
   if (!p) return false;
   return (genreKeys || []).map(normParent).includes(p);
 }
+
+// —— Genre-level bucket normalization (round 21) ————————————————————
+// The backend /api/novel-params payload ships the FULL unfiltered per-genre
+// tables: conflict_scales / protagonist_types / specific_settings keyed by
+// backend genre key (legacy "mystery"/"thriller" for Mystery & Thriller).
+// normalizeBuckets() re-keys them under the FRONTEND GENRES keys (applying the
+// same legacy aliases as normParent) so a simple lookup by selected genre key
+// always hits. Without this, selecting "Mystery & Thriller" reads
+// buckets["mystery_thriller"] -> undefined and the UI falls back to dumping
+// EVERY entry ("siguen apareciendo todos").
+export function normalizeBuckets(table) {
+  const out = {};
+  for (const [k, v] of Object.entries(table || {})) {
+    const nk = normParent(String(k).trim());
+    if (!nk || !Array.isArray(v)) continue;
+    const merged = out[nk] || (out[nk] = []);
+    for (const x of v) if (!merged.includes(x)) merged.push(x);
+  }
+  return out;
+}
+
+/**
+ * THE single filter path for the dependent cascade fields (Specific Settings,
+ * Conflict Scale, Protagonist Type). Given the raw payload, the frontend
+ * genre buckets (fallbacks), the currently stored subgenre text and the
+ * selected parent-genre keys, returns { conflicts, protagonists, settings }
+ * filtered EXCLUSIVELY to the selection:
+ *   1. If the stored subgenre resolves (through the merged taxonomy index) to
+ *      one of the selected genres, its OWN catalog wins (backend
+ *      subgenre_catalogs first, static SUBGENRE_DATA second).
+ *   2. Otherwise the union of the SELECTED genres' buckets is used.
+ *   3. With NO genre selected, every bucket is unioned (browse-everything).
+ * A foreign/stale subgenre can NEVER hijack another genre's lists — that was
+ * the leak path in the previous implementations.
+ */
+export function cascadeForSelection(payload, fallbacks, subgenreText, genreKeys) {
+  const fb = fallbacks || {};
+  const conflictsByGenre = normalizeBuckets(payload && payload.conflict_scales);
+  const protagsByGenre = normalizeBuckets(payload && payload.protagonist_types);
+  const settingsByGenre = normalizeBuckets(payload && payload.specific_settings);
+  // Merge backend over frontend-static (backend wins per key; static fills gaps).
+  const merge = (bk, stat) => {
+    const out = {};
+    for (const k of new Set([...Object.keys(bk), ...Object.keys(stat)])) {
+      const list = [];
+      for (const x of [...(bk[k] || []), ...(stat[k] || [])]) if (!list.includes(x)) list.push(x);
+      out[k] = list;
+    }
+    return out;
+  };
+  const C = merge(conflictsByGenre, fb.conflicts || {});
+  const P = merge(protagsByGenre, fb.protagonists || {});
+  const S = merge(settingsByGenre, fb.settings || {});
+
+  const index = buildSubgenreIndex(payload);
+  const keys = (genreKeys || []).filter((k) => k && k !== '__other__').map(normParent);
+
+  // 1) Subgenre own-catalog, honored ONLY when its canonical parent belongs
+  //    to the current selection (or nothing is selected at all).
+  const text = String(subgenreText || '').trim();
+  if (text) {
+    const parent = resolveParent(index, text);
+    if (!keys.length || (parent && keys.includes(parent))) {
+      const tok = norm(text).replace(/ /g, '_');
+      const cat = (payload && payload.subgenre_catalogs && payload.subgenre_catalogs[tok]) || null;
+      if (cat && ((cat.conflicts || []).length || (cat.protagonists || []).length || (cat.settings || []).length)) {
+        return {
+          conflicts: cat.conflicts || [],
+          protagonists: cat.protagonists || [],
+          settings: cat.settings || [],
+          source: 'subgenre',
+        };
+      }
+      const sd = (fb.subgenreData && fb.subgenreData[text]) || null;
+      if (sd && ((sd.conflicts || []).length || (sd.protagonists || []).length || (sd.settings || []).length)) {
+        return {
+          conflicts: sd.conflicts || [],
+          protagonists: sd.protagonists || [],
+          settings: sd.settings || [],
+          source: 'subgenre',
+        };
+      }
+    }
+  }
+
+  // 2/3) Union of the selected genres' buckets (all genres when none selected).
+  const use = keys.length ? keys : [...new Set([...Object.keys(C), ...Object.keys(P), ...Object.keys(S)])];
+  const uni = (map) => {
+    const out = [];
+    for (const k of use) for (const x of (map[k] || [])) if (!out.includes(x)) out.push(x);
+    return out;
+  };
+  return { conflicts: uni(C), protagonists: uni(P), settings: uni(S), source: keys.length ? 'genre' : 'all' };
+}
