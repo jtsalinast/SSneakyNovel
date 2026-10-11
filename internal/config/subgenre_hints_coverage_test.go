@@ -35,3 +35,28 @@ func TestSubgenreHintsBothLanguagesNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+// Round 28 regression guard: the frontend GENRES catalog (novelwriterGenres.js)
+// lists display labels like "High Fantasy" or "Road-trip Comedy" that reach
+// hintFor() verbatim. Every label present in subgenreLabelParents or
+// frontendOnlySubgenreParents — the backend mirror of that catalog — must have
+// a SubgenreHints entry under its exact lowercase label, otherwise the UI's
+// normalized lookups silently miss and the chip renders without description.
+func TestEveryFrontendMirrorLabelHasHint(t *testing.T) {
+	lower := make(map[string]bool, len(SubgenreHints))
+	for k := range SubgenreHints {
+		lower[strings.ToLower(k)] = true
+	}
+	check := func(label string) {
+		l := strings.ToLower(label)
+		if !lower[l] {
+			t.Errorf("frontend-mirrored subgenre %q has no SubgenreHints entry", label)
+		}
+	}
+	for label := range subgenreLabelParents {
+		check(label)
+	}
+	for label := range frontendOnlySubgenreParents {
+		check(label)
+	}
+}
