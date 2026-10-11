@@ -140,6 +140,33 @@
     dispatch('settingsChange', { value: cfg.specific_settings });
   }
 
+  // —— Modifier presets (round 23) ————————————————————————————————————————
+  // Cross-cutting subgenre modifiers from /api/novel-params -> modifier_presets
+  // ({modifier: [setting tokens]}). Stackable on top of ANY genre/subgenre
+  // selection; checking one appends its settings (deduped), unchecking removes
+  // exactly those lines again without touching custom entries. Same storage
+  // format as the legacy block's modifier section.
+  $: modifierMap = (paramsPayload && paramsPayload.modifier_presets) || {};
+  $: modifierGroups = Object.keys(modifierMap).sort((a, b) => a.localeCompare(b))
+    .map((name) => ({ name, settings: modifierMap[name] || [] }))
+    .filter((g) => g.settings.length);
+  function modifierChecked(name) {
+    const list = currentList();
+    const s = modifierMap[name] || [];
+    return s.length > 0 && s.every((x) => list.includes(x));
+  }
+  function toggleModifier(name) {
+    const s = modifierMap[name] || [];
+    if (!s.length) return;
+    const cur = currentList();
+    if (modifierChecked(name)) {
+      cfg.specific_settings = cur.filter((x) => !s.includes(x)).join('\n');
+    } else {
+      cfg.specific_settings = [...new Set([...cur, ...s])].join('\n');
+    }
+    dispatch('settingsChange', { value: cfg.specific_settings });
+  }
+
   function onSubChange(e) {
     // Multi-select: normalize the joined chip list ("Cozy Mystery, Noir").
     const chips = splitSubgenreText(String(e.detail.value || ''));
@@ -149,6 +176,75 @@
   }
   function onConflictChange(e) { cfg.conflict_scale = String(e.detail.value || '').trim(); }
   function onProtagChange(e) { cfg.protagonist_type = String(e.detail.value || '').trim(); }
+
+  // —— Free-text specific settings ————————————————————————————————————————
+  // The textarea holds ONLY the entries that are not part of the current
+  // filtered suggestion list (same semantics as the legacy block's custom box).
+  // It is re-derived whenever cfg.specific_settings changes from either block;
+  // while the user is mid-edit we don't clobber the draft.
+  let freeSettingsText = '';
+  let freeSettingsDirty = false;
+  $: if (!freeSettingsDirty) {
+    const known = new Set(settingOpts);
+    freeSettingsText = currentList().filter((x) => !known.has(x)).join('\n');
+  }
+  function applyFreeSettings() {
+    freeSettingsDirty = false;
+    const known = new Set(settingOpts);
+    const checkedNow = currentList().filter((x) => known.has(x));
+    const custom = freeSettingsText.split('\n').map((x) => x.trim()).filter(Boolean);
+    cfg.specific_settings = [...new Set([...checkedNow, ...custom])].join('\n');
+    dispatch('settingsChange', { value: cfg.specific_settings });
+  }
+
+  // —— Tone suggestions ——————————————————————————————————————————————————
+  // Free-text tone field + suggestion chips from the resolved subgenre catalog
+  // (backend `subgenre_catalogs.tones` / static SUBGENRE_DATA). Same storage
+  // format as the legacy block: comma-separated labels in cfg.tone.
+  $: toneOpts = cascade.tones || [];
+  function toneList(v) {
+    return String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
+  }
+  function toneChecked(t) { return toneList(cfg.tone).includes(t); }
+  function toggleTone(t) {
+    const cur = toneList(cfg.tone);
+    const i = cur.indexOf(t);
+    if (i >= 0) cur.splice(i, 1); else cur.push(t);
+    cfg.tone = cur.join(', ');
+  }
+
+  // —— Story length combobox (round 23) ————————————————————————————————
+  // Options come from the backend payload (`length_keys`) with a static
+  // fallback; picking a length applies its words-per-chapter preset
+  // (`target_words_by_length`), same behaviour as the legacy field.
+  const STATIC_LENGTH_KEYS = ['flash', 'short', 'novelette', 'novella', 'light_novel', 'anthology', 'novel', 'epic'];
+  const STATIC_TARGET_WORDS = { flash: 1000, short: 2000, novelette: 2500, novella: 2500, light_novel: 3500, anthology: 4000, novel: 4000, epic: 5000 };
+  $: lengthOpts = (() => {
+    const vals = (paramsPayload && Array.isArray(paramsPayload.length_keys) && paramsPayload.length_keys.length)
+      ? paramsPayload.length_keys : STATIC_LENGTH_KEYS;
+    return vals.map((k) => ({ value: k, label: String(k).replaceAll('_', ' '), desc: '' }));
+  })();
+  function onLengthChange(e) {
+    const v = String(e.detail.value || '').trim();
+    cfg.story_length = v;
+    const tw = (paramsPayload && paramsPayload.target_words_by_length) || STATIC_TARGET_WORDS;
+    if (tw[v]) cfg.target_words_per_chapter = tw[v];
+    dispatch('lengthChange', { value: v });
+  }
+
+  // —— Narrative structure combobox (round 23) ——————————————————————————
+  // Single-select over the backend `all_structure_keys` payload (static
+  // fallback), storing the same plain key as the legacy field (e.g. "three_act").
+  const STATIC_STRUCTURE_KEYS = ['three_act', 'six_act', 'fichtean', 'freytag', 'seven_point', 'heros_journey', 'heros_journey_simple', 'save_the_cat', 'story_circle', 'kishotenketsu', 'snowflake', 'quest', 'romance_arc', 'episodic'];
+  $: structureOpts = (() => {
+    const vals = (paramsPayload && Array.isArray(paramsPayload.all_structure_keys) && paramsPayload.all_structure_keys.length)
+      ? paramsPayload.all_structure_keys : STATIC_STRUCTURE_KEYS;
+    return vals.map((k) => ({ value: k, label: String(k).replaceAll('_', ' '), desc: '' }));
+  })();
+  function onStructureChange(e) {
+    cfg.structure = String(e.detail.value || '').trim();
+    dispatch('structureChange', { value: cfg.structure });
+  }
 </script>
 
 <div class="rounded-md border border-primary/35 bg-base-100/40 p-3 space-y-3">
@@ -250,5 +346,79 @@
     {:else}
       <p class="text-xs text-base-content/45">{labels.pickGenre || 'Pick a genre to populate these checkboxes.'}</p>
     {/if}
+    {#if modifierGroups.length}
+      <details class="mt-1.5" open>
+        <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
+        <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+          {#each modifierGroups as grp}
+            <label class="flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+              <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
+              {grp.name}
+            </label>
+          {/each}
+        </div>
+      </details>
+    {/if}
+  </div>
+
+  <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
+       storage field as the checkboxes so both stay in sync. -->
+  <textarea
+    class="textarea textarea-sm w-full h-12 text-xs font-mono"
+    bind:value={freeSettingsText}
+    on:blur={applyFreeSettings}
+    on:input={() => { freeSettingsDirty = true; }}
+    placeholder={labels.settingsPlaceholder || 'custom_setting_per_line'}
+    disabled={disabled}
+  ></textarea>
+
+  <!-- Tone: free text + per-subgenre suggestion chips (from the resolved
+       catalog). Same comma-separated storage as the legacy field. -->
+  <div>
+    <span class="text-xs text-base-content/65 mb-0.5 block">{labels.tone || 'Tone'}</span>
+    <input type="text" class="input input-sm w-full mb-1" bind:value={cfg.tone} placeholder={labels.tonePlaceholder || ''} disabled={disabled} />
+    {#if toneOpts.length}
+      <div class="flex flex-wrap gap-x-3 gap-y-1">
+        {#each toneOpts as t}
+          <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={disabled} />
+            {t}
+          </label>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <!-- Length & structure: same comboboxes as the legacy fields, populated from
+       the backend payload. Picking a length applies its word-per-chapter
+       preset and a default structure when the current one is empty/auto. -->
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 block">{labels.length || 'Story length'}</span>
+      <ComboSelect
+        options={lengthOpts}
+        allowOther={false}
+        placeholder={labels.lengthNone || '—'}
+        emptyLabel={labels.lengthNone || '—'}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        bind:value={cfg.story_length}
+        on:change={onLengthChange}
+      />
+    </div>
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 block">{labels.structure || 'Narrative structure'}</span>
+      <ComboSelect
+        options={structureOpts}
+        allowOther={true}
+        otherLabel={otherLabel}
+        placeholder={labels.structurePlaceholder || ''}
+        emptyLabel={emptyLabel}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        bind:value={cfg.structure}
+        on:change={onStructureChange}
+      />
+    </div>
   </div>
 </div>

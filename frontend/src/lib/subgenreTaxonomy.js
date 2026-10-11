@@ -271,6 +271,7 @@ export function cascadeForSelection(payload, fallbacks, subgenreText, genreKeys)
           conflicts: cat.conflicts || [],
           protagonists: cat.protagonists || [],
           settings: cat.settings || [],
+          tones: cat.tones || [],
           source: 'subgenre',
         };
       }
@@ -280,6 +281,7 @@ export function cascadeForSelection(payload, fallbacks, subgenreText, genreKeys)
           conflicts: sd.conflicts || [],
           protagonists: sd.protagonists || [],
           settings: sd.settings || [],
+          tones: sd.tones || [],
           source: 'subgenre',
         };
       }
@@ -293,5 +295,5 @@ export function cascadeForSelection(payload, fallbacks, subgenreText, genreKeys)
     for (const k of use) for (const x of (map[k] || [])) if (!out.includes(x)) out.push(x);
     return out;
   };
-  return { conflicts: uni(C), protagonists: uni(P), settings: uni(S), source: keys.length ? 'genre' : 'all' };
+  return { conflicts: uni(C), protagonists: uni(P), settings: uni(S), tones: [], source: keys.length ? 'genre' : 'all' };
 }

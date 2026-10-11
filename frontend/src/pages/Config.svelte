@@ -1978,12 +1978,18 @@ function randomizeStoryParams() {
           </div>
         {/if}
         <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
+          <!-- ===== Round 23: legacy genre/subgenre comboboxes REMOVED from
+               the Story form. Genre / Subgenre (and the whole filtered cascade:
+               Specific Settings, Conflict Scale, Protagonist Type, Tone,
+               Length, Structure) now live ONLY in the GenreCascadeFields block
+               below, which is connected directly to localStoryCfg and saves
+               through the same PUT /api/config. The old markup is preserved as
+               comments for reference; the underlying reactive state
+               (selectedGenreKeys etc.) still syncs from cfg.type via
+               initGenreCascade() so randomize/info-box keep working. -->
+          <!-- LEGACY GENRE FIELD (round 23 — replaced by GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.type')}<InfoTip text={fieldTip('genre')} label={$t('config.story.type')} /></span>
-            <!-- Round 16: searchable combobox with rich items (bold label +
-                 short description). Multi-select chips: several parent genres
-                 can be picked; the Subgenre list is their union. Free-typed
-                 text that matches no option is kept as an "Other" value. -->
             <ComboSelect
               options={genreComboOptsFull}
               multiple={true}
@@ -1998,19 +2004,10 @@ function randomizeStoryParams() {
               on:change={onGenreComboChange}
             />
           </div>
+          -->
+          <!-- LEGACY SUBGENRE FIELD (round 23 — replaced by GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.subgenre')}<InfoTip text={fieldTip('subgenre')} label={$t('config.story.subgenre')} /></span>
-            <!-- Combobox over the UNION of the selected genres' subgenres (+
-                 backend presets). Typing filters the list; any unmatched text
-                 becomes the custom ("Other") subgenre in place — no separate
-                 free-text box needed anymore. -->
-            <!-- Round 19 (final): the Subgenre field renders through
-                 GenreSubgenrePicker — the new from-scratch component that
-                 filters EXCLUSIVELY via lib/subgenreTaxonomy.js. It receives
-                 the raw /api/novel-params payload plus the selected genre keys,
-                 builds its own merged single-parent index and lists a subgenre
-                 ONLY under its canonical parent. The legacy ComboSelect block
-                 is kept below, commented out, for reference. -->
             <GenreSubgenrePicker
               paramsPayload={novelParamsPayload}
               genreKeys={selectedGenreKeys}
@@ -2024,21 +2021,8 @@ function randomizeStoryParams() {
               bind:value={localStoryCfg.subgenre}
               on:change={onSubgenrePickerChange}
             />
-            <!--
-            <ComboSelect
-              options={subgenreComboOpts}
-              allowOther={true}
-              otherLabel={$t('config.story.other')}
-              placeholder={$t('config.story.subgenre.placeholder')}
-              emptyLabel={$t('config.story.auto')}
-              clearLabel={$t('config.story.clear')}
-              disabled={$taskRunning}
-              title={subgenreHint(localStoryCfg.subgenre) || $t('config.tip.subgenre')}
-              bind:value={localStoryCfg.subgenre}
-              on:change={onSubgenreComboChange}
-            />
-            -->
           </div>
+          -->
           <!-- Info box (round 11): brief explanation of the selected genre and
                subgenre, right below the two selectors. Subgenre hints come
                from the backend (/api/novel-params -> subgenre_hints); genre
@@ -2057,6 +2041,8 @@ function randomizeStoryParams() {
               <span class="opacity-60">{$t('config.story.infoBox.empty')}</span>
             {/if}
           </div>
+          <!-- LEGACY SPECIFIC-SETTINGS SECTION (round 23 — replaced by the
+               filtered checkboxes/modifiers/custom box inside GenreCascadeFields):
           <div class="col-span-2">
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.specificSettings')}</span>
             {#if settingSuggestions.length}
@@ -2071,8 +2057,6 @@ function randomizeStoryParams() {
             {:else}
               <p class="text-xs text-base-content/45 mb-1">{$t('config.settings.pickGenre')}</p>
             {/if}
-            <!-- Cross-cutting subgenre modifiers (round 7): stackable on top of ANY
-                 genre/subgenre combination — Isekai, Wuxia, Cozy, Cyberpunk... -->
             {#if modifierGroups().length}
               <details class="mt-1.5" open>
                 <summary class="text-xs text-base-content/65 cursor-pointer select-none">{$t('config.story.modifiers')}</summary>
@@ -2087,6 +2071,55 @@ function randomizeStoryParams() {
               </details>
             {/if}
             <textarea class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
+          </div>
+          -->
+          <div class="col-span-2 rounded-md border border-primary/35 bg-base-100/40 p-3">
+            <div class="text-xs font-semibold uppercase tracking-wide text-primary/80 mb-2">{$t('config.story.genreFilteredSection')}</div>
+            <GenreCascadeFields
+              paramsPayload={novelParamsPayload}
+              genreKeys={selectedGenreKeys}
+              bind:cfg={localStoryCfg}
+              disabled={$taskRunning}
+              otherLabel={$t('config.story.other')}
+              placeholderGenre={$t('config.story.type.placeholder')}
+              placeholderSub={$t('config.story.subgenre.placeholder')}
+              placeholderConflict={$t('config.story.conflict.placeholder')}
+              placeholderProtag={$t('config.story.protagonist.placeholder')}
+              emptyLabel={$t('config.story.auto')}
+              clearLabel={$t('config.story.clear')}
+              hints={SUBGENRE_HINTS}
+              labels={{
+                sectionTitle: $t('config.story.genreFilteredSection'),
+                genre: $t('config.story.type'),
+                subgenre: $t('config.story.subgenre'),
+                conflict: $t('config.story.conflict'),
+                protagonist: $t('config.story.protagonist'),
+                settings: $t('config.story.specificSettings'),
+                settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
+                modifiers: $t('config.story.modifiers'),
+                pickGenre: $t('config.settings.pickGenre'),
+                tone: $t('config.story.tone'),
+                tonePlaceholder: $t('config.story.tone.placeholder'),
+                length: $t('config.story.length'),
+                lengthNone: $t('config.story.length.none'),
+                structure: $t('config.story.structure'),
+                structurePlaceholder: $t('config.story.structure.placeholder'),
+                fromSubgenre: $t('config.story.fromSubgenre'),
+                fromGenres: $t('config.story.fromGenres'),
+              }}
+              on:genreChange={(e) => {
+                // Keep the derived legacy state in sync when the NEW block
+                // changes the genre selection (cfg.type is already written by
+                // the component; this only refreshes selectedGenreKeys so the
+                // info box / randomize stay coherent).
+                const keys = (e.detail.keys || []).filter(Boolean);
+                selectedGenreKeys = keys.length ? keys : [];
+                lastGenreText = localStoryCfg.type;
+                initGenreCascade();
+              }}
+              on:subChange={onSubgenrePickerChange}
+              on:settingsChange={() => refreshCheckedSettings()}
+            />
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.titleField')}</span>
@@ -2104,6 +2137,8 @@ function randomizeStoryParams() {
               <option value="es">ES — {$t('config.story.language.es')}</option>
             </select>
           </div>
+          <!-- LEGACY TONE FIELD (round 23 — replaced by the tone input + chips
+               inside GenreCascadeFields):
           <div class="col-span-2">
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.tone')}</span>
             <input type="text" class="input input-sm w-full mb-1" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
@@ -2118,10 +2153,12 @@ function randomizeStoryParams() {
               </div>
             {/if}
           </div>
+          -->
+          <!-- LEGACY LENGTH / STRUCTURE / CONFLICT / PROTAGONIST COMBOBOXES
+               (round 23 — replaced by the filtered comboboxes inside
+               GenreCascadeFields; target-words stays editable below):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.length')}<InfoTip text={fieldTip('length')} label={$t('config.story.length')} /></span>
-            <!-- Searchable combobox (round 16): typing filters the short list;
-                 picking a length still applies its words-per-chapter preset. -->
             <ComboSelect
               options={lengthComboOpts}
               allowOther={false}
@@ -2136,8 +2173,6 @@ function randomizeStoryParams() {
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.structure')}<InfoTip text={fieldTip('structure')} label={$t('config.story.structure')} /></span>
-            <!-- Single-select combobox: exactly one narrative template can be
-                 active; each item shows its beat description as secondary line. -->
             <ComboSelect
               options={structureComboOpts}
               allowOther={true}
@@ -2151,10 +2186,12 @@ function randomizeStoryParams() {
               on:change={onStructureComboChange}
             />
           </div>
+          -->
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.targetWords')}</span>
             <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} disabled={$taskRunning} />
           </div>
+          <!-- LEGACY CONFLICT / PROTAGONIST (round 23 — now inside GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.conflict')}<InfoTip text={fieldTip('conflict')} label={$t('config.story.conflict')} /></span>
             <ComboSelect
@@ -2185,6 +2222,7 @@ function randomizeStoryParams() {
               on:change={onProtagonistComboChange}
             />
           </div>
+          -->
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.targetAudience')}</span>
             <select class="select select-sm w-full" bind:value={localStoryCfg.target_audience} disabled={$taskRunning} title={$t('config.tip.targetAudience')}>
@@ -2244,47 +2282,14 @@ function randomizeStoryParams() {
           {$t('config.story.locationsEnabled')}
         </label>
 
-        <!-- ===== Round 21: NEW genre-filtered cascade block (from scratch) =====
-             Rendered BELOW all legacy fields — nothing above was removed or
-             rewired. It binds to the SAME localStoryCfg object and filters
-             Subgenre / Specific Settings / Conflict Scale / Protagonist Type
-             exclusively through lib/subgenreTaxonomy.js against the FULL
-             unfiltered /api/novel-params payload. Use THIS block; whichever
-             field you edit last wins on save (same storage format). -->
-        <GenreCascadeFields
-          paramsPayload={novelParamsPayload}
-          genreKeys={selectedGenreKeys}
-          bind:cfg={localStoryCfg}
-          disabled={$taskRunning}
-          otherLabel={$t('config.story.other')}
-          placeholderGenre={$t('config.story.type.placeholder')}
-          placeholderSub={$t('config.story.subgenre.placeholder')}
-          placeholderConflict={$t('config.story.conflict.placeholder')}
-          placeholderProtag={$t('config.story.protagonist.placeholder')}
-          emptyLabel={$t('config.story.auto')}
-          clearLabel={$t('config.story.clear')}
-          hints={SUBGENRE_HINTS}
-          labels={{
-            sectionTitle: $t('config.story.genreFilteredSection'),
-            genre: $t('config.story.type'),
-            subgenre: $t('config.story.subgenre'),
-            conflict: $t('config.story.conflict'),
-            protagonist: $t('config.story.protagonist'),
-            settings: $t('config.story.specificSettings'),
-            pickGenre: $t('config.settings.pickGenre'),
-          }}
-          on:genreChange={(e) => {
-            // Keep the legacy block's derived keys in sync when the NEW block
-            // changes the genre selection (cfg.type is already written by the
-            // component; this only refreshes selectedGenreKeys).
-            const keys = (e.detail.keys || []).filter(Boolean);
-            selectedGenreKeys = keys.length ? keys : [];
-            lastGenreText = localStoryCfg.type;
-            initGenreCascade();
-          }}
-          on:subChange={onSubgenrePickerChange}
-          on:settingsChange={() => refreshCheckedSettings()}
-        />
+        <!-- ===== Round 23: the standalone duplicate of the cascade block is
+             REMOVED. The single GenreCascadeFields instance now lives inside
+             the Story grid (right after the info box) and owns Genre, Subgenre,
+             Specific Settings (+ modifiers + custom), Tone, Length, Structure,
+             Conflict Scale and Protagonist Type — all filtered through
+             lib/subgenreTaxonomy.js against the FULL unfiltered payload.
+             Legacy markup preserved as comments above; save path unchanged
+             (same localStoryCfg -> PUT /api/config). -->
 
         <div class="flex justify-end">
           <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
