@@ -332,6 +332,22 @@
     return opts;
   })();
 
+  // Round 28 fix: the "Other" search editor of the Subgenre combo must ALWAYS
+  // offer the complete subgenre catalog, unfiltered by the selected Genre(s).
+  // subgenresForKeys with no keys returns the full union (browse-everything
+  // mode), so we reuse it with an empty key list here. The normal dropdown
+  // keeps showing only the genre-filtered options (subOpts).
+  $: allSubLabels = subgenresForKeys(index, []);
+  $: otherSubOpts = (() => {
+    const opts = allSubLabels.map((s) => ({ value: s, label: s, desc: hintFor(s) }));
+    for (const cur of splitSubgenreText(cfg.subgenre)) {
+      if (!opts.some((o) => o.value.toLowerCase() === cur.toLowerCase())) {
+        opts.push({ value: cur, label: cur, desc: hintFor(cur) });
+      }
+    }
+    return opts;
+  })();
+
   // —— Dependent cascade fields (Specific Settings / Conflict / Protagonist) —
   // Passes the FULL multi-select text: cascadeForSelection resolves each chip
   // and unions their own catalogs when every chip belongs to the selection.
@@ -508,6 +524,7 @@
       </span>
       <ComboSelect
         options={subOpts}
+        otherSearchOptions={otherSubOpts}
         multiple={true}
         allowOther={true}
         otherLabel={otherLabel}

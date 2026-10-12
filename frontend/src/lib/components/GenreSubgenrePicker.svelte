@@ -59,6 +59,22 @@
     return opts;
   })();
 
+  // Round 28 fix: the "Other" search editor must always show the FULL subgenre
+  // catalog, unfiltered by the selected genre(s). subgenresForKeys with an
+  // empty key list returns that full union (browse-everything mode).
+  $: allOtherOpts = (() => {
+    const opts = subgenresForKeys(index, []).map((s) => ({
+      value: s,
+      label: s,
+      desc: hints[norm(s)] || hints[s.toLowerCase()] || '',
+    }));
+    const cur = String(value || '').trim();
+    if (cur && !opts.some((o) => o.value.toLowerCase() === cur.toLowerCase())) {
+      opts.push({ value: cur, label: cur, desc: hints[norm(cur)] || '' });
+    }
+    return opts;
+  })();
+
   function onChange(e) {
     const v = String(e.detail.value || '').trim();
     value = v;
@@ -68,6 +84,7 @@
 
 <ComboSelect
   options={comboOpts}
+  otherSearchOptions={allOtherOpts}
   allowOther={true}
   otherLabel={otherLabel}
   placeholder={placeholder}
