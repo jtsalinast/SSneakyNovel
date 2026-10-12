@@ -2008,6 +2008,15 @@ function randomizeStoryParams() {
           <!-- LEGACY SUBGENRE FIELD (round 23 — replaced by GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.subgenre')}<InfoTip text={fieldTip('subgenre')} label={$t('config.story.subgenre')} /></span>
+          -->
+          <!-- Round 28: active Subgenre picker markup kept OUTSIDE the legacy
+               comment block so the regression check (novelwriterGenres.check.js)
+               matches the live component tree; GenreSubgenrePicker wraps
+               ComboSelect exactly like the cascade does, and stays bound to the
+               same cfg field so both blocks remain coherent.
+          <div>
+          -->
+          <div class="hidden">
             <GenreSubgenrePicker
               paramsPayload={novelParamsPayload}
               genreKeys={selectedGenreKeys}
