@@ -372,23 +372,44 @@
     });
   }
 
-  let lastInsideMousedown = 0;
-  function onRootMousedown(e) {
-    // Remember that a press started inside this combo. Used by the window
-    // click handler below: when a dropdown row is pressed, Svelte may remove
-    // the list from the DOM before the matching `click` fires, making the
-    // event target an outside ancestor — without this guard that click would
-    // look like an outside click and instantly close whatever we just opened
-    // (e.g. the "Other" search editor).
-    if (root && root.contains(e.target)) lastInsideMousedown = Date.now();
+  // Outside-click state. We listen to BOTH mousedown and click on the window:
+  //  • mousedown gives instant feedback (close as soon as the press starts
+  //    outside) and records where the press began;
+  //  • click is a fallback for the case where the dropdown was removed from
+  //    the DOM during the press (e.g. picking a single-select row on
+  //    mousedown): the resulting `click` event then targets an outside
+  //    ancestor, but since the press BEGAN inside our root we must not treat
+  //    it as an outside click — otherwise opening the "Other" editor from a
+  //    row would be instantly cancelled by that trailing click.
+  let pressStartedInside = false;
+  function inSelf(t) {
+    return !!(t instanceof Element && t.closest('.combo-root') === root);
+  }
+  function onDocMouseDown(e) {
+    const t = e.target;
+    if (!(t instanceof Element)) { pressStartedInside = false; return; }
+    if (inSelf(t)) {
+      // Press began inside this combo: never close on its follow-up click.
+      pressStartedInside = true;
+      return;
+    }
+    pressStartedInside = false;
+    // Press started outside → close whatever is open right away. Clicks on
+    // other combos' roots are "outside" for us, so opening another field
+    // still closes this one's dropdown/editor.
+    if (editOpen) cancelEdit();
+    else if (openMenu) close();
   }
   function onDocClick(e) {
-    // Outside-click handling: a click anywhere outside this combo's root
-    // closes whatever is open — the "Other" search editor (acts like ✕,
-    // without saving) or the normal dropdown.
-    if (root && root.contains(e.target)) return;
-    // Ignore synthetic "outside" clicks whose press actually began inside us.
-    if (Date.now() - lastInsideMousedown < 400) return;
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    if (inSelf(t)) return; // real inside click → ignore
+    if (pressStartedInside) {
+      // Trailing click of a press that began inside us (target detached from
+      // DOM) → not an outside click.
+      pressStartedInside = false;
+      return;
+    }
     if (editOpen) cancelEdit();
     else if (openMenu) close();
   }
@@ -396,9 +417,9 @@
 
 </script>
 
-<svelte:window onclick={onDocClick} />
+<svelte:window on:mousedown={onDocMouseDown} on:click={onDocClick} />
 
-<div bind:this={root} class="combo-root relative w-full" {title} on:mousedown={onRootMousedown}>
+<div bind:this={root} class="combo-root relative w-full" {title}>
   <div class="flex items-stretch gap-1">
     <div class="relative flex-1 min-w-0">
       {#if multiple && selected.length}

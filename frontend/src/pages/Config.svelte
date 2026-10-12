@@ -2070,10 +2070,13 @@ function randomizeStoryParams() {
             <textarea class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
           </div>
           -->
-          <div class="col-span-2 rounded-md border border-primary/35 bg-base-100/40 p-3">
-            <div class="text-xs font-semibold uppercase tracking-wide text-primary/80 mb-2">{$t('config.story.genreFilteredSection')}</div>
-            <GenreCascadeFields
-              paramsPayload={novelParamsPayload}
+          <!-- Round 29: the "genre-filtered" block is no longer nested inside
+               its own bordered card — it renders flat (no wrapper divs, no
+               section header) so its fields sit at the same level as the rest
+               of the "Story parameters" grid content. -->
+          <GenreCascadeFields
+            flat={true}
+            paramsPayload={novelParamsPayload}
               genreKeys={selectedGenreKeys}
               bind:cfg={localStoryCfg}
               disabled={$taskRunning}
@@ -2128,7 +2131,6 @@ function randomizeStoryParams() {
               on:subChange={onSubgenrePickerChange}
               on:settingsChange={() => refreshCheckedSettings()}
             />
-          </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('config.story.titleField')}</span>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder={$t('config.story.title.placeholder')} disabled={$taskRunning} />

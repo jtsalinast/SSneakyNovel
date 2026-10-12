@@ -45,6 +45,11 @@
   export let labels = {};            // localized field labels from i18n
   export let hints = {};             // token -> localized subgenre hint
   export let tips = {};              // ⓘ tooltip texts (config.tip.*) for the side icons
+  // Round 29: flat mode — when true, the component renders ONLY its inner
+  // fields (no wrapper card/border/background and no section-title header),
+  // so the parent can place them at the same level as the rest of the
+  // "Story parameters" content instead of nested inside two extra divs.
+  export let flat = false;
 
   // —— Rich item lists (round 24) ——————————————————————————————————————
   // Secondary description lines exactly like the legacy comboboxes had:
@@ -493,6 +498,187 @@
   }
 </script>
 
+{#if flat}
+  <!-- Round 29: flat mode — the fields render directly as siblings of the
+       parent's grid items (no nested wrapper divs, no card border/bg, no
+       section-title header). -->
+  <div class="col-span-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.genre || 'Genre'}
+      </span>
+      <ComboSelect
+        options={genreOpts}
+        multiple={true}
+        allowOther={true}
+        otherLabel={otherLabel}
+        placeholder={placeholderGenre}
+        emptyLabel={emptyLabel}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.genre}
+        ariaLabel={labels.genre || 'Genre'}
+        bind:value={cfg.type}
+        on:change={onGenreChange}
+      />
+    </div>
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.subgenre || 'Subgenre'}
+      </span>
+      <ComboSelect
+        options={subOpts}
+        otherSearchOptions={otherSubOpts}
+        multiple={true}
+        allowOther={true}
+        otherLabel={otherLabel}
+        placeholder={placeholderSub}
+        emptyLabel={emptyLabel}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.subgenre}
+        ariaLabel={labels.subgenre || 'Subgenre'}
+        bind:value={cfg.subgenre}
+        on:change={onSubChange}
+      />
+    </div>
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.conflict || 'Conflict scale'}
+        <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</span>
+      </span>
+      <ComboSelect
+        options={conflictOpts}
+        allowOther={true}
+        otherLabel={otherLabel}
+        placeholder={placeholderConflict}
+        emptyLabel={emptyLabel}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.conflict}
+        ariaLabel={labels.conflict || 'Conflict scale'}
+        bind:value={cfg.conflict_scale}
+        on:change={onConflictChange}
+      />
+    </div>
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.protagonist || 'Protagonist type'}
+        <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</span>
+      </span>
+      <ComboSelect
+        options={protagOpts}
+        allowOther={true}
+        otherLabel={otherLabel}
+        placeholder={placeholderProtag}
+        emptyLabel={emptyLabel}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.protagonist}
+        ariaLabel={labels.protagonist || 'Protagonist type'}
+        bind:value={cfg.protagonist_type}
+        on:change={onProtagChange}
+      />
+    </div>
+
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.settings || 'Specific settings'}
+        <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
+        {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
+      </span>
+      {#if showSettingShortcuts}
+        <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+          {#each settingOpts as s}
+            <label class="flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
+              <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
+              {s.replaceAll('_', ' ')}
+            </label>
+          {/each}
+        </div>
+      {:else}
+        <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
+      {/if}
+      {#if hasSubgenre && modifierGroups.length}
+        <details class="mt-1.5" open>
+          <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
+          <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+            {#each modifierGroups as grp}
+              <label class="flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+                <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
+                {grp.name}
+              </label>
+            {/each}
+          </div>
+        </details>
+      {/if}
+      <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
+           storage field as the checkboxes so both stay in sync. -->
+      <textarea
+        class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1"
+        bind:value={freeSettingsText}
+        on:blur={applyFreeSettings}
+        on:input={() => { freeSettingsDirty = true; }}
+        placeholder={labels.settingsPlaceholder || 'custom_setting_per_line'}
+        disabled={disabled}
+      ></textarea>
+    </div>
+
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.tone || 'Tone'}
+        <InfoTip text={tips.tone} label={labels.tone || 'Tone'} />
+      </span>
+      <input type="text" class="input input-sm w-full mb-1" bind:value={cfg.tone} placeholder={labels.tonePlaceholder || ''} disabled={disabled} />
+      {#if toneOpts.length}
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          {#each toneOpts as t}
+            <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={disabled} />
+              {t}
+            </label>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.length || 'Story length'}
+      </span>
+      <ComboSelect
+        options={lengthOpts}
+        allowOther={false}
+        placeholder={labels.lengthNone || '—'}
+        emptyLabel={labels.lengthNone || '—'}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.length}
+        ariaLabel={labels.length || 'Story length'}
+        bind:value={cfg.story_length}
+        on:change={onLengthChange}
+      />
+    </div>
+    <div>
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.structure || 'Narrative structure'}
+      </span>
+      <ComboSelect
+        options={structureOpts}
+        allowOther={true}
+        otherLabel={otherLabel}
+        placeholder={labels.structurePlaceholder || ''}
+        emptyLabel={emptyLabel}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.structure}
+        ariaLabel={labels.structure || 'Narrative structure'}
+        bind:value={cfg.structure}
+        on:change={onStructureChange}
+      />
+    </div>
+  </div>
+{:else}
 <div class="rounded-md border border-primary/35 bg-base-100/40 p-3 space-y-3">
   <div class="text-xs font-semibold uppercase tracking-wide text-primary/80">
     {labels.sectionTitle || 'Genre-filtered parameters (new)'}
@@ -686,3 +872,4 @@
     </div>
   </div>
 </div>
+{/if}
