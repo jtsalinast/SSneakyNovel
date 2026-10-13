@@ -18,15 +18,16 @@
   // It writes into the SAME story-config object as the legacy fields via
   // `bind:cfg`, so saving behaves identically whichever block the user edits.
   import ComboSelect from './ComboSelect.svelte';
+  import SmartCombobox from './SmartCombobox.svelte';
   import InfoTip from './InfoTip.svelte';
   import { createEventDispatcher } from 'svelte';
   import { get } from 'svelte/store';
   import { uiLocale, translate } from '../i18n/index.js';
   import { CONFLICT_TERMS_EN, PROTAGONIST_TERMS_EN } from '../termDescriptions.js';
-  import { GENRES, SUBGENRE_DATA } from '../novelwriterGenres.js';
+  import { GENRES, SUBGENRE_DATA, genreBucketKeys } from '../novelwriterGenres.js';
   import {
     buildSubgenreIndex, subgenresForKeys, resolveParent, norm, cascadeForSelection,
-    splitSubgenreText, subgenreBelongsToAny,
+    splitSubgenreText, subgenreBelongsToAny, normalizeBuckets,
   } from '../subgenreTaxonomy.js';
 
   const dispatch = createEventDispatcher();
@@ -424,6 +425,308 @@
   function onConflictChange(e) { cfg.conflict_scale = String(e.detail.value || '').trim(); }
   function onProtagChange(e) { cfg.protagonist_type = String(e.detail.value || '').trim(); }
 
+  // —— SmartCombobox demo block (mock data, below Genre/Subgenre) ————————
+  // Advanced multi-select combobox adapted from the user's Alpine prototype.
+  // Its groups are derived from the SAME cascade the real fields use: one
+  // group per selected genre containing its filtered subgenres (with the
+  // backend/static hints as descriptions), plus a "Parámetros sugeridos"
+  // group with the conflict/protagonist options of the current selection.
+  // The component itself also ships the prototype's technology mock catalog
+  // (used automatically when no `groups` prop is passed).
+  $: smartGroups = (() => {
+    const gs = [];
+    for (const k of effectiveKeys) {
+      const g = GENRES.find((x) => x.key === k);
+      if (!g) continue;
+      const subs = subgenresForKeys(index, [k]);
+      if (!subs.length) continue;
+      gs.push({
+        label: g.label,
+        items: subs.map((s) => ({ id: s, label: s, description: hintFor(s) || genreBlurb(g.key) })),
+      });
+    }
+    const sugg = [
+      ...conflictOpts.map((c) => ({ id: 'c:' + c.value, label: c.label, description: c.desc })),
+      ...protagOpts.map((p) => ({ id: 'p:' + p.value, label: p.label, description: p.desc })),
+    ];
+    if (sugg.length) gs.push({ label: 'Parámetros sugeridos', items: sugg });
+    return gs;
+  })();
+  let smartValue = '';
+  // Bound value of the Protagonist-type PoC combobox. Initialized empty; the
+  // component's own `groups` rebuild re-emits its selection, so we seed it
+  // here from the stored cfg.protagonist_type when available (see the
+  // $: block below — first non-empty sync wins, afterwards the user rules).
+  let protagSmartValue = '';
+  let protagSmartSeeded = false;
+
+  // —— SmartCombobox #2 — "Protagonist type" proof of concept ————————————
+  // Same component, now fed with REAL protagonist data through the same
+  // single-parent taxonomy the rest of the cascade uses. Three buckets, in
+  // this order:
+  //  * Suggested — protagonists tied to the selected SUBGENRE(s) (their own
+  //    catalogs: backend subgenre_catalogs first, static SUBGENRE_DATA second).
+  //  * Related   — everything else belonging to the selected GENRE(s) (union of
+  //    the genre-level protagonist_types buckets), minus what Suggested shows.
+  //  * Other     — every remaining protagonist available in the full catalog,
+  //    regardless of genre/subgenre (backend payload buckets + every static
+  //    SUBGENRE_DATA entry + the genres' own union), minus the two above.
+  // The component runs in `single` mode (radio): cfg.protagonist_type stores
+  // exactly one value, so picking an option replaces the selection and closes
+  // the dropdown. This block is a PoC only — it does NOT replace the existing
+  // Protagonist-type ComboSelect anywhere.
+  $: protagChips = splitSubgenreText(cfg.subgenre);
+  $: suggestedProtagonists = (() => {
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (s && !out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const chip of protagChips) {
+      const parent = resolveParent(index, chip);
+      if (parent && !effectiveKeys.includes(parent)) continue; // stale chip from another genre
+      const tok = norm(chip).replace(/ /g, '_');
+      const cat = (paramsPayload && paramsPayload.subgenre_catalogs && paramsPayload.subgenre_catalogs[tok]) || null;
+      for (const p of (cat && cat.protagonists) || []) push(p);
+      const sd = SUBGENRE_DATA[chip] || null;
+      for (const p of (sd && sd.protagonists) || []) push(p);
+    }
+    return out;
+  })();
+  $: relatedProtagonists = (() => {
+    const bk = normalizeBuckets(paramsPayload && paramsPayload.protagonist_types);
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (!s) return;
+      if (suggestedProtagonists.some((o) => o.toLowerCase() === s.toLowerCase())) return;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const k of effectiveKeys) {
+      if (!k || k === '__other__') continue;
+      for (const bkKey of genreBucketKeys(k)) for (const p of bk[bkKey] || []) push(p);
+      const g = GENRES.find((x) => x.key === k);
+      if (g) for (const s of g.subgenres) for (const p of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].protagonists) || []) push(p);
+    }
+    return out;
+  })();
+  $: otherProtagonists = (() => {
+    const taken = new Set([...suggestedProtagonists, ...relatedProtagonists].map((x) => x.toLowerCase()));
+    const pools = [];
+    const bk = paramsPayload && paramsPayload.protagonist_types;
+    if (bk && typeof bk === 'object') for (const v of Object.values(bk)) if (Array.isArray(v)) pools.push(v);
+    const poolStatic = [];
+    for (const sd of Object.values(SUBGENRE_DATA)) for (const p of (sd && sd.protagonists) || []) poolStatic.push(p);
+    for (const g of GENRES) for (const s of g.subgenres) for (const p of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].protagonists) || []) poolStatic.push(p);
+    const out = [];
+    for (const x of [...pools.flat(), ...poolStatic]) {
+      const s = String(x || '').trim();
+      if (!s || taken.has(s.toLowerCase())) continue;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    }
+    return out;
+  })();
+  const protagItem = (p) => ({
+    id: 'pt:' + p,
+    label: p,
+    description: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey, PROTAGONIST_TERMS),
+  });
+  $: smartProtagGroups = (() => {
+    const gs = [];
+    if (suggestedProtagonists.length) gs.push({ label: 'Sugeridos', items: suggestedProtagonists.map(protagItem) });
+    if (relatedProtagonists.length) gs.push({ label: 'Relacionados', items: relatedProtagonists.map(protagItem) });
+    if (otherProtagonists.length) gs.push({ label: 'Otros', items: otherProtagonists.map(protagItem) });
+    return gs;
+  })();
+  function onSmartProtagChange(e) {
+    // PoC: mirror the choice into the SAME storage field the real combo uses,
+    // so both stay in sync without touching anything outside this component.
+    cfg.protagonist_type = String(e.detail.value || '').trim();
+  }
+  // One-shot seed: show the already-stored protagonist (if any) as the active
+  // radio option the first time the catalog is available. After that the user
+  // owns the widget — external edits to cfg.protagonist_type (e.g. the legacy
+  // ComboSelect) intentionally do NOT re-sync this demo block.
+  $: if (!protagSmartSeeded && !protagSmartValue && cfg.protagonist_type) {
+    const exists = smartProtagGroups.some((g) => g.items.some((it) => it.label === cfg.protagonist_type));
+    if (exists) {
+      protagSmartValue = cfg.protagonist_type;
+      protagSmartSeeded = true;
+    }
+  }
+
+  // —— SmartCombobox #3 — "Conflict scale" proof of concept ————————————————
+  // EXACT same three-bucket logic as the Protagonist PoC above, but over the
+  // conflict vocabulary: Suggested = conflicts of the selected SUBGENRE(s)
+  // (backend subgenre_catalogs.conflicts first, static SUBGENRE_DATA.conflicts
+  // second); Related = everything else from the selected GENRE(s) (union of
+  // the genre-level conflict_scales buckets + their subgenres' own catalogs),
+  // minus Suggested; Other = every remaining conflict in the full global pool,
+  // regardless of genre/subgenre, minus the two above. Single-choice mode;
+  // mirrors the pick into cfg.conflict_scale (PoC only).
+  $: suggestedConflicts = (() => {
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (s && !out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const chip of protagChips) {
+      const parent = resolveParent(index, chip);
+      if (parent && !effectiveKeys.includes(parent)) continue; // stale chip from another genre
+      const tok = norm(chip).replace(/ /g, '_');
+      const cat = (paramsPayload && paramsPayload.subgenre_catalogs && paramsPayload.subgenre_catalogs[tok]) || null;
+      for (const c of (cat && cat.conflicts) || []) push(c);
+      const sd = SUBGENRE_DATA[chip] || null;
+      for (const c of (sd && sd.conflicts) || []) push(c);
+    }
+    return out;
+  })();
+  $: relatedConflicts = (() => {
+    const bk = normalizeBuckets(paramsPayload && paramsPayload.conflict_scales);
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (!s) return;
+      if (suggestedConflicts.some((o) => o.toLowerCase() === s.toLowerCase())) return;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const k of effectiveKeys) {
+      if (!k || k === '__other__') continue;
+      for (const bkKey of genreBucketKeys(k)) for (const c of bk[bkKey] || []) push(c);
+      const g = GENRES.find((x) => x.key === k);
+      if (g) for (const s of g.subgenres) for (const c of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].conflicts) || []) push(c);
+    }
+    return out;
+  })();
+  $: otherConflicts = (() => {
+    const taken = new Set([...suggestedConflicts, ...relatedConflicts].map((x) => x.toLowerCase()));
+    const pools = [];
+    const bk = paramsPayload && paramsPayload.conflict_scales;
+    if (bk && typeof bk === 'object') for (const v of Object.values(bk)) if (Array.isArray(v)) pools.push(v);
+    const poolStatic = [];
+    for (const sd of Object.values(SUBGENRE_DATA)) for (const c of (sd && sd.conflicts) || []) poolStatic.push(c);
+    for (const g of GENRES) for (const s of g.subgenres) for (const c of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].conflicts) || []) poolStatic.push(c);
+    const out = [];
+    for (const x of [...pools.flat(), ...poolStatic]) {
+      const s = String(x || '').trim();
+      if (!s || taken.has(s.toLowerCase())) continue;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    }
+    return out;
+  })();
+  const conflictItem = (c) => ({
+    id: 'cf:' + c,
+    label: c,
+    description: itemDesc(c, CONFLICT_FAMILIES, famKey, CONFLICT_TERMS),
+  });
+  $: smartConflictGroups = (() => {
+    const gs = [];
+    if (suggestedConflicts.length) gs.push({ label: 'Sugeridos', items: suggestedConflicts.map(conflictItem) });
+    if (relatedConflicts.length) gs.push({ label: 'Relacionados', items: relatedConflicts.map(conflictItem) });
+    if (otherConflicts.length) gs.push({ label: 'Otros', items: otherConflicts.map(conflictItem) });
+    return gs;
+  })();
+  function onSmartConflictChange(e) {
+    // PoC: mirror the choice into the SAME storage field the real combo uses.
+    cfg.conflict_scale = String(e.detail.value || '').trim();
+  }
+  let conflictSmartValue = '';
+  let conflictSmartSeeded = false;
+  $: if (!conflictSmartSeeded && !conflictSmartValue && cfg.conflict_scale) {
+    const exists = smartConflictGroups.some((g) => g.items.some((it) => it.label === cfg.conflict_scale));
+    if (exists) {
+      conflictSmartValue = cfg.conflict_scale;
+      conflictSmartSeeded = true;
+    }
+  }
+
+  // —— SmartCombobox #4 — "Subgenre" proof of concept —————————————————————
+  // Same component fed with the REAL subgenre taxonomy, bucketed by how close
+  // each subgenre is to the current selection:
+  //  * Sugeridos   — children of the selected genre(s) (subgenresForKeys):
+  //                  exactly what the regular Subgenre field offers.
+  //  * Relacionados— children of the closest RELATED parent genre(s). The
+  //                  affinity map below declares which genres are siblings
+  //                  (e.g. Sci-Fi and Fantasy both lean on Action & Adventure,
+  //                  so adventure's children surface here when either is
+  //                  selected). Children already shown in Sugeridos never
+  //                  repeat.
+  //  * Otros       — children of EVERY remaining genre (the rest of the
+  //                  taxonomy), minus the two buckets above.
+  // Multi-select chips (cfg.subgenre stores a comma-separated list, identical
+  // storage format to the real field). PoC only — does NOT replace the real
+  // Subgenre ComboSelect.
+  const GENRE_AFFINITY = {
+    scifi: ['adventure', 'fantasy'],          // sci-fi ↔ action/adventure (+ fantasy for science-fantasy crossover)
+    fantasy: ['adventure', 'scifi'],          // fantasy ↔ action/adventure (+ scifi)
+    mystery_thriller: ['adventure', 'drama'],
+    thriller: ['adventure', 'mystery_thriller'],
+    romance: ['drama', 'adventure'],
+    horror: ['drama', 'mystery_thriller'],
+    adventure: ['fantasy', 'scifi'],
+    historical: ['drama', 'adventure'],
+    western: ['adventure', 'historical'],
+    drama: ['romance', 'historical'],
+    comedy: ['romance', 'drama'],
+  };
+  $: smartSubSuggested = subgenresForKeys(index, effectiveKeys);
+  $: smartSubRelated = (() => {
+    const relKeys = [...new Set(effectiveKeys.flatMap((k) => GENRE_AFFINITY[k] || []))]
+      .filter((k) => !effectiveKeys.includes(k));
+    const suggLower = new Set(smartSubSuggested.map((s) => s.toLowerCase()));
+    return subgenresForKeys(index, relKeys).filter((s) => !suggLower.has(s.toLowerCase()));
+  })();
+  $: smartSubOther = (() => {
+    const taken = new Set([...smartSubSuggested, ...smartSubRelated].map((s) => s.toLowerCase()));
+    return allSubLabels.filter((s) => !taken.has(s.toLowerCase()));
+  })();
+  const subItem = (s) => ({ id: 'sg:' + s, label: s, description: hintFor(s) });
+  $: smartSubGroups = (() => {
+    const gs = [];
+    if (smartSubSuggested.length) gs.push({ label: 'Sugeridos', items: smartSubSuggested.map(subItem) });
+    if (smartSubRelated.length) gs.push({ label: 'Relacionados', items: smartSubRelated.map(subItem) });
+    if (smartSubOther.length) gs.push({ label: 'Otros', items: smartSubOther.map(subItem) });
+    return gs;
+  })();
+  function onSmartSubChange(e) {
+    // PoC: mirror the chip list into cfg.subgenre using the exact same
+    // normalization the real onSubChange applies (dedup + comma join).
+    const chips = splitSubgenreText(String(e.detail.value || ''));
+    cfg.subgenre = chips.join(', ');
+  }
+  let subSmartValue = '';
+  let subSmartSeeded = false;
+  // One-shot seed of the stored subgenre chips (same rule as the other PoCs:
+  // first non-empty sync wins; afterwards the widget owns the interaction).
+  $: if (!subSmartSeeded && !subSmartValue && cfg.subgenre) {
+    const chips = splitSubgenreText(cfg.subgenre);
+    if (chips.length) {
+      subSmartValue = chips.join(', ');
+      subSmartSeeded = true;
+    }
+  }
+
+  // —— SmartCombobox #5 — "Genre" proof of concept (NO groups) —————————————
+  // All ten top-level genres as ONE flat list (grouped={false} hides the
+  // accordion headers entirely). Multi-select, mirroring cfg.type with the
+  // same comma-separated format the real Genre field stores. PoC only.
+  $: smartGenreGroups = [{
+    label: 'Géneros',
+    items: GENRES.map((g) => ({ id: 'gn:' + g.key, label: g.label, description: genreBlurb(g.key) })),
+  }];
+  function onSmartGenreChange(e) {
+    cfg.type = String(e.detail.value || '').trim();
+  }
+  let genreSmartValue = '';
+  let genreSmartSeeded = false;
+  $: if (!genreSmartSeeded && !genreSmartValue && cfg.type) {
+    const parts = String(cfg.type).split(',').map((x) => x.trim()).filter(Boolean);
+    if (parts.length) {
+      genreSmartValue = parts.join(', ');
+      genreSmartSeeded = true;
+    }
+  }
+
   // —— Free-text specific settings ————————————————————————————————————————
   // The textarea holds ONLY the entries that are not part of the current
   // suggestion list. When shortcuts are hidden (no subgenre selected, round-24
@@ -542,6 +845,98 @@
         on:change={onSubChange}
       />
     </div>
+
+    <!-- SmartCombobox demo (advanced multi-select, Revolut/Notion style) —
+         renders directly BELOW the Genre/Subgenre fields. Mock data: groups
+         derived from the current genre→subgenre cascade + a "Parámetros
+         sugeridos" group; with no genres selected it falls back to the
+         component's built-in technology mock catalog. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        Selector inteligente (demo)
+      </span>
+      <SmartCombobox
+        bind:value={smartValue}
+        groups={smartGroups.length ? smartGroups : null}
+        initialIds={smartGroups.length ? [] : [1, 5]}
+        disabled={disabled}
+        ariaLabel="Selector inteligente (demo)"
+      />
+    </div>
+
+    <!-- SmartCombobox #2 — "Protagonist type" PoC: same component fed with the
+         REAL protagonist catalog bucketed as Sugeridos (selected subgenre) /
+         Relacionados (rest of the selected genre) / Otros (everything else).
+         Single-choice mode; mirrors the pick into cfg.protagonist_type. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.protagonist || 'Protagonist type'} — selector inteligente (PoC)
+      </span>
+      <SmartCombobox
+        bind:value={protagSmartValue}
+        groups={smartProtagGroups}
+        single={true}
+        placeholder="Buscar o elegir un tipo de protagonista..."
+        disabled={disabled}
+        ariaLabel={(labels.protagonist || 'Protagonist type') + ' (PoC)'}
+        on:change={onSmartProtagChange}
+      />
+    </div>
+
+    <!-- SmartCombobox #3 — "Conflict scale" PoC: identical three-bucket logic
+         over the real conflict vocabulary (Sugeridos = conflicts of the chosen
+         subgenre(s); Relacionados = rest of the chosen genre(s); Otros = the
+         rest of the global pool). Single-choice; mirrors into cfg.conflict_scale. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.conflict || 'Conflict scale'} — selector inteligente (PoC)
+      </span>
+      <SmartCombobox
+        bind:value={conflictSmartValue}
+        groups={smartConflictGroups}
+        single={true}
+        placeholder="Buscar o elegir una escala de conflicto..."
+        disabled={disabled}
+        ariaLabel={(labels.conflict || 'Conflict scale') + ' (PoC)'}
+        on:change={onSmartConflictChange}
+      />
+    </div>
+
+    <!-- SmartCombobox #4 — "Subgenre" PoC: Sugeridos = children of the selected
+         genre(s); Relacionados = children of the closest related parent genre(s)
+         (e.g. Action & Adventure for Sci-Fi / Fantasy); Otros = children of the
+         remaining genres. Multi-select chips; mirrors into cfg.subgenre. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.subgenre || 'Subgenre'} — selector inteligente (PoC)
+      </span>
+      <SmartCombobox
+        bind:value={subSmartValue}
+        groups={smartSubGroups}
+        placeholder="Buscar o elegir subgéneros..."
+        disabled={disabled}
+        ariaLabel={(labels.subgenre || 'Subgenre') + ' (PoC)'}
+        on:change={onSmartSubChange}
+      />
+    </div>
+
+    <!-- SmartCombobox #5 — "Genre" PoC: all top-level genres as ONE flat list,
+         NO group headers (grouped={false}). Multi-select; mirrors into cfg.type. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.genre || 'Genre'} — selector inteligente (PoC, sin grupos)
+      </span>
+      <SmartCombobox
+        bind:value={genreSmartValue}
+        groups={smartGenreGroups}
+        grouped={false}
+        placeholder="Buscar o elegir géneros..."
+        disabled={disabled}
+        ariaLabel={(labels.genre || 'Genre') + ' (PoC)'}
+        on:change={onSmartGenreChange}
+      />
+    </div>
+
     <div>
       <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
         {labels.conflict || 'Conflict scale'}
@@ -724,6 +1119,91 @@
         on:change={onSubChange}
       />
     </div>
+
+    <!-- SmartCombobox demo (advanced multi-select, Revolut/Notion style) —
+         same block as flat mode, rendered directly BELOW Genre/Subgenre. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        Selector inteligente (demo)
+      </span>
+      <SmartCombobox
+        bind:value={smartValue}
+        groups={smartGroups.length ? smartGroups : null}
+        initialIds={smartGroups.length ? [] : [1, 5]}
+        disabled={disabled}
+        ariaLabel="Selector inteligente (demo)"
+      />
+    </div>
+
+    <!-- SmartCombobox #2 — "Protagonist type" PoC (same as flat mode):
+         Sugeridos / Relacionados / Otros over the REAL protagonist catalog. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.protagonist || 'Protagonist type'} — selector inteligente (PoC)
+      </span>
+      <SmartCombobox
+        bind:value={protagSmartValue}
+        groups={smartProtagGroups}
+        single={true}
+        placeholder="Buscar o elegir un tipo de protagonista..."
+        disabled={disabled}
+        ariaLabel={(labels.protagonist || 'Protagonist type') + ' (PoC)'}
+        on:change={onSmartProtagChange}
+      />
+    </div>
+
+    <!-- SmartCombobox #3 — "Conflict scale" PoC (same as flat mode):
+         three buckets over the real conflict vocabulary; mirrors into
+         cfg.conflict_scale. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.conflict || 'Conflict scale'} — selector inteligente (PoC)
+      </span>
+      <SmartCombobox
+        bind:value={conflictSmartValue}
+        groups={smartConflictGroups}
+        single={true}
+        placeholder="Buscar o elegir una escala de conflicto..."
+        disabled={disabled}
+        ariaLabel={(labels.conflict || 'Conflict scale') + ' (PoC)'}
+        on:change={onSmartConflictChange}
+      />
+    </div>
+
+    <!-- SmartCombobox #4 — "Subgenre" PoC (same as flat mode): children of the
+         selected genre(s) / of the related parent genre(s) / of the rest.
+         Mirrors into cfg.subgenre. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.subgenre || 'Subgenre'} — selector inteligente (PoC)
+      </span>
+      <SmartCombobox
+        bind:value={subSmartValue}
+        groups={smartSubGroups}
+        placeholder="Buscar o elegir subgéneros..."
+        disabled={disabled}
+        ariaLabel={(labels.subgenre || 'Subgenre') + ' (PoC)'}
+        on:change={onSmartSubChange}
+      />
+    </div>
+
+    <!-- SmartCombobox #5 — "Genre" PoC (same as flat mode): ONE flat list,
+         no group headers (grouped={false}). Mirrors into cfg.type. -->
+    <div class="col-span-2">
+      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        {labels.genre || 'Genre'} — selector inteligente (PoC, sin grupos)
+      </span>
+      <SmartCombobox
+        bind:value={genreSmartValue}
+        groups={smartGenreGroups}
+        grouped={false}
+        placeholder="Buscar o elegir géneros..."
+        disabled={disabled}
+        ariaLabel={(labels.genre || 'Genre') + ' (PoC)'}
+        on:change={onSmartGenreChange}
+      />
+    </div>
+
     <!-- Round 26: the "From genres:" info box under the Genre combobox was
          removed per user request (class rounded border ... opacity-70). -->
 
