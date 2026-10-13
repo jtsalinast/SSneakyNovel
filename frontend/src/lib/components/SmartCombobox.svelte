@@ -87,10 +87,39 @@
   let isOpen = false;
   let isTooltipOpen = false;
   let searchQuery = '';
-  let collapsedGroups = {};
+  // Accordion collapse state, held in a local writable STORE ($collapsed).
+  // Why a store: Svelte 4 only invalidates reactive dependents on WHOLE
+  // VARIABLE ASSIGNMENTS (`x = ...`). Mutating a plain `let mySet = new Set()`
+  // through methods (`mySet.add(...)` / `mySet.delete(...)`) is invisible to
+  // the compiler — no dirty flag is set, no `{#if}`/`$:` re-runs — which is
+  // exactly why earlier revisions of this component appeared to "not collapse
+  // live": the toggle worked in JS but nothing re-rendered until the panel was
+  // destroyed and rebuilt on close/reopen. The store's `update()` notifies
+  // subscribers explicitly, and every template read goes through `$collapsed`,
+  // so toggles render immediately while the dropdown stays open.
+  const collapsed = writableStore(new Set());
+
+  function writableStore(initial) {
+    let value = initial;
+    const subs = new Set();
+    return {
+      subscribe(run) { subs.add(run); run(value); return () => subs.delete(run); },
+      update(fn) { value = fn(value); subs.forEach((f) => f(value)); },
+    };
+  }
+
   let selectedIds = [...(initialIds || [])]; // mock/demo preselection ([1,5])
   let inputEl;
   let root;
+
+  function toggleGroup(label) {
+    collapsed.update((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
 
   // Outside-click handling (same window-listener pattern ComboSelect uses —
   // Svelte 4 has no `click/outside` modifier). A press that begins inside
@@ -197,11 +226,17 @@
     isTooltipOpen = !isTooltipOpen;
     if (isTooltipOpen) isOpen = false;
   }
-  function toggleGroup(label) {
-    collapsedGroups = { ...collapsedGroups, [label]: !collapsedGroups[label] };
-  }
   function isGroupCollapsed(label) {
-    return !!collapsedGroups[label];
+    // Direct store read via a manual subscribe/unsubscribe snapshot. NOTE: the
+    // template does NOT call this function — it reads `$collapsed.has(...)`
+    // directly, because Svelte only auto-subscribes `$store` when the `$`-name
+    // appears in the TEMPLATE or in a `$:` statement; inside a plain function
+    // called from the template there is no subscription, so relying on it for
+    // reactivity would silently never re-render (the original bug).
+    let snap;
+    const un = collapsed.subscribe((v) => { snap = v; });
+    un();
+    return snap.has(label);
   }
   function isSelected(id) {
     return selectedIds.includes(id);
@@ -457,17 +492,22 @@
       {#if grouped}
         {#each filteredGroups as group (group.label)}
           <div class="mb-1 last:mb-0">
-            <!-- Group accordion header -->
+            <!-- Group accordion header. type="button" + preventDefault: this
+                 button sits INSIDE the contenteditable/inputs' control box
+                 region; without these, clicking it could blur/re-render the
+                 panel (and submit a wrapping <form>), which made the collapse
+                 appear to apply only after closing and reopening the dropdown. -->
             <button
               type="button"
-              on:click|stopPropagation={() => toggleGroup(group.label)}
+              on:mousedown|stopPropagation={(e) => e.preventDefault()}
+              on:click|stopPropagation|preventDefault={() => toggleGroup(group.label)}
               class="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-neutral-100/70 dark:hover:bg-base-200 rounded-md text-[11px] font-semibold text-neutral-400 dark:text-neutral-500 tracking-wider uppercase transition-colors"
             >
               <span>{group.label} ({group.items.length})</span>
-              <svg class="w-3 h-3 transition-transform duration-200 text-neutral-400 {isGroupCollapsed(group.label) ? '' : 'rotate-180'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
+              <svg class="w-3 h-3 transition-transform duration-200 text-neutral-400 {$collapsed.has(group.label) ? '' : 'rotate-180'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
             </button>
 
-            {#if !isGroupCollapsed(group.label)}
+            {#if !$collapsed.has(group.label)}
               <div class="mt-0.5 space-y-0.5">
                 {#each group.items as item (item.id)}
                   {@const checkedBox = isSelected(item.id)}
