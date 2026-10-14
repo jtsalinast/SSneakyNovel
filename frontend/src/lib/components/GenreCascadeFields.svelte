@@ -449,31 +449,46 @@
     // widget the user interacted with (its chips re-adopt the normalized list).
     subSmartValue = cfg.subgenre;
   }
+  // Multi-select wire format for conflict_scale / protagonist_type: a
+  // comma-separated list ("Personal stakes, Ticking clock"), the same shape
+  // cfg.subgenre uses. The backend treats these fields as suggestion strings
+  // injected verbatim into prompts, so lists need no extra backend work;
+  // EffectiveConflict()/EffectiveProtagonist() resolve every "other" entry
+  // against the *_other custom text. splitMultiList parses any stored shape
+  // back into chips (single value, comma list, or newline list).
+  function splitMultiList(text) {
+    const out = [];
+    for (const p of String(text || '').split(/[,\n]/)) {
+      const s = p.trim();
+      if (s && !out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    }
+    return out;
+  }
   // Shared body of the Conflict-scale change handler (smart + hidden legacy).
-  function applyConflictSelection(v) {
-    cfg.conflict_scale = String(v || '').trim();
+  function applyConflictSelection(chips) {
+    cfg.conflict_scale = (chips || []).join(', ');
   }
   function onConflictChange(e) {
-    applyConflictSelection(String(e.detail.value || ''));
+    applyConflictSelection(splitMultiList(String(e.detail.value || '')));
     // Keep the smart widget in sync when the legacy combo is the one the user
     // interacted with (bind:value only updates the smart's bound value; the
-    // handler must forward it so its radio re-adopts the pick).
+    // handler must forward it so its chips re-adopt the picks).
     conflictSmartValue = cfg.conflict_scale;
   }
   // Shared body of the Protagonist-type change handler (smart + hidden legacy).
-  function applyProtagSelection(v) {
-    cfg.protagonist_type = String(v || '').trim();
+  function applyProtagSelection(chips) {
+    cfg.protagonist_type = (chips || []).join(', ');
   }
   function onProtagChange(e) {
-    applyProtagSelection(String(e.detail.value || ''));
+    applyProtagSelection(splitMultiList(String(e.detail.value || '')));
     // Same two-way sync as above for the Protagonist smart widget.
     protagSmartValue = cfg.protagonist_type;
   }
 
-  // Bound value of the Protagonist-type smart combobox. Initialized empty; the
-  // component's own `groups` rebuild re-emits its selection, so we seed it
-  // here from the stored cfg.protagonist_type when available (see the
-  // $: block below — first non-empty sync wins, afterwards the user rules).
+  // Bound values of the Protagonist/Conflict smart comboboxes. Initialized
+  // empty; seeded one-shot from the stored cfg field when the catalog is
+  // available (see the $: blocks below — first non-empty sync wins,
+  // afterwards the user rules).
   let protagSmartValue = '';
   let protagSmartSeeded = false;
 
@@ -556,24 +571,36 @@
     return gs;
   })();
   function onSmartProtagChange(e) {
-    // Mirror the choice into the SAME storage field the real combo uses. The
-    // value comes from e.detail.ids ('pt:<label>' — the widget's authoritative
+    // Mirror the FULL chip list into the SAME storage field the real combo
+    // uses (multi-select now: comma-separated, same shape as cfg.subgenre).
+    // Values come from e.detail.ids ('pt:<label>' — the widget's authoritative
     // id list), never from the possibly-stale reactive `items` snapshot; free
-    // 'cx:' chips fall back to the emitted text (kept verbatim, like the
-    // legacy "Other" behaviour). Routes through the SAME shared body as the
-    // hidden legacy handler so both widgets stay behaviourally identical.
+    // 'cx:' chips fall back to the emitted text (split on commas/newlines,
+    // kept verbatim, like the legacy "Other" behaviour). Routes through the
+    // SAME shared body as the hidden legacy handler so both widgets stay
+    // behaviourally identical.
     const ids = e.detail.ids || [];
-    const pt = ids.find((id) => String(id).startsWith('pt:'));
-    applyProtagSelection(pt ? String(pt).slice(3) : String(e.detail.value || '').trim());
+    const known = ids
+      .filter((id) => String(id).startsWith('pt:'))
+      .map((id) => String(id).slice(3));
+    const custom = ids.filter((id) => String(id).startsWith('cx:')).map((id) => String(id).slice(3));
+    const chips = known.length || custom.length
+      ? [...known, ...custom]
+      : splitMultiList(String(e.detail.value || ''));
+    applyProtagSelection(chips);
   }
-  // One-shot seed: show the already-stored protagonist (if any) as the active
-  // radio option the first time the catalog is available. After that the user
-  // owns the widget — external edits to cfg.protagonist_type (e.g. the legacy
-  // ComboSelect) intentionally do NOT re-sync this demo block.
+  // One-shot seed: show the already-stored protagonist picks (if any) as
+  // active chips the first time every label is available in the catalog.
+  // After that the user owns the widget — external edits to
+  // cfg.protagonist_type (e.g. the legacy ComboSelect) intentionally do NOT
+  // re-sync this block.
   $: if (!protagSmartSeeded && !protagSmartValue && cfg.protagonist_type) {
-    const exists = smartProtagGroups.some((g) => g.items.some((it) => it.label === cfg.protagonist_type));
-    if (exists) {
-      protagSmartValue = cfg.protagonist_type;
+    const stored = splitMultiList(cfg.protagonist_type);
+    const exists = stored.every((v) =>
+      smartProtagGroups.some((g) => g.items.some((it) => it.label === v))
+    );
+    if (stored.length && exists) {
+      protagSmartValue = stored.join(', ');
       protagSmartSeeded = true;
     }
   }
@@ -650,21 +677,30 @@
     return gs;
   })();
   function onSmartConflictChange(e) {
-    // Mirror the choice into the SAME storage field the real combo uses, via
-    // e.detail.ids ('cf:<label>' — authoritative, immune to stale reactive
-    // snapshots; see onSmartProtagChange). Routes through the SAME shared body
-    // as the hidden legacy handler so both widgets stay behaviourally
-    // identical.
+    // Mirror the FULL chip list into the SAME storage field the real combo
+    // uses (multi-select now), via e.detail.ids ('cf:<label>' — authoritative,
+    // immune to stale reactive snapshots; see onSmartProtagChange). Routes
+    // through the SAME shared body as the hidden legacy handler so both
+    // widgets stay behaviourally identical.
     const ids = e.detail.ids || [];
-    const cf = ids.find((id) => String(id).startsWith('cf:'));
-    applyConflictSelection(cf ? String(cf).slice(3) : String(e.detail.value || '').trim());
+    const known = ids
+      .filter((id) => String(id).startsWith('cf:'))
+      .map((id) => String(id).slice(3));
+    const custom = ids.filter((id) => String(id).startsWith('cx:')).map((id) => String(id).slice(3));
+    const chips = known.length || custom.length
+      ? [...known, ...custom]
+      : splitMultiList(String(e.detail.value || ''));
+    applyConflictSelection(chips);
   }
   let conflictSmartValue = '';
   let conflictSmartSeeded = false;
   $: if (!conflictSmartSeeded && !conflictSmartValue && cfg.conflict_scale) {
-    const exists = smartConflictGroups.some((g) => g.items.some((it) => it.label === cfg.conflict_scale));
-    if (exists) {
-      conflictSmartValue = cfg.conflict_scale;
+    const stored = splitMultiList(cfg.conflict_scale);
+    const exists = stored.every((v) =>
+      smartConflictGroups.some((g) => g.items.some((it) => it.label === v))
+    );
+    if (stored.length && exists) {
+      conflictSmartValue = stored.join(', ');
       conflictSmartSeeded = true;
     }
   }
@@ -876,7 +912,7 @@
            they share the exact same handlers (applyGenreSelection etc.) as the
            SmartCombobox replacements below. -->
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.genre || 'Genre'}
         </span>
         <ComboSelect
@@ -895,7 +931,7 @@
         />
       </div>
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.subgenre || 'Subgenre'}
         </span>
         <ComboSelect
@@ -920,7 +956,7 @@
          (grouped={false}). Multi-select; writes cfg.type and purges orphaned
          subgenres exactly like the legacy combo did. -->
     <div class="col-span-2">
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.genre || 'Genre'}
       </span>
       <SmartCombobox
@@ -939,7 +975,7 @@
          (e.g. Action & Adventure for Sci-Fi / Fantasy); Otros = children of the
          remaining genres. Multi-select chips; writes cfg.subgenre. -->
     <div class="col-span-2">
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.subgenre || 'Subgenre'}
       </span>
       <SmartCombobox
@@ -955,16 +991,16 @@
     <!-- Smart Conflict scale: three-bucket logic over the real conflict
          vocabulary (Sugeridos = conflicts of the chosen subgenre(s);
          Relacionados = rest of the chosen genre(s); Otros = the rest of the
-         global pool). Single-choice; writes cfg.conflict_scale. -->
+         global pool). Multi-select chips; writes cfg.conflict_scale as a
+         comma-separated list. -->
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.conflict || 'Conflict scale'}
       </span>
       <SmartCombobox
         bind:value={conflictSmartValue}
         groups={smartConflictGroups}
-        single={true}
-        placeholder="Buscar o elegir una escala de conflicto..."
+        placeholder="Buscar o elegir escalas de conflicto..."
         disabled={disabled}
         ariaLabel={labels.conflict || 'Conflict scale'}
         on:change={onSmartConflictChange}
@@ -973,17 +1009,16 @@
 
     <!-- Smart Protagonist type: same component fed with the REAL protagonist
          catalog bucketed as Sugeridos (selected subgenre) / Relacionados (rest
-         of the selected genre) / Otros (everything else). Single-choice;
-         writes cfg.protagonist_type. -->
+         of the selected genre) / Otros (everything else). Multi-select chips;
+         writes cfg.protagonist_type as a comma-separated list. -->
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.protagonist || 'Protagonist type'}
       </span>
       <SmartCombobox
         bind:value={protagSmartValue}
         groups={smartProtagGroups}
-        single={true}
-        placeholder="Buscar o elegir un tipo de protagonista..."
+        placeholder="Buscar o elegir tipos de protagonista..."
         disabled={disabled}
         ariaLabel={labels.protagonist || 'Protagonist type'}
         on:change={onSmartProtagChange}
@@ -992,7 +1027,7 @@
 
     {#if showLegacyCombos}
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.conflict || 'Conflict scale'}
           <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</span>
         </span>
@@ -1011,7 +1046,7 @@
         />
       </div>
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.protagonist || 'Protagonist type'}
           <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</span>
         </span>
@@ -1032,7 +1067,7 @@
     {/if}
 
     <div class="col-span-2">
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.settings || 'Specific settings'}
         <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
         {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
@@ -1040,7 +1075,7 @@
       {#if showSettingShortcuts}
         <div class="grid grid-cols-2 gap-x-3 gap-y-1">
           {#each settingOpts as s}
-            <label class="flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
+            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
               <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
               {s.replaceAll('_', ' ')}
             </label>
@@ -1054,7 +1089,7 @@
           <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
           <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
             {#each modifierGroups as grp}
-              <label class="flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+              <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
                 <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
                 {grp.name}
               </label>
@@ -1075,7 +1110,7 @@
     </div>
 
     <div class="col-span-2">
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.tone || 'Tone'}
         <InfoTip text={tips.tone} label={labels.tone || 'Tone'} />
       </span>
@@ -1083,7 +1118,7 @@
       {#if toneOpts.length}
         <div class="flex flex-wrap gap-x-3 gap-y-1">
           {#each toneOpts as t}
-            <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer">
               <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={disabled} />
               {t}
             </label>
@@ -1093,7 +1128,7 @@
     </div>
 
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.length || 'Story length'}
       </span>
       <ComboSelect
@@ -1110,7 +1145,7 @@
       />
     </div>
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.structure || 'Narrative structure'}
       </span>
       <ComboSelect
@@ -1129,7 +1164,7 @@
     </div>
   </div>
 {:else}
-<div class="rounded-md border border-primary/35 bg-base-100/40 p-3 space-y-3">
+<div class="surface-card p-3 space-y-3">
   <div class="text-xs font-semibold uppercase tracking-wide text-primary/80">
     {labels.sectionTitle || 'Genre-filtered parameters (new)'}
   </div>
@@ -1139,7 +1174,7 @@
       <!-- Legacy ComboSelect versions kept behind a flag for A/B comparison;
            they share the exact same handlers as the SmartCombobox replacements. -->
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.genre || 'Genre'}
         </span>
         <ComboSelect
@@ -1158,7 +1193,7 @@
         />
       </div>
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.subgenre || 'Subgenre'}
         </span>
         <ComboSelect
@@ -1182,7 +1217,7 @@
     <!-- Smart Genre (card mode): ONE flat list, no group headers
          (grouped={false}). Multi-select; writes cfg.type. -->
     <div class="col-span-2">
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.genre || 'Genre'}
       </span>
       <SmartCombobox
@@ -1199,7 +1234,7 @@
     <!-- Smart Subgenre (card mode): children of the selected genre(s) /
          of the related parent genre(s) / of the rest. Writes cfg.subgenre. -->
     <div class="col-span-2">
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.subgenre || 'Subgenre'}
       </span>
       <SmartCombobox
@@ -1213,16 +1248,16 @@
     </div>
 
     <!-- Smart Conflict scale (card mode): three buckets over the real
-         conflict vocabulary; writes cfg.conflict_scale. -->
+         conflict vocabulary; multi-select chips; writes cfg.conflict_scale
+         as a comma-separated list. -->
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.conflict || 'Conflict scale'}
       </span>
       <SmartCombobox
         bind:value={conflictSmartValue}
         groups={smartConflictGroups}
-        single={true}
-        placeholder="Buscar o elegir una escala de conflicto..."
+        placeholder="Buscar o elegir escalas de conflicto..."
         disabled={disabled}
         ariaLabel={labels.conflict || 'Conflict scale'}
         on:change={onSmartConflictChange}
@@ -1230,17 +1265,16 @@
     </div>
 
     <!-- Smart Protagonist type (card mode): Sugeridos / Relacionados / Otros
-         over the REAL protagonist catalog. Single-choice; writes
-         cfg.protagonist_type. -->
+         over the REAL protagonist catalog. Multi-select chips; writes
+         cfg.protagonist_type as a comma-separated list. -->
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.protagonist || 'Protagonist type'}
       </span>
       <SmartCombobox
         bind:value={protagSmartValue}
         groups={smartProtagGroups}
-        single={true}
-        placeholder="Buscar o elegir un tipo de protagonista..."
+        placeholder="Buscar o elegir tipos de protagonista..."
         disabled={disabled}
         ariaLabel={labels.protagonist || 'Protagonist type'}
         on:change={onSmartProtagChange}
@@ -1252,7 +1286,7 @@
 
     {#if showLegacyCombos}
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.conflict || 'Conflict scale'}
           <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</span>
         </span>
@@ -1271,7 +1305,7 @@
         />
       </div>
       <div>
-        <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+        <span class="field-label flex items-center gap-1">
           {labels.protagonist || 'Protagonist type'}
           <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</span>
         </span>
@@ -1293,7 +1327,7 @@
   </div>
 
   <div>
-    <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+    <span class="field-label flex items-center gap-1">
       {labels.settings || 'Specific settings'}
       <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
       {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
@@ -1301,7 +1335,7 @@
     {#if showSettingShortcuts}
       <div class="grid grid-cols-2 gap-x-3 gap-y-1">
         {#each settingOpts as s}
-          <label class="flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
+          <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
             <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
             {s.replaceAll('_', ' ')}
           </label>
@@ -1315,7 +1349,7 @@
         <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
         <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
           {#each modifierGroups as grp}
-            <label class="flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
               <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
               {grp.name}
             </label>
@@ -1339,7 +1373,7 @@
   <!-- Tone: free text + per-subgenre suggestion chips (from the resolved
        catalog). Same comma-separated storage as the legacy field. -->
   <div>
-    <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+    <span class="field-label flex items-center gap-1">
       {labels.tone || 'Tone'}
       <InfoTip text={tips.tone} label={labels.tone || 'Tone'} />
     </span>
@@ -1347,7 +1381,7 @@
     {#if toneOpts.length}
       <div class="flex flex-wrap gap-x-3 gap-y-1">
         {#each toneOpts as t}
-          <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+          <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer">
             <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={disabled} />
             {t}
           </label>
@@ -1361,7 +1395,7 @@
        preset and a default structure when the current one is empty/auto. -->
   <div class="grid grid-cols-2 gap-3">
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.length || 'Story length'}
       </span>
       <ComboSelect
@@ -1378,7 +1412,7 @@
       />
     </div>
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.structure || 'Narrative structure'}
       </span>
       <ComboSelect
