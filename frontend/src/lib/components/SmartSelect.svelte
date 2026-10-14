@@ -86,6 +86,25 @@
     if (isTooltipOpen) isTooltipOpen = false;
   }
 
+  // —— Selection display mode ———————————————————————————————————
+  // When the search box is empty, the current selection is rendered as REAL
+  // input text in full-strength foreground color instead of the native
+  // `placeholder` attribute. The old approach parked the selected label
+  // in the placeholder, which Tailwind's preflight styles with
+  // `color: color-mix(currentcolor 50%, transparent)` (plus
+  // `placeholder:text-neutral-400`), so every chosen option looked washed-out
+  // grey. It must stay real text even while the dropdown is open (focusing the
+  // input opens it): an empty box would otherwise show the "Añadir..." prompt
+  // over the selection and lose the mirrored value on blur. Only actual typed
+  // search text replaces the mirror; the caret behaviour when typing is
+  // unchanged from SmartCombobox.
+  // Color parity with SmartCombobox's chips is handled by utility classes on
+  // the input itself (`text-neutral-800 dark:text-base-content`) — do NOT add
+  // a scoped `.ss-value`/`.ss-input { color: ... }` rule: scoped styles win
+  // over utilities and hardcoding `var(--color-base-content)` made the text
+  // near-white under this app's default dark theme (xianii).
+  $: showValueAsText = !searchQuery.trim();
+
   // —— Value <-> display plumbing (single choice) ————————————————
   // `lastEmitted` guards against echo loops when the parent normalizes the
   // bound string back at us (mirrors SmartCombobox's adoption strategy, but
@@ -229,10 +248,11 @@
   aria-label={ariaLabel || undefined}
 >
   <!-- Control box: label-less, like a plain <select>. Center: live search
-       input whose native placeholder shows the current selection while closed
-       and "Añadir..." once typing starts (exactly the SmartCombobox caret
-       behaviour, minus the chips); right: the ⓘ summary trigger, clear ✕ and
-       animated chevron — same order and styling as SmartCombobox. -->
+       input that mirrors the current selection as full-strength text while
+       closed (see `.ss-input` below — never via the translucent native
+       placeholder) and switches to the "Añadir..." prompt once typing starts;
+       right: the ⓘ summary trigger, clear ✕ and animated chevron — same order
+       and styling as SmartCombobox. -->
   <!-- svelte-ignore a11y-click-events-have-key-events -->
   <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
   <div
@@ -248,17 +268,30 @@
              ? 'ring-2 ring-black/[0.08] dark:ring-white/15 border-neutral-400 dark:border-neutral-500 bg-white dark:bg-base-100 shadow-sm'
              : 'border-neutral-200/80 dark:border-base-300 bg-neutral-50/50 dark:bg-base-200/50 hover:bg-neutral-50 dark:hover:bg-base-200 hover:border-neutral-300 dark:hover:border-base-300'}"
   >
+    <!-- The selected label is REAL input text (full-strength foreground,
+         `text-neutral-800 dark:text-base-content` — same color as SmartCombobox's
+         chips), never the native placeholder — Tailwind preflight renders
+         ::placeholder at 50% alpha, which made selections look grey.
+         The placeholder attribute only carries genuine hints: "Añadir..."
+         while searching, or the field's empty hint when nothing is chosen. -->
     <input
       type="text"
       bind:this={inputEl}
-      bind:value={searchQuery}
+      value={showValueAsText ? displayLabel : searchQuery}
       on:focus={focusAndOpen}
       on:click|stopPropagation={focusAndOpen}
+      on:input={(e) => {
+        // Typing while the selection is mirrored in the box replaces it.
+        if (showValueAsText) searchQuery = '';
+        searchQuery = e.target.value;
+      }}
       on:keydown.enter={(e) => { e.preventDefault(); handleEnter(); }}
       on:keydown.escape={() => { isOpen = false; }}
-      placeholder={searchQuery.trim() || displayLabel || placeholder || emptyLabel}
+      placeholder={searchQuery.trim()
+        ? addPlaceholderText
+        : (String(value || '').trim() ? '' : (placeholder || emptyLabel))}
       disabled={disabled}
-      class="flex-1 min-w-0 border-none outline-none text-xs font-medium text-neutral-900 dark:text-base-content bg-transparent py-1 pl-1 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
+      class="ss-input flex-1 min-w-0 border-none outline-none text-xs font-medium text-neutral-800 dark:text-base-content bg-transparent py-1 pl-1 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
     />
 
     <div class="flex items-center gap-1 ml-auto shrink-0 text-neutral-400 dark:text-neutral-500">
@@ -393,5 +426,24 @@
   }
   .animate-pop {
     animation: popIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  /* The selected value must read exactly like SmartCombobox's chips: the
+     chip text uses `text-neutral-800 dark:text-base-content` (see the option
+     rows too). The hardcoded fallback below was wrong — this app ships a DARK
+     theme by default (`data-theme="xianii"` sets --color-base-content to a
+     near-WHITE oklch(96%)), so a light-mode fallback of #171717 made the input
+     inherit that white token and the selection looked white instead of black.
+     No color override here: let the Tailwind classes on `.ss-input` decide,
+     which keeps light/dark parity with the chips automatically. */
+  .ss-input {
+    -webkit-text-fill-color: currentColor;
+    opacity: 1;
+  }
+
+  /* Genuine hints only (empty field / "Añadir..." while searching) stay muted,
+     never the mirrored selection text. */
+  .ss-input::placeholder {
+    opacity: 1;
   }
 </style>
