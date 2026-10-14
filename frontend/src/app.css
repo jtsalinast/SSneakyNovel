@@ -71,6 +71,65 @@ body {
 .card .card { background: var(--surface-muted); border-color: transparent; }
 .input, .textarea, .select, .file-input { background: var(--color-base-100); border-color: var(--surface-border); }
 .input:focus, .textarea:focus, .select:focus, .file-input:focus { border-color: var(--color-primary); outline-color: color-mix(in oklch, var(--color-primary) 35%, transparent); }
+
+/* ── Smart-field visual system (mirrors SmartCombobox language) ─────────────
+   Applied to the remaining form controls so inputs/selects/textareas share
+   the same rounded-xl surface, soft shadow and animated focus ring that the
+   smart combo boxes deliver. */
+.input, .textarea, .select {
+  border-radius: 0.75rem;
+  transition: border-color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.15s ease;
+}
+.input:hover:not(:disabled), .textarea:hover:not(:disabled), .select:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--color-base-content) 22%, transparent);
+  background: color-mix(in oklch, var(--color-base-200) 45%, var(--color-base-100));
+}
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 18%, transparent);
+  outline: none;
+}
+.input:disabled, .textarea:disabled, .select:disabled { opacity: 0.55; }
+
+/* Field labels: same typographic treatment as the smart combobox labels. */
+.field-label {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: color-mix(in oklch, var(--color-base-content) 72%, transparent);
+  margin-bottom: 0.25rem;
+  display: block;
+  transition: color 0.15s ease;
+}
+.field-label:focus-within, :focus-visible + .field-label { color: var(--color-primary); }
+
+/* Chips (tone / specific-settings pills): pop-in entrance like smart chips. */
+.chip-pop { animation: popIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@keyframes popIn {
+  0%   { opacity: 0; transform: scale(0.97) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Card surfaces used across the config form sections. */
+.surface-card {
+  border: 1px solid var(--surface-border);
+  border-radius: 1rem;
+  background: var(--color-base-100);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.surface-card:hover {
+  border-color: color-mix(in oklch, var(--color-base-content) 18%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input, .textarea, .select, .surface-card, .chip-pop { transition: none; animation: none; }
+}
 .badge { font-weight: 500; }
 .alert { border: 1px solid color-mix(in oklch, currentColor 22%, transparent); }
 .chapter-content { max-width: 75ch; margin-inline: auto; }
@@ -203,3 +262,9 @@ body {
 .graph-container canvas {
   display: block;
 }
+
+/* Config section cards: same rounded-xl surface + hover elevation as the
+   smart combobox dropdown/chip language. */
+.card.bg-base-200 { border-radius: 1rem; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+.card.bg-base-200:hover { border-color: color-mix(in oklch, var(--color-base-content) 18%, transparent); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06); }
+@media (prefers-reduced-motion: reduce) { .card.bg-base-200 { transition: none; } }

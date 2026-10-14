@@ -18,15 +18,17 @@
   // It writes into the SAME story-config object as the legacy fields via
   // `bind:cfg`, so saving behaves identically whichever block the user edits.
   import ComboSelect from './ComboSelect.svelte';
+  import SmartCombobox from './SmartCombobox.svelte';
+  import SmartSelect from './SmartSelect.svelte';
   import InfoTip from './InfoTip.svelte';
   import { createEventDispatcher } from 'svelte';
   import { get } from 'svelte/store';
   import { uiLocale, translate } from '../i18n/index.js';
   import { CONFLICT_TERMS_EN, PROTAGONIST_TERMS_EN } from '../termDescriptions.js';
-  import { GENRES, SUBGENRE_DATA } from '../novelwriterGenres.js';
+  import { GENRES, SUBGENRE_DATA, genreBucketKeys } from '../novelwriterGenres.js';
   import {
     buildSubgenreIndex, subgenresForKeys, resolveParent, norm, cascadeForSelection,
-    splitSubgenreText, subgenreBelongsToAny,
+    splitSubgenreText, subgenreBelongsToAny, normalizeBuckets,
   } from '../subgenreTaxonomy.js';
 
   const dispatch = createEventDispatcher();
@@ -45,6 +47,17 @@
   export let labels = {};            // localized field labels from i18n
   export let hints = {};             // token -> localized subgenre hint
   export let tips = {};              // ⓘ tooltip texts (config.tip.*) for the side icons
+  // Round 29: flat mode — when true, the component renders ONLY its inner
+  // fields (no wrapper card/border/background and no section-title header),
+  // so the parent can place them at the same level as the rest of the
+  // "Story parameters" content instead of nested inside two extra divs.
+  export let flat = false;
+  // Escape hatch: the legacy ComboSelect twins of Genre/Subgenre/Conflict/
+  // Protagonist are hidden by default (the SmartCombobox widgets are now the
+  // primary UI). Set this to true to bring them back — they stay mounted and
+  // route through the SAME shared handler bodies, so behaviour is identical
+  // either way.
+  let showLegacyCombos = false;
 
   // —— Rich item lists (round 24) ——————————————————————————————————————
   // Secondary description lines exactly like the legacy comboboxes had:
@@ -269,17 +282,23 @@
     )?.key || '__other__';
   }
 
-  function onGenreChange(e) {
-    const v = String(e.detail.value || '');
-    const parts = v.split(',').map((x) => x.trim()).filter(Boolean);
+  // Shared body of the Genre change handler: BOTH the smart combobox and the
+  // hidden legacy ComboSelect route through this function, so whichever one
+  // becomes visible again keeps identical side-effect behaviour.
+  // Point-7 behaviour (round 22, multi-subgenre): keep ONLY the chips that
+  // still belong to the new genre union; drop the ones that don't. If every
+  // chip is orphaned the field resets to Auto — same semantics as before,
+  // but per-chip instead of all-or-nothing. The 'genreChange' dispatch keeps
+  // the parent's derived state (selectedGenreKeys, randomize, info box)
+  // coherent. NOTE: no echo back into genreSmartValue — the smart widget owns
+  // its selection internally and re-parsing labels against the catalog used
+  // to drop the most recently added chip (the stale-echo bug).
+  function applyGenreSelection(v) {
+    const parts = String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
     const unknown = parts.filter(
       (p) => !GENRES.some((x) => x.label.toLowerCase() === p.toLowerCase() || x.key.toLowerCase() === p.toLowerCase()),
     );
     cfg.type = [...parts.filter((p) => !unknown.includes(p)), ...unknown].join(', ');
-    // Point-7 behaviour (round 22, multi-subgenre): keep ONLY the chips that
-    // still belong to the new genre union; drop the ones that don't. If every
-    // chip is orphaned the field resets to Auto — same semantics as before,
-    // but per-chip instead of all-or-nothing.
     const keys = parts.map(labelToKey);
     const union = subgenresForKeys(index, keys);
     const kept = splitSubgenreText(cfg.subgenre).filter(
@@ -287,8 +306,14 @@
     );
     if (kept.join(', ') !== splitSubgenreText(cfg.subgenre).join(', ')) {
       cfg.subgenre = kept.join(', ');
+      // Mirror the purge into the Subgenre smart widget as well, so it shows
+      // the surviving chips live.
+      subSmartValue = cfg.subgenre;
     }
     dispatch('genreChange', { keys, value: cfg.type });
+  }
+  function onGenreChange(e) {
+    applyGenreSelection(String(e.detail.value || ''));
   }
 
   // —— Subgenre combobox (MULTI-SELECT, round 22) ————————————————————————
@@ -409,15 +434,400 @@
     dispatch('settingsChange', { value: cfg.specific_settings });
   }
 
-  function onSubChange(e) {
-    // Multi-select: normalize the joined chip list ("Cozy Mystery, Noir").
-    const chips = splitSubgenreText(String(e.detail.value || ''));
+  // Shared body of the Subgenre change handler: BOTH the smart combobox and
+  // the hidden legacy ComboSelect route through it, so either widget produces
+  // identical side-effects (storage normalization + 'subChange' dispatch that
+  // the parent Config.svelte relies on to refresh its derived state).
+  function applySubSelection(chips) {
     cfg.subgenre = chips.join(', ');
     const first = chips[0] || '';
     dispatch('subChange', { value: cfg.subgenre, chips, parent: resolveParent(index, first) });
   }
-  function onConflictChange(e) { cfg.conflict_scale = String(e.detail.value || '').trim(); }
-  function onProtagChange(e) { cfg.protagonist_type = String(e.detail.value || '').trim(); }
+  function onSubChange(e) {
+    // Multi-select: normalize the joined chip list ("Cozy Mystery, Noir").
+    applySubSelection(splitSubgenreText(String(e.detail.value || '')));
+    // Keep the Subgenre smart widget in sync when the legacy combo is the
+    // widget the user interacted with (its chips re-adopt the normalized list).
+    subSmartValue = cfg.subgenre;
+  }
+  // Multi-select wire format for conflict_scale / protagonist_type: a
+  // comma-separated list ("Personal stakes, Ticking clock"), the same shape
+  // cfg.subgenre uses. The backend treats these fields as suggestion strings
+  // injected verbatim into prompts, so lists need no extra backend work;
+  // EffectiveConflict()/EffectiveProtagonist() resolve every "other" entry
+  // against the *_other custom text. splitMultiList parses any stored shape
+  // back into chips (single value, comma list, or newline list).
+  function splitMultiList(text) {
+    const out = [];
+    for (const p of String(text || '').split(/[,\n]/)) {
+      const s = p.trim();
+      if (s && !out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    }
+    return out;
+  }
+  // Shared body of the Conflict-scale change handler (smart + hidden legacy).
+  function applyConflictSelection(chips) {
+    cfg.conflict_scale = (chips || []).join(', ');
+  }
+  function onConflictChange(e) {
+    applyConflictSelection(splitMultiList(String(e.detail.value || '')));
+    // Keep the smart widget in sync when the legacy combo is the one the user
+    // interacted with (bind:value only updates the smart's bound value; the
+    // handler must forward it so its chips re-adopt the picks).
+    conflictSmartValue = cfg.conflict_scale;
+  }
+  // Shared body of the Protagonist-type change handler (smart + hidden legacy).
+  function applyProtagSelection(chips) {
+    cfg.protagonist_type = (chips || []).join(', ');
+  }
+  function onProtagChange(e) {
+    applyProtagSelection(splitMultiList(String(e.detail.value || '')));
+    // Same two-way sync as above for the Protagonist smart widget.
+    protagSmartValue = cfg.protagonist_type;
+  }
+
+  // Bound values of the Protagonist/Conflict smart comboboxes. Initialized
+  // empty; seeded one-shot from the stored cfg field when the catalog is
+  // available (see the $: blocks below — first non-empty sync wins,
+  // afterwards the user rules).
+  let protagSmartValue = '';
+  let protagSmartSeeded = false;
+
+  // —— SmartCombobox #2 — "Protagonist type" proof of concept ————————————
+  // Same component, now fed with REAL protagonist data through the same
+  // single-parent taxonomy the rest of the cascade uses. Three buckets, in
+  // this order:
+  //  * Suggested — protagonists tied to the selected SUBGENRE(s) (their own
+  //    catalogs: backend subgenre_catalogs first, static SUBGENRE_DATA second).
+  //  * Related   — everything else belonging to the selected GENRE(s) (union of
+  //    the genre-level protagonist_types buckets), minus what Suggested shows.
+  //  * Other     — every remaining protagonist available in the full catalog,
+  //    regardless of genre/subgenre (backend payload buckets + every static
+  //    SUBGENRE_DATA entry + the genres' own union), minus the two above.
+  // The component runs in `single` mode (radio): cfg.protagonist_type stores
+  // exactly one value, so picking an option replaces the selection and closes
+  // the dropdown. This block is a PoC only — it does NOT replace the existing
+  // Protagonist-type ComboSelect anywhere.
+  $: protagChips = splitSubgenreText(cfg.subgenre);
+  $: suggestedProtagonists = (() => {
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (s && !out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const chip of protagChips) {
+      const parent = resolveParent(index, chip);
+      if (parent && !effectiveKeys.includes(parent)) continue; // stale chip from another genre
+      const tok = norm(chip).replace(/ /g, '_');
+      const cat = (paramsPayload && paramsPayload.subgenre_catalogs && paramsPayload.subgenre_catalogs[tok]) || null;
+      for (const p of (cat && cat.protagonists) || []) push(p);
+      const sd = SUBGENRE_DATA[chip] || null;
+      for (const p of (sd && sd.protagonists) || []) push(p);
+    }
+    return out;
+  })();
+  $: relatedProtagonists = (() => {
+    const bk = normalizeBuckets(paramsPayload && paramsPayload.protagonist_types);
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (!s) return;
+      if (suggestedProtagonists.some((o) => o.toLowerCase() === s.toLowerCase())) return;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const k of effectiveKeys) {
+      if (!k || k === '__other__') continue;
+      for (const bkKey of genreBucketKeys(k)) for (const p of bk[bkKey] || []) push(p);
+      const g = GENRES.find((x) => x.key === k);
+      if (g) for (const s of g.subgenres) for (const p of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].protagonists) || []) push(p);
+    }
+    return out;
+  })();
+  $: otherProtagonists = (() => {
+    const taken = new Set([...suggestedProtagonists, ...relatedProtagonists].map((x) => x.toLowerCase()));
+    const pools = [];
+    const bk = paramsPayload && paramsPayload.protagonist_types;
+    if (bk && typeof bk === 'object') for (const v of Object.values(bk)) if (Array.isArray(v)) pools.push(v);
+    const poolStatic = [];
+    for (const sd of Object.values(SUBGENRE_DATA)) for (const p of (sd && sd.protagonists) || []) poolStatic.push(p);
+    for (const g of GENRES) for (const s of g.subgenres) for (const p of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].protagonists) || []) poolStatic.push(p);
+    const out = [];
+    for (const x of [...pools.flat(), ...poolStatic]) {
+      const s = String(x || '').trim();
+      if (!s || taken.has(s.toLowerCase())) continue;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    }
+    return out;
+  })();
+  const protagItem = (p) => ({
+    id: 'pt:' + p,
+    label: p,
+    description: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey, PROTAGONIST_TERMS),
+  });
+  $: smartProtagGroups = (() => {
+    const gs = [];
+    if (suggestedProtagonists.length) gs.push({ label: 'Sugeridos', items: suggestedProtagonists.map(protagItem) });
+    if (relatedProtagonists.length) gs.push({ label: 'Relacionados', items: relatedProtagonists.map(protagItem) });
+    if (otherProtagonists.length) gs.push({ label: 'Otros', items: otherProtagonists.map(protagItem) });
+    return gs;
+  })();
+  function onSmartProtagChange(e) {
+    // Mirror the FULL chip list into the SAME storage field the real combo
+    // uses (multi-select now: comma-separated, same shape as cfg.subgenre).
+    // Values come from e.detail.ids ('pt:<label>' — the widget's authoritative
+    // id list), never from the possibly-stale reactive `items` snapshot; free
+    // 'cx:' chips fall back to the emitted text (split on commas/newlines,
+    // kept verbatim, like the legacy "Other" behaviour). Routes through the
+    // SAME shared body as the hidden legacy handler so both widgets stay
+    // behaviourally identical.
+    const ids = e.detail.ids || [];
+    const known = ids
+      .filter((id) => String(id).startsWith('pt:'))
+      .map((id) => String(id).slice(3));
+    const custom = ids.filter((id) => String(id).startsWith('cx:')).map((id) => String(id).slice(3));
+    const chips = known.length || custom.length
+      ? [...known, ...custom]
+      : splitMultiList(String(e.detail.value || ''));
+    applyProtagSelection(chips);
+  }
+  // One-shot seed: show the already-stored protagonist picks (if any) as
+  // active chips the first time every label is available in the catalog.
+  // After that the user owns the widget — external edits to
+  // cfg.protagonist_type (e.g. the legacy ComboSelect) intentionally do NOT
+  // re-sync this block.
+  $: if (!protagSmartSeeded && !protagSmartValue && cfg.protagonist_type) {
+    const stored = splitMultiList(cfg.protagonist_type);
+    const exists = stored.every((v) =>
+      smartProtagGroups.some((g) => g.items.some((it) => it.label === v))
+    );
+    if (stored.length && exists) {
+      protagSmartValue = stored.join(', ');
+      protagSmartSeeded = true;
+    }
+  }
+
+  // —— SmartCombobox #3 — "Conflict scale" proof of concept ————————————————
+  // EXACT same three-bucket logic as the Protagonist PoC above, but over the
+  // conflict vocabulary: Suggested = conflicts of the selected SUBGENRE(s)
+  // (backend subgenre_catalogs.conflicts first, static SUBGENRE_DATA.conflicts
+  // second); Related = everything else from the selected GENRE(s) (union of
+  // the genre-level conflict_scales buckets + their subgenres' own catalogs),
+  // minus Suggested; Other = every remaining conflict in the full global pool,
+  // regardless of genre/subgenre, minus the two above. Single-choice mode;
+  // mirrors the pick into cfg.conflict_scale (PoC only).
+  $: suggestedConflicts = (() => {
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (s && !out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const chip of protagChips) {
+      const parent = resolveParent(index, chip);
+      if (parent && !effectiveKeys.includes(parent)) continue; // stale chip from another genre
+      const tok = norm(chip).replace(/ /g, '_');
+      const cat = (paramsPayload && paramsPayload.subgenre_catalogs && paramsPayload.subgenre_catalogs[tok]) || null;
+      for (const c of (cat && cat.conflicts) || []) push(c);
+      const sd = SUBGENRE_DATA[chip] || null;
+      for (const c of (sd && sd.conflicts) || []) push(c);
+    }
+    return out;
+  })();
+  $: relatedConflicts = (() => {
+    const bk = normalizeBuckets(paramsPayload && paramsPayload.conflict_scales);
+    const out = [];
+    const push = (x) => {
+      const s = String(x || '').trim();
+      if (!s) return;
+      if (suggestedConflicts.some((o) => o.toLowerCase() === s.toLowerCase())) return;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    };
+    for (const k of effectiveKeys) {
+      if (!k || k === '__other__') continue;
+      for (const bkKey of genreBucketKeys(k)) for (const c of bk[bkKey] || []) push(c);
+      const g = GENRES.find((x) => x.key === k);
+      if (g) for (const s of g.subgenres) for (const c of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].conflicts) || []) push(c);
+    }
+    return out;
+  })();
+  $: otherConflicts = (() => {
+    const taken = new Set([...suggestedConflicts, ...relatedConflicts].map((x) => x.toLowerCase()));
+    const pools = [];
+    const bk = paramsPayload && paramsPayload.conflict_scales;
+    if (bk && typeof bk === 'object') for (const v of Object.values(bk)) if (Array.isArray(v)) pools.push(v);
+    const poolStatic = [];
+    for (const sd of Object.values(SUBGENRE_DATA)) for (const c of (sd && sd.conflicts) || []) poolStatic.push(c);
+    for (const g of GENRES) for (const s of g.subgenres) for (const c of (SUBGENRE_DATA[s] && SUBGENRE_DATA[s].conflicts) || []) poolStatic.push(c);
+    const out = [];
+    for (const x of [...pools.flat(), ...poolStatic]) {
+      const s = String(x || '').trim();
+      if (!s || taken.has(s.toLowerCase())) continue;
+      if (!out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
+    }
+    return out;
+  })();
+  const conflictItem = (c) => ({
+    id: 'cf:' + c,
+    label: c,
+    description: itemDesc(c, CONFLICT_FAMILIES, famKey, CONFLICT_TERMS),
+  });
+  $: smartConflictGroups = (() => {
+    const gs = [];
+    if (suggestedConflicts.length) gs.push({ label: 'Sugeridos', items: suggestedConflicts.map(conflictItem) });
+    if (relatedConflicts.length) gs.push({ label: 'Relacionados', items: relatedConflicts.map(conflictItem) });
+    if (otherConflicts.length) gs.push({ label: 'Otros', items: otherConflicts.map(conflictItem) });
+    return gs;
+  })();
+  function onSmartConflictChange(e) {
+    // Mirror the FULL chip list into the SAME storage field the real combo
+    // uses (multi-select now), via e.detail.ids ('cf:<label>' — authoritative,
+    // immune to stale reactive snapshots; see onSmartProtagChange). Routes
+    // through the SAME shared body as the hidden legacy handler so both
+    // widgets stay behaviourally identical.
+    const ids = e.detail.ids || [];
+    const known = ids
+      .filter((id) => String(id).startsWith('cf:'))
+      .map((id) => String(id).slice(3));
+    const custom = ids.filter((id) => String(id).startsWith('cx:')).map((id) => String(id).slice(3));
+    const chips = known.length || custom.length
+      ? [...known, ...custom]
+      : splitMultiList(String(e.detail.value || ''));
+    applyConflictSelection(chips);
+  }
+  let conflictSmartValue = '';
+  let conflictSmartSeeded = false;
+  $: if (!conflictSmartSeeded && !conflictSmartValue && cfg.conflict_scale) {
+    const stored = splitMultiList(cfg.conflict_scale);
+    const exists = stored.every((v) =>
+      smartConflictGroups.some((g) => g.items.some((it) => it.label === v))
+    );
+    if (stored.length && exists) {
+      conflictSmartValue = stored.join(', ');
+      conflictSmartSeeded = true;
+    }
+  }
+
+  // —— SmartCombobox #4 — "Subgenre" proof of concept —————————————————————
+  // Same component fed with the REAL subgenre taxonomy, bucketed by how close
+  // each subgenre is to the current selection:
+  //  * Sugeridos   — children of the selected genre(s) (subgenresForKeys):
+  //                  exactly what the regular Subgenre field offers.
+  //  * Relacionados— children of the closest RELATED parent genre(s). The
+  //                  affinity map below declares which genres are siblings
+  //                  (e.g. Sci-Fi and Fantasy both lean on Action & Adventure,
+  //                  so adventure's children surface here when either is
+  //                  selected). Children already shown in Sugeridos never
+  //                  repeat.
+  //  * Otros       — children of EVERY remaining genre (the rest of the
+  //                  taxonomy), minus the two buckets above.
+  // Multi-select chips (cfg.subgenre stores a comma-separated list, identical
+  // storage format to the real field). PoC only — does NOT replace the real
+  // Subgenre ComboSelect.
+  const GENRE_AFFINITY = {
+    scifi: ['adventure', 'fantasy'],          // sci-fi ↔ action/adventure (+ fantasy for science-fantasy crossover)
+    fantasy: ['adventure', 'scifi'],          // fantasy ↔ action/adventure (+ scifi)
+    mystery_thriller: ['adventure', 'drama'],
+    thriller: ['adventure', 'mystery_thriller'],
+    romance: ['drama', 'adventure'],
+    horror: ['drama', 'mystery_thriller'],
+    adventure: ['fantasy', 'scifi'],
+    historical: ['drama', 'adventure'],
+    western: ['adventure', 'historical'],
+    drama: ['romance', 'historical'],
+    comedy: ['romance', 'drama'],
+  };
+  $: smartSubSuggested = subgenresForKeys(index, effectiveKeys);
+  $: smartSubRelated = (() => {
+    const relKeys = [...new Set(effectiveKeys.flatMap((k) => GENRE_AFFINITY[k] || []))]
+      .filter((k) => !effectiveKeys.includes(k));
+    const suggLower = new Set(smartSubSuggested.map((s) => s.toLowerCase()));
+    return subgenresForKeys(index, relKeys).filter((s) => !suggLower.has(s.toLowerCase()));
+  })();
+  $: smartSubOther = (() => {
+    const taken = new Set([...smartSubSuggested, ...smartSubRelated].map((s) => s.toLowerCase()));
+    return allSubLabels.filter((s) => !taken.has(s.toLowerCase()));
+  })();
+  const subItem = (s) => ({ id: 'sg:' + s, label: s, description: hintFor(s) });
+  $: smartSubGroups = (() => {
+    const gs = [];
+    if (smartSubSuggested.length) gs.push({ label: 'Sugeridos', items: smartSubSuggested.map(subItem) });
+    if (smartSubRelated.length) gs.push({ label: 'Relacionados', items: smartSubRelated.map(subItem) });
+    if (smartSubOther.length) gs.push({ label: 'Otros', items: smartSubOther.map(subItem) });
+    return gs;
+  })();
+  function onSmartSubChange(e) {
+    // Mirror the chip list into cfg.subgenre. The chips come from
+    // e.detail.ids ('sg:<label>' — the widget's authoritative id list, immune
+    // to stale reactive snapshots inside click handlers), falling back to the
+    // emitted text for free 'cx:' chips (kept verbatim like the legacy
+    // "Other". Runs the SAME shared body as the hidden legacy handler — the
+    // parent (Config.svelte → onSubgenrePickerChange) relies on its
+    // 'subChange' dispatch to refresh derived state.
+    const ids = (e.detail.ids || []).filter((id) => String(id).startsWith('sg:')).map((id) => String(id).slice(3));
+    const chips = ids.length ? [...new Set(ids)] : splitSubgenreText(String(e.detail.value || ''));
+    applySubSelection(chips);
+  }
+  let subSmartValue = '';
+  let subSmartSeeded = false;
+  // One-shot seed of the stored subgenre chips (same rule as the other PoCs:
+  // first non-empty sync wins; afterwards the widget owns the interaction).
+  $: if (!subSmartSeeded && !subSmartValue && cfg.subgenre) {
+    const chips = splitSubgenreText(cfg.subgenre);
+    if (chips.length) {
+      subSmartValue = chips.join(', ');
+      subSmartSeeded = true;
+    }
+  }
+
+  // —— SmartCombobox #5 — "Genre" proof of concept (NO groups) —————————————
+  // All ten top-level genres as ONE flat list (grouped={false} hides the
+  // accordion headers entirely). Multi-select, mirroring cfg.type with the
+  // same comma-separated format the real Genre field stores. PoC only.
+  $: smartGenreGroups = [{
+    label: 'Géneros',
+    items: GENRES.map((g) => ({ id: 'gn:' + g.key, label: g.label, description: genreBlurb(g.key) })),
+  }];
+  function onSmartGenreChange(e) {
+    // Primary path: the keys come from e.detail.ids ('gn:<key>' per chip, 'cx:'
+    // free chips → __other__) — the widget's authoritative id list, immune to
+    // stale reactive snapshots inside click handlers. cfg.type is rebuilt from
+    // the matching catalog labels; everything else (normalization, per-chip
+    // purge of orphaned subgenres, genreChange dispatch) runs through the SAME
+    // shared body as the legacy handler.
+    const ids = e.detail.ids || [];
+    if (ids.length || !e.detail.value) {
+      let keys = ids
+        .map((id) => (String(id).startsWith('gn:') ? String(id).slice(3) : null))
+        .filter(Boolean);
+      const customCount = ids.filter((id) => String(id).startsWith('cx:')).length;
+      if (customCount) keys = [...keys, '__other__'];
+      const labelsOfIds = (e.detail.items || []).map((it) => it.label);
+      cfg.type = labelsOfIds.length ? labelsOfIds.join(', ') : '';
+      const union = subgenresForKeys(index, keys);
+      const kept = splitSubgenreText(cfg.subgenre).filter(
+        (c) => union.some((s) => s.toLowerCase() === c.toLowerCase()) || subgenreBelongsToAny(index, c, keys),
+      );
+      if (kept.join(', ') !== splitSubgenreText(cfg.subgenre).join(', ')) {
+        cfg.subgenre = kept.join(', ');
+        // Mirror the purge into the Subgenre smart widget as well, so it shows
+        // the surviving chips live.
+        subSmartValue = cfg.subgenre;
+      }
+      dispatch('genreChange', { keys, value: cfg.type });
+      return;
+    }
+    // Fallback (foreign detail shape / no ids): identical normalization, purge
+    // and dispatch as the legacy ComboSelect handler via the shared body.
+    applyGenreSelection(String(e.detail.value || ''));
+  }
+  let genreSmartValue = '';
+  let genreSmartSeeded = false;
+  $: if (!genreSmartSeeded && !genreSmartValue && cfg.type) {
+    const parts = String(cfg.type).split(',').map((x) => x.trim()).filter(Boolean);
+    if (parts.length) {
+      genreSmartValue = parts.join(', ');
+      genreSmartSeeded = true;
+    }
+  }
 
   // —— Free-text specific settings ————————————————————————————————————————
   // The textarea holds ONLY the entries that are not part of the current
@@ -485,7 +895,10 @@
   $: structureOpts = (() => {
     const vals = (paramsPayload && Array.isArray(paramsPayload.all_structure_keys) && paramsPayload.all_structure_keys.length)
       ? paramsPayload.all_structure_keys : STATIC_STRUCTURE_KEYS;
-    return vals.map((k) => ({ value: k, label: locLabel(k, 'structure.', String(k).replaceAll('_', ' ')), desc: structHints[k] || '' }));
+    // NOTE: the key is `description`, not `desc` — SmartCombobox and
+    // SmartSelect read item.description for their two-line dropdown rows and
+    // summary popovers; a misnamed field silently drops every second line.
+    return vals.map((k) => ({ value: k, label: locLabel(k, 'structure.', String(k).replaceAll('_', ' ')), description: structHints[k] || '' }));
   })();
   function onStructureChange(e) {
     cfg.structure = String(e.detail.value || '').trim();
@@ -493,96 +906,452 @@
   }
 </script>
 
-<div class="rounded-md border border-primary/35 bg-base-100/40 p-3 space-y-3">
+{#if flat}
+  <!-- Round 29: flat mode — the fields render directly as siblings of the
+       parent's grid items (no nested wrapper divs, no card border/bg, no
+       section-title header). -->
+  <div class="col-span-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
+    {#if showLegacyCombos}
+      <!-- Legacy ComboSelect versions kept behind a flag for A/B comparison;
+           they share the exact same handlers (applyGenreSelection etc.) as the
+           SmartCombobox replacements below. -->
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.genre || 'Genre'}
+        </span>
+        <ComboSelect
+          options={genreOpts}
+          multiple={true}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderGenre}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.genre}
+          ariaLabel={labels.genre || 'Genre'}
+          bind:value={cfg.type}
+          on:change={onGenreChange}
+        />
+      </div>
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.subgenre || 'Subgenre'}
+        </span>
+        <ComboSelect
+          options={subOpts}
+          otherSearchOptions={otherSubOpts}
+          multiple={true}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderSub}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.subgenre}
+          ariaLabel={labels.subgenre || 'Subgenre'}
+          bind:value={cfg.subgenre}
+          on:change={onSubChange}
+        />
+      </div>
+    {/if}
+
+    <!-- Smart Structure: single-select twin of the "Story structure" field
+         below (same structureOpts data, same cfg.structure binding). Derived
+         from SmartCombobox but simplified to select semantics: ONE value, no
+         label element — only the ⓘ icon that triggers the summary tooltip
+         remains, with the same dark popover and two-line item rows. -->
+    <div class="col-span-2">
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
+        options={structureOpts}
+        allowCustom={true}
+        otherLabel={otherLabel}
+        placeholder={labels.structurePlaceholder || ''}
+        emptyLabel={emptyLabel}
+        disabled={disabled}
+        ariaLabel={labels.structure || 'Narrative structure'}
+        bind:value={cfg.structure}
+        on:change={onStructureChange}
+      />
+    </div>
+
+    <!-- Smart Genre: all top-level genres as ONE flat list, NO group headers
+         (grouped={false}). Multi-select; writes cfg.type and purges orphaned
+         subgenres exactly like the legacy combo did. -->
+    <div class="col-span-2">
+      <span class="field-label flex items-center gap-1">
+        {labels.genre || 'Genre'}
+      </span>
+      <SmartCombobox
+        bind:value={genreSmartValue}
+        groups={smartGenreGroups}
+        grouped={false}
+        placeholder="Buscar o elegir géneros..."
+        disabled={disabled}
+        ariaLabel={labels.genre || 'Genre'}
+        on:change={onSmartGenreChange}
+      />
+    </div>
+
+    <!-- Smart Subgenre: Sugeridos = children of the selected genre(s);
+         Relacionados = children of the closest related parent genre(s)
+         (e.g. Action & Adventure for Sci-Fi / Fantasy); Otros = children of the
+         remaining genres. Multi-select chips; writes cfg.subgenre. -->
+    <div class="col-span-2">
+      <span class="field-label flex items-center gap-1">
+        {labels.subgenre || 'Subgenre'}
+      </span>
+      <SmartCombobox
+        bind:value={subSmartValue}
+        groups={smartSubGroups}
+        placeholder="Buscar o elegir subgéneros..."
+        disabled={disabled}
+        ariaLabel={labels.subgenre || 'Subgenre'}
+        on:change={onSmartSubChange}
+      />
+    </div>
+
+    <!-- Smart Conflict scale: three-bucket logic over the real conflict
+         vocabulary (Sugeridos = conflicts of the chosen subgenre(s);
+         Relacionados = rest of the chosen genre(s); Otros = the rest of the
+         global pool). Multi-select chips; writes cfg.conflict_scale as a
+         comma-separated list. -->
+    <div>
+      <span class="field-label flex items-center gap-1">
+        {labels.conflict || 'Conflict scale'}
+      </span>
+      <SmartCombobox
+        bind:value={conflictSmartValue}
+        groups={smartConflictGroups}
+        placeholder="Buscar o elegir escalas de conflicto..."
+        disabled={disabled}
+        ariaLabel={labels.conflict || 'Conflict scale'}
+        on:change={onSmartConflictChange}
+      />
+    </div>
+
+    <!-- Smart Protagonist type: same component fed with the REAL protagonist
+         catalog bucketed as Sugeridos (selected subgenre) / Relacionados (rest
+         of the selected genre) / Otros (everything else). Multi-select chips;
+         writes cfg.protagonist_type as a comma-separated list. -->
+    <div>
+      <span class="field-label flex items-center gap-1">
+        {labels.protagonist || 'Protagonist type'}
+      </span>
+      <SmartCombobox
+        bind:value={protagSmartValue}
+        groups={smartProtagGroups}
+        placeholder="Buscar o elegir tipos de protagonista..."
+        disabled={disabled}
+        ariaLabel={labels.protagonist || 'Protagonist type'}
+        on:change={onSmartProtagChange}
+      />
+    </div>
+
+    {#if showLegacyCombos}
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.conflict || 'Conflict scale'}
+          <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</span>
+        </span>
+        <ComboSelect
+          options={conflictOpts}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderConflict}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.conflict}
+          ariaLabel={labels.conflict || 'Conflict scale'}
+          bind:value={cfg.conflict_scale}
+          on:change={onConflictChange}
+        />
+      </div>
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.protagonist || 'Protagonist type'}
+          <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</span>
+        </span>
+        <ComboSelect
+          options={protagOpts}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderProtag}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.protagonist}
+          ariaLabel={labels.protagonist || 'Protagonist type'}
+          bind:value={cfg.protagonist_type}
+          on:change={onProtagChange}
+        />
+      </div>
+    {/if}
+
+    <div class="col-span-2">
+      <span class="field-label flex items-center gap-1">
+        {labels.settings || 'Specific settings'}
+        <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
+        {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
+      </span>
+      {#if showSettingShortcuts}
+        <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+          {#each settingOpts as s}
+            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
+              <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
+              {s.replaceAll('_', ' ')}
+            </label>
+          {/each}
+        </div>
+      {:else}
+        <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
+      {/if}
+      {#if hasSubgenre && modifierGroups.length}
+        <details class="mt-1.5" open>
+          <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
+          <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+            {#each modifierGroups as grp}
+              <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+                <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
+                {grp.name}
+              </label>
+            {/each}
+          </div>
+        </details>
+      {/if}
+      <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
+           storage field as the checkboxes so both stay in sync. -->
+      <textarea
+        class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1"
+        bind:value={freeSettingsText}
+        on:blur={applyFreeSettings}
+        on:input={() => { freeSettingsDirty = true; }}
+        placeholder={labels.settingsPlaceholder || 'custom_setting_per_line'}
+        disabled={disabled}
+      ></textarea>
+    </div>
+
+    <div class="col-span-2">
+      <span class="field-label flex items-center gap-1">
+        {labels.tone || 'Tone'}
+        <InfoTip text={tips.tone} label={labels.tone || 'Tone'} />
+      </span>
+      <input type="text" class="input input-sm w-full mb-1" bind:value={cfg.tone} placeholder={labels.tonePlaceholder || ''} disabled={disabled} />
+      {#if toneOpts.length}
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          {#each toneOpts as t}
+            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer">
+              <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={disabled} />
+              {t}
+            </label>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <div>
+      <span class="field-label flex items-center gap-1">
+        {labels.length || 'Story length'}
+      </span>
+      <ComboSelect
+        options={lengthOpts}
+        allowOther={false}
+        placeholder={labels.lengthNone || '—'}
+        emptyLabel={labels.lengthNone || '—'}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.length}
+        ariaLabel={labels.length || 'Story length'}
+        bind:value={cfg.story_length}
+        on:change={onLengthChange}
+      />
+    </div>
+    <div>
+      <span class="field-label flex items-center gap-1">
+        {labels.structure || 'Narrative structure'}
+      </span>
+      <ComboSelect
+        options={structureOpts}
+        allowOther={true}
+        otherLabel={otherLabel}
+        placeholder={labels.structurePlaceholder || ''}
+        emptyLabel={emptyLabel}
+        clearLabel={clearLabel}
+        disabled={disabled}
+        fieldTip={tips.structure}
+        ariaLabel={labels.structure || 'Narrative structure'}
+        bind:value={cfg.structure}
+        on:change={onStructureChange}
+      />
+    </div>
+  </div>
+{:else}
+<div class="surface-card p-3 space-y-3">
   <div class="text-xs font-semibold uppercase tracking-wide text-primary/80">
     {labels.sectionTitle || 'Genre-filtered parameters (new)'}
   </div>
 
   <div class="grid grid-cols-2 gap-3">
-    <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+    {#if showLegacyCombos}
+      <!-- Legacy ComboSelect versions kept behind a flag for A/B comparison;
+           they share the exact same handlers as the SmartCombobox replacements. -->
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.genre || 'Genre'}
+        </span>
+        <ComboSelect
+          options={genreOpts}
+          multiple={true}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderGenre}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.genre}
+          ariaLabel={labels.genre || 'Genre'}
+          bind:value={cfg.type}
+          on:change={onGenreChange}
+        />
+      </div>
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.subgenre || 'Subgenre'}
+        </span>
+        <ComboSelect
+          options={subOpts}
+          otherSearchOptions={otherSubOpts}
+          multiple={true}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderSub}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.subgenre}
+          ariaLabel={labels.subgenre || 'Subgenre'}
+          bind:value={cfg.subgenre}
+          on:change={onSubChange}
+        />
+      </div>
+    {/if}
+
+    <!-- Smart Genre (card mode): ONE flat list, no group headers
+         (grouped={false}). Multi-select; writes cfg.type. -->
+    <div class="col-span-2">
+      <span class="field-label flex items-center gap-1">
         {labels.genre || 'Genre'}
       </span>
-      <ComboSelect
-        options={genreOpts}
-        multiple={true}
-        allowOther={true}
-        otherLabel={otherLabel}
-        placeholder={placeholderGenre}
-        emptyLabel={emptyLabel}
-        clearLabel={clearLabel}
+      <SmartCombobox
+        bind:value={genreSmartValue}
+        groups={smartGenreGroups}
+        grouped={false}
+        placeholder="Buscar o elegir géneros..."
         disabled={disabled}
-        fieldTip={tips.genre}
         ariaLabel={labels.genre || 'Genre'}
-        bind:value={cfg.type}
-        on:change={onGenreChange}
+        on:change={onSmartGenreChange}
       />
     </div>
-    <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+
+    <!-- Smart Subgenre (card mode): children of the selected genre(s) /
+         of the related parent genre(s) / of the rest. Writes cfg.subgenre. -->
+    <div class="col-span-2">
+      <span class="field-label flex items-center gap-1">
         {labels.subgenre || 'Subgenre'}
       </span>
-      <ComboSelect
-        options={subOpts}
-        otherSearchOptions={otherSubOpts}
-        multiple={true}
-        allowOther={true}
-        otherLabel={otherLabel}
-        placeholder={placeholderSub}
-        emptyLabel={emptyLabel}
-        clearLabel={clearLabel}
+      <SmartCombobox
+        bind:value={subSmartValue}
+        groups={smartSubGroups}
+        placeholder="Buscar o elegir subgéneros..."
         disabled={disabled}
-        fieldTip={tips.subgenre}
         ariaLabel={labels.subgenre || 'Subgenre'}
-        bind:value={cfg.subgenre}
-        on:change={onSubChange}
+        on:change={onSmartSubChange}
       />
     </div>
+
+    <!-- Smart Conflict scale (card mode): three buckets over the real
+         conflict vocabulary; multi-select chips; writes cfg.conflict_scale
+         as a comma-separated list. -->
+    <div>
+      <span class="field-label flex items-center gap-1">
+        {labels.conflict || 'Conflict scale'}
+      </span>
+      <SmartCombobox
+        bind:value={conflictSmartValue}
+        groups={smartConflictGroups}
+        placeholder="Buscar o elegir escalas de conflicto..."
+        disabled={disabled}
+        ariaLabel={labels.conflict || 'Conflict scale'}
+        on:change={onSmartConflictChange}
+      />
+    </div>
+
+    <!-- Smart Protagonist type (card mode): Sugeridos / Relacionados / Otros
+         over the REAL protagonist catalog. Multi-select chips; writes
+         cfg.protagonist_type as a comma-separated list. -->
+    <div>
+      <span class="field-label flex items-center gap-1">
+        {labels.protagonist || 'Protagonist type'}
+      </span>
+      <SmartCombobox
+        bind:value={protagSmartValue}
+        groups={smartProtagGroups}
+        placeholder="Buscar o elegir tipos de protagonista..."
+        disabled={disabled}
+        ariaLabel={labels.protagonist || 'Protagonist type'}
+        on:change={onSmartProtagChange}
+      />
+    </div>
+
     <!-- Round 26: the "From genres:" info box under the Genre combobox was
          removed per user request (class rounded border ... opacity-70). -->
 
-    <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
-        {labels.conflict || 'Conflict scale'}
-        <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</span>
-      </span>
-      <ComboSelect
-        options={conflictOpts}
-        allowOther={true}
-        otherLabel={otherLabel}
-        placeholder={placeholderConflict}
-        emptyLabel={emptyLabel}
-        clearLabel={clearLabel}
-        disabled={disabled}
-        fieldTip={tips.conflict}
-        ariaLabel={labels.conflict || 'Conflict scale'}
-        bind:value={cfg.conflict_scale}
-        on:change={onConflictChange}
-      />
-    </div>
-    <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
-        {labels.protagonist || 'Protagonist type'}
-        <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</span>
-      </span>
-      <ComboSelect
-        options={protagOpts}
-        allowOther={true}
-        otherLabel={otherLabel}
-        placeholder={placeholderProtag}
-        emptyLabel={emptyLabel}
-        clearLabel={clearLabel}
-        disabled={disabled}
-        fieldTip={tips.protagonist}
-        ariaLabel={labels.protagonist || 'Protagonist type'}
-        bind:value={cfg.protagonist_type}
-        on:change={onProtagChange}
-      />
-    </div>
+    {#if showLegacyCombos}
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.conflict || 'Conflict scale'}
+          <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{conflictOpts.length}</span>
+        </span>
+        <ComboSelect
+          options={conflictOpts}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderConflict}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.conflict}
+          ariaLabel={labels.conflict || 'Conflict scale'}
+          bind:value={cfg.conflict_scale}
+          on:change={onConflictChange}
+        />
+      </div>
+      <div>
+        <span class="field-label flex items-center gap-1">
+          {labels.protagonist || 'Protagonist type'}
+          <span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{protagOpts.length}</span>
+        </span>
+        <ComboSelect
+          options={protagOpts}
+          allowOther={true}
+          otherLabel={otherLabel}
+          placeholder={placeholderProtag}
+          emptyLabel={emptyLabel}
+          clearLabel={clearLabel}
+          disabled={disabled}
+          fieldTip={tips.protagonist}
+          ariaLabel={labels.protagonist || 'Protagonist type'}
+          bind:value={cfg.protagonist_type}
+          on:change={onProtagChange}
+        />
+      </div>
+    {/if}
   </div>
 
   <div>
-    <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+    <span class="field-label flex items-center gap-1">
       {labels.settings || 'Specific settings'}
       <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
       {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
@@ -590,7 +1359,7 @@
     {#if showSettingShortcuts}
       <div class="grid grid-cols-2 gap-x-3 gap-y-1">
         {#each settingOpts as s}
-          <label class="flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
+          <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
             <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
             {s.replaceAll('_', ' ')}
           </label>
@@ -604,7 +1373,7 @@
         <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
         <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
           {#each modifierGroups as grp}
-            <label class="flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
               <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
               {grp.name}
             </label>
@@ -628,7 +1397,7 @@
   <!-- Tone: free text + per-subgenre suggestion chips (from the resolved
        catalog). Same comma-separated storage as the legacy field. -->
   <div>
-    <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+    <span class="field-label flex items-center gap-1">
       {labels.tone || 'Tone'}
       <InfoTip text={tips.tone} label={labels.tone || 'Tone'} />
     </span>
@@ -636,7 +1405,7 @@
     {#if toneOpts.length}
       <div class="flex flex-wrap gap-x-3 gap-y-1">
         {#each toneOpts as t}
-          <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+          <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer">
             <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={disabled} />
             {t}
           </label>
@@ -650,7 +1419,7 @@
        preset and a default structure when the current one is empty/auto. -->
   <div class="grid grid-cols-2 gap-3">
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.length || 'Story length'}
       </span>
       <ComboSelect
@@ -667,7 +1436,7 @@
       />
     </div>
     <div>
-      <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">
+      <span class="field-label flex items-center gap-1">
         {labels.structure || 'Narrative structure'}
       </span>
       <ComboSelect
@@ -686,3 +1455,4 @@
     </div>
   </div>
 </div>
+{/if}

@@ -61,20 +61,62 @@ type StoryConfig struct {
 	WritingPOV            string `json:"writing_pov"` // 叙述视角，如第一人称女主、第三人称限知等
 }
 
-// EffectiveConflict returns the conflict scale, resolving the "other" option.
-func (s *StoryConfig) EffectiveConflict() string {
-	if s.ConflictScale == "other" || s.ConflictScale == "" {
-		return s.ConflictOther
+// splitMultiField parses a comma-separated multi-value field (the wire format
+// shared with the frontend for conflict_scale / protagonist_type, which now
+// accept several picks). Empty parts are dropped and values are trimmed;
+// the result preserves order and removes case-insensitive duplicates.
+func splitMultiField(v string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, p := range strings.Split(v, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		k := strings.ToLower(p)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, p)
 	}
-	return s.ConflictScale
+	return out
 }
 
-// EffectiveProtagonist returns the protagonist type, resolving the "other" option.
-func (s *StoryConfig) EffectiveProtagonist() string {
-	if s.ProtagonistType == "other" || s.ProtagonistType == "" {
-		return s.ProtagonistOther
+// effectiveMulti resolves a stored comma-separated multi-select field: each
+// "other" entry is replaced by the custom text (when present), empties and
+// duplicates are dropped, and order is preserved. Works for both
+// conflict_scale/conflict_other and protagonist_type/protagonist_other.
+func effectiveMulti(stored, custom string) string {
+	vals := []string{}
+	for _, v := range splitMultiField(stored) {
+		if v == "other" {
+			if c := strings.TrimSpace(custom); c != "" {
+				vals = append(vals, c)
+			}
+			continue
+		}
+		vals = append(vals, v)
 	}
-	return s.ProtagonistType
+	if strings.TrimSpace(stored) == "" {
+		if c := strings.TrimSpace(custom); c != "" {
+			vals = append(vals, c)
+		}
+	}
+	return strings.Join(vals, ", ")
+}
+
+// EffectiveConflict returns the conflict scale(s), resolving every "other"
+// option against ConflictOther. Multi-value aware: the stored field may hold
+// a comma-separated list of picks.
+func (s *StoryConfig) EffectiveConflict() string {
+	return effectiveMulti(s.ConflictScale, s.ConflictOther)
+}
+
+// EffectiveProtagonist returns the protagonist type(s), resolving every
+// "other" option against ProtagonistOther. Multi-value aware.
+func (s *StoryConfig) EffectiveProtagonist() string {
+	return effectiveMulti(s.ProtagonistType, s.ProtagonistOther)
 }
 
 // EffectiveMotif returns the literary motif. Theme and Motif are merged in the
