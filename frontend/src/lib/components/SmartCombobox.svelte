@@ -506,7 +506,7 @@
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
           {#if selectedIds.length > 0}
-            <span class="absolute -top-1 -right-1 bg-blue-600 text-white rounded-full w-3.5 h-3.5 text-[8px] flex items-center justify-center font-bold">{selectedIds.length}</span>
+            <span class="absolute -top-1 -right-1 bg-primary text-primary-content rounded-full w-3.5 h-3.5 text-[8px] flex items-center justify-center font-bold">{selectedIds.length}</span>
           {/if}
         </button>
 
@@ -576,8 +576,8 @@
           tabindex="-1"
         >
           <div class="flex items-center gap-2">
-            <span class="w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold text-xs">+</span>
-            <span>Añadir "<strong class="text-blue-600 dark:text-blue-400">{searchQuery}</strong>"</span>
+            <span class="w-5 h-5 rounded-md bg-primary text-primary-content flex items-center justify-center font-bold text-xs">+</span>
+            <span>Añadir "<strong class="text-primary">{searchQuery}</strong>"</span>
           </div>
           <span class="text-[10px] bg-neutral-200 dark:bg-base-300 text-neutral-700 dark:text-neutral-300 px-2 py-0.5 rounded font-mono">Enter ↵</span>
         </div>

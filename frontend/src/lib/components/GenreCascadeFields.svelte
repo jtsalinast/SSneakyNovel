@@ -19,6 +19,7 @@
   // `bind:cfg`, so saving behaves identically whichever block the user edits.
   import ComboSelect from './ComboSelect.svelte';
   import SmartCombobox from './SmartCombobox.svelte';
+  import SmartSelect from './SmartSelect.svelte';
   import InfoTip from './InfoTip.svelte';
   import { createEventDispatcher } from 'svelte';
   import { get } from 'svelte/store';
@@ -894,7 +895,10 @@
   $: structureOpts = (() => {
     const vals = (paramsPayload && Array.isArray(paramsPayload.all_structure_keys) && paramsPayload.all_structure_keys.length)
       ? paramsPayload.all_structure_keys : STATIC_STRUCTURE_KEYS;
-    return vals.map((k) => ({ value: k, label: locLabel(k, 'structure.', String(k).replaceAll('_', ' ')), desc: structHints[k] || '' }));
+    // NOTE: the key is `description`, not `desc` — SmartCombobox and
+    // SmartSelect read item.description for their two-line dropdown rows and
+    // summary popovers; a misnamed field silently drops every second line.
+    return vals.map((k) => ({ value: k, label: locLabel(k, 'structure.', String(k).replaceAll('_', ' ')), description: structHints[k] || '' }));
   })();
   function onStructureChange(e) {
     cfg.structure = String(e.detail.value || '').trim();
@@ -951,6 +955,26 @@
         />
       </div>
     {/if}
+
+    <!-- Smart Structure: single-select twin of the "Story structure" field
+         below (same structureOpts data, same cfg.structure binding). Derived
+         from SmartCombobox but simplified to select semantics: ONE value, no
+         label element — only the ⓘ icon that triggers the summary tooltip
+         remains, with the same dark popover and two-line item rows. -->
+    <div class="col-span-2">
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
+        options={structureOpts}
+        allowCustom={true}
+        otherLabel={otherLabel}
+        placeholder={labels.structurePlaceholder || ''}
+        emptyLabel={emptyLabel}
+        disabled={disabled}
+        ariaLabel={labels.structure || 'Narrative structure'}
+        bind:value={cfg.structure}
+        on:change={onStructureChange}
+      />
+    </div>
 
     <!-- Smart Genre: all top-level genres as ONE flat list, NO group headers
          (grouped={false}). Multi-select; writes cfg.type and purges orphaned
