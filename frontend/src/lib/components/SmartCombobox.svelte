@@ -188,22 +188,120 @@
   let lastEmitted = null;
 
   function emitValue() {
-    const v = selectedItems.map((it) => it.label).join(sep);
+    // Selection-driven value snapshot computed DIRECTLY from `selectedIds` —
+    // never from the reactive `selectedItems`. Reason (the real "smart genre
+    // ignores selections / updates lists only with 2+ chips" bug): inside a
+    // click handler Svelte 4 does not run derived `$:` statements between the
+    // `selectedIds` assignment and this call, so `selectedItems` is still the
+    // STALE pre-click list. The emitted string therefore lacked the just-added
+    // chip, the parent wrote that stale text into cfg.type, and every derived
+    // list (subgenres, conflict scale, protagonist type, settings, tone) was
+    // filtered WITHOUT the newest selection until the next interaction pushed
+    // it in. Deriving the labels here keeps emission truthful on the first
+    // click.
+    const v = selectedIds
+      .map((id) => itemLabelById(id))
+      .filter(Boolean)
+      .map((s) => s.trim())
+      .join(sep)
+      .trim();
     lastEmitted = v;
     if (v !== value) value = v;
-    dispatch('change', { value: v, ids: [...selectedIds], items: selectedItems });
+    // `selectedIds` already IS the source of truth here — re-adopting from
+    // `value` would be a no-op at best, and could clobber it when the parent's
+    // change handler normalizes the bound string before flushing back.
+    // Items resolved by id (never the possibly-stale reactive list).
+    const items = selectedIds.map((id) => findItemById(id)).filter(Boolean);
+    dispatch('change', { value: v, ids: [...selectedIds], items });
   }
 
-  $: if (value !== lastEmitted) {
+  function findItemById(id) {
+    for (const g of allGroups) {
+      const it = g.items.find((x) => x.id === id);
+      if (it) return it;
+    }
+    return null;
+  }
+
+  // Adopt an EXTERNALLY-written `value` (parent handler mirroring a sibling
+  // widget's selection into the shared storage field, one-shot seeds, etc.):
+  // resolve the comma-separated labels back to catalog ids so the chips/radios
+  // update live — exactly what the legacy ComboSelect gets for free via
+  // bind:value. Guarded against echo: skipped when the string is the one this
+  // instance just emitted itself.
+  function syncFromValue() {
+    if (normalizedEq(value, lastEmitted)) return;
     const adopted = [...valueIds];
     if (!adopted.length && !String(value || '').trim() && initialIds && initialIds.length) {
       // Mount-time demo preselection: nothing stored yet but initialIds given
       // (mock mode ships [1, 5] = React.js + Node.js like the prototype).
       selectedIds = [...initialIds];
     } else {
-      selectedIds = adopted;
+      // Echo guard #2: when the parent normalizes/echoes the bound string
+      // back at us (e.g. reordering known genres first and appending unknown
+      // free-text entries), some labels may fail to resolve against the
+      // catalog in that same flush. Adopting blindly would silently DROP the
+      // chips the user just added — exactly what the legacy ComboSelect never
+      // does, because bind:value there only carries a display string and the
+      // real selection is its internal state. So we only clobber the current
+      // selection when BOTH conditions hold:
+      //   1. The incoming string is NOT just an echo of what this instance
+      //      last emitted (checked with normalizedEq above — the parent's
+      //      reorder/normalize pass makes raw strings differ while the label
+      //      SET stays identical).
+      //   2. The adoption loses NOTHING: either every currently-selected id is
+      //      still resolvable (`!lost.length`) or the incoming string is a
+      //      genuine full replacement whose labels ALL resolve in the catalog
+      //      (`fullyResolved`). An unresolvable token means either a custom
+      //      chip still pending creation or a mid-flush catalog; in that case
+      //      keep the current selection untouched. NOTE: previously the guard
+      //      accepted "no losses" on its own, which let a PARTIALLY resolvable
+      //      stale echo (missing the newest chip) overwrite the live selection
+      //      — the other half of the "smart genre ignores my picks" bug.
+      const lost = selectedIds.filter((id) => !adopted.includes(id));
+      const wantedLabels = splitLabels(value);
+      const adoptedLabels = splitLabels(adopted.map((id) => itemLabelById(id)).join(sep));
+      const fullyResolved = wantedLabels.length === adoptedLabels.length;
+      if (!lost.length && fullyResolved) {
+        // Nothing to lose and everything resolves → adopt freely (also lets
+        // chips whose option temporarily vanished from a rebuilt bucket come
+        // back once it reappears).
+        selectedIds = adopted;
+      } else if (lost.length && fullyResolved && wantedLabels.length > 0) {
+        // Real external replacement (e.g. a sibling widget wrote a different
+        // complete selection): adopt only when EVERY wanted label resolved.
+        selectedIds = adopted;
+      }
+      // Otherwise: partial/unresolvable adoption → no-op (current selection
+      // remains source of truth until a real external change arrives).
     }
   }
+
+  function itemLabelById(id) {
+    for (const g of allGroups) {
+      const it = g.items.find((x) => x.id === id);
+      if (it) return it.label;
+    }
+    return '';
+  }
+
+  // Label-set helpers used by the echo guards above: compare selections by
+  // their normalized, sorted label lists so ordering/spacing differences in
+  // the bound string never look like a real external change.
+  function splitLabels(s) {
+    return String(s || '')
+      .split(sep)
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean)
+      .sort();
+  }
+  function normalizedEq(a, b) {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    return splitLabels(a).join('\u0000') === splitLabels(b).join('\u0000');
+  }
+
+  $: if (value !== lastEmitted) syncFromValue();
 
   function closeDropdownOnly() {
     isOpen = false;

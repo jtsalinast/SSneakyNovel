@@ -282,6 +282,9 @@
       (p) => !GENRES.some((x) => x.label.toLowerCase() === p.toLowerCase() || x.key.toLowerCase() === p.toLowerCase()),
     );
     cfg.type = [...parts.filter((p) => !unknown.includes(p)), ...unknown].join(', ');
+    // Keep the Genre Smart PoC in sync when the legacy combo is the widget the
+    // user interacted with (its chips re-adopt the normalized label list).
+    genreSmartValue = cfg.type;
     // Point-7 behaviour (round 22, multi-subgenre): keep ONLY the chips that
     // still belong to the new genre union; drop the ones that don't. If every
     // chip is orphaned the field resets to Auto — same semantics as before,
@@ -293,6 +296,9 @@
     );
     if (kept.join(', ') !== splitSubgenreText(cfg.subgenre).join(', ')) {
       cfg.subgenre = kept.join(', ');
+      // Mirror the purge into the Subgenre Smart PoC as well, so both widgets
+      // show the same surviving chips live.
+      subSmartValue = cfg.subgenre;
     }
     dispatch('genreChange', { keys, value: cfg.type });
   }
@@ -419,11 +425,24 @@
     // Multi-select: normalize the joined chip list ("Cozy Mystery, Noir").
     const chips = splitSubgenreText(String(e.detail.value || ''));
     cfg.subgenre = chips.join(', ');
+    // Keep the Subgenre Smart PoC in sync when the legacy combo is the widget
+    // the user interacted with (its chips re-adopt the normalized list).
+    subSmartValue = cfg.subgenre;
     const first = chips[0] || '';
     dispatch('subChange', { value: cfg.subgenre, chips, parent: resolveParent(index, first) });
   }
-  function onConflictChange(e) { cfg.conflict_scale = String(e.detail.value || '').trim(); }
-  function onProtagChange(e) { cfg.protagonist_type = String(e.detail.value || '').trim(); }
+  function onConflictChange(e) {
+    cfg.conflict_scale = String(e.detail.value || '').trim();
+    // Keep the Smart PoC widget in sync when the legacy combo is the one the
+    // user interacted with (bind:value only updates the smart's bound value;
+    // the handler must forward it so its chips/radio re-adopt the pick).
+    conflictSmartValue = cfg.conflict_scale;
+  }
+  function onProtagChange(e) {
+    cfg.protagonist_type = String(e.detail.value || '').trim();
+    // Same two-way sync as above for the Protagonist Smart PoC.
+    protagSmartValue = cfg.protagonist_type;
+  }
 
   // —— SmartCombobox demo block (mock data, below Genre/Subgenre) ————————
   // Advanced multi-select combobox adapted from the user's Alpine prototype.
@@ -539,9 +558,15 @@
     return gs;
   })();
   function onSmartProtagChange(e) {
-    // PoC: mirror the choice into the SAME storage field the real combo uses,
-    // so both stay in sync without touching anything outside this component.
-    cfg.protagonist_type = String(e.detail.value || '').trim();
+    // Mirror the choice into the SAME storage field the real combo uses. The
+    // value comes from e.detail.ids ('pt:<label>' — the widget's authoritative
+    // id list), never from the possibly-stale reactive `items` snapshot; free
+    // 'cx:' chips fall back to the emitted text (kept verbatim, like the
+    // legacy "Other" behaviour). No dispatch: the legacy handler emits none,
+    // so there is no external listener to feed.
+    const ids = e.detail.ids || [];
+    const pt = ids.find((id) => String(id).startsWith('pt:'));
+    cfg.protagonist_type = pt ? String(pt).slice(3) : String(e.detail.value || '').trim();
   }
   // One-shot seed: show the already-stored protagonist (if any) as the active
   // radio option the first time the catalog is available. After that the user
@@ -627,8 +652,13 @@
     return gs;
   })();
   function onSmartConflictChange(e) {
-    // PoC: mirror the choice into the SAME storage field the real combo uses.
-    cfg.conflict_scale = String(e.detail.value || '').trim();
+    // Mirror the choice into the SAME storage field the real combo uses, via
+    // e.detail.ids ('cf:<label>' — authoritative, immune to stale reactive
+    // snapshots; see onSmartProtagChange). No dispatch: the legacy handler
+    // emits none, so there is no external listener to feed.
+    const ids = e.detail.ids || [];
+    const cf = ids.find((id) => String(id).startsWith('cf:'));
+    cfg.conflict_scale = cf ? String(cf).slice(3) : String(e.detail.value || '').trim();
   }
   let conflictSmartValue = '';
   let conflictSmartSeeded = false;
@@ -689,10 +719,19 @@
     return gs;
   })();
   function onSmartSubChange(e) {
-    // PoC: mirror the chip list into cfg.subgenre using the exact same
-    // normalization the real onSubChange applies (dedup + comma join).
-    const chips = splitSubgenreText(String(e.detail.value || ''));
+    // Mirror the chip list into cfg.subgenre. The chips come from
+    // e.detail.ids ('sg:<label>' — the widget's authoritative id list, immune
+    // to stale reactive snapshots inside click handlers), falling back to the
+    // emitted text for free 'cx:' chips (kept verbatim like the legacy
+    // "Other"). Then emit the SAME 'subChange' event the legacy handler
+    // dispatches — the parent (Config.svelte → onSubgenrePickerChange) relies
+    // on it to refresh its derived state; without it the external lists went
+    // stale.
+    const ids = (e.detail.ids || []).filter((id) => String(id).startsWith('sg:')).map((id) => String(id).slice(3));
+    const chips = ids.length ? [...new Set(ids)] : splitSubgenreText(String(e.detail.value || ''));
     cfg.subgenre = chips.join(', ');
+    const first = chips[0] || '';
+    dispatch('subChange', { value: cfg.subgenre, chips, parent: resolveParent(index, first) });
   }
   let subSmartValue = '';
   let subSmartSeeded = false;
@@ -715,7 +754,46 @@
     items: GENRES.map((g) => ({ id: 'gn:' + g.key, label: g.label, description: genreBlurb(g.key) })),
   }];
   function onSmartGenreChange(e) {
-    cfg.type = String(e.detail.value || '').trim();
+    // Mirror the selection into cfg.type AND replicate the full legacy
+    // onGenreChange side-effects: per-chip purge of subgenres orphaned by the
+    // new genre union, plus the 'genreChange' dispatch that keeps the parent's
+    // derived state (selectedGenreKeys, randomize, info box) coherent.
+    // The keys come from e.detail.ids ('gn:<key>' per chip) — the widget's own
+    // authoritative id list — instead of re-parsing the bound string, so a
+    // single click is enough to refresh every dependent list (the stale-echo
+    // "last genre ignored" bug). Falls back to label parsing for free-text
+    // custom chips whose id starts with 'cx:' (mapped to __other__ like the
+    // legacy handler does with unknown labels).
+    let keys = (e.detail.ids || [])
+      .map((id) => (String(id).startsWith('gn:') ? String(id).slice(3) : null))
+      .filter(Boolean);
+    const customCount = (e.detail.ids || []).filter((id) => String(id).startsWith('cx:')).length;
+    if (customCount) keys = [...keys, '__other__'];
+    if (!keys.length) {
+      // Empty selection or foreign detail shape: rebuild from the text, same
+      // normalization the legacy onGenreChange applies.
+      const v = String(e.detail.value || '').trim();
+      const parts = v.split(',').map((x) => x.trim()).filter(Boolean);
+      const unknown = parts.filter(
+        (p) => !GENRES.some((x) => x.label.toLowerCase() === p.toLowerCase() || x.key.toLowerCase() === p.toLowerCase()),
+      );
+      cfg.type = [...parts.filter((p) => !unknown.includes(p)), ...unknown].join(', ');
+      keys = parts.map(labelToKey);
+    } else {
+      const labelsOfIds = (e.detail.items || []).map((it) => it.label);
+      cfg.type = labelsOfIds.length ? labelsOfIds.join(', ') : '';
+    }
+    const union = subgenresForKeys(index, keys);
+    const kept = splitSubgenreText(cfg.subgenre).filter(
+      (c) => union.some((s) => s.toLowerCase() === c.toLowerCase()) || subgenreBelongsToAny(index, c, keys),
+    );
+    if (kept.join(', ') !== splitSubgenreText(cfg.subgenre).join(', ')) {
+      cfg.subgenre = kept.join(', ');
+      // Mirror the purge into the Subgenre Smart PoC as well, so both widgets
+      // show the same surviving chips live.
+      subSmartValue = cfg.subgenre;
+    }
+    dispatch('genreChange', { keys, value: cfg.type });
   }
   let genreSmartValue = '';
   let genreSmartSeeded = false;
