@@ -452,20 +452,20 @@
     class="min-h-[52px] border rounded-xl px-3 py-2 flex flex-wrap items-center gap-1.5 transition-all duration-150
            {disabled ? 'opacity-60 cursor-not-allowed bg-base-200' : 'cursor-pointer'}
            {isOpen
-             ? 'ring-2 ring-black/[0.08] dark:ring-white/15 border-neutral-400 dark:border-neutral-500 bg-white dark:bg-base-100 shadow-sm'
-             : 'border-neutral-200/80 dark:border-base-300 bg-neutral-50/50 dark:bg-base-200/50 hover:bg-neutral-50 dark:hover:bg-base-200 hover:border-neutral-300 dark:hover:border-base-300'}"
+             ? 'ring-2 ring-black/[0.08] border-neutral-400 bg-white shadow-sm'
+             : 'border-neutral-200/80 bg-neutral-50/50 hover:bg-neutral-50 hover:border-neutral-300'}"
   >
     <!-- Selected chips (Notion-style pills) -->
     {#each selectedItems as item (item.id)}
       <span
-        class="inline-flex items-center gap-1.5 bg-neutral-100 hover:bg-neutral-200/70 dark:bg-base-300 dark:hover:bg-base-300/70 text-neutral-800 dark:text-base-content border border-black/[0.06] dark:border-white/10 pl-2.5 pr-1.5 py-1 rounded-lg text-xs font-medium transition-colors animate-pop"
+        class="inline-flex items-center gap-1.5 bg-neutral-100 hover:bg-neutral-200/70 text-neutral-800 border border-black/[0.06] pl-2.5 pr-1.5 py-1 rounded-lg text-xs font-medium transition-colors animate-pop"
       >
         <span class="w-1.5 h-1.5 rounded-full bg-neutral-400 shrink-0"></span>
         <span class="max-w-[140px] truncate">{item.label}</span>
         <button
           type="button"
           on:click|stopPropagation={() => removeItem(item.id)}
-          class="w-4 h-4 rounded-md flex items-center justify-center text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+          class="w-4 h-4 rounded-md flex items-center justify-center text-neutral-400 hover:text-neutral-900 hover:bg-black/5 transition-colors"
           aria-label="Quitar {item.label}"
         >
           <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
@@ -489,7 +489,7 @@
         on:keydown.escape={closeDropdownOnly}
         placeholder={selectedIds.length > 0 ? addPlaceholder : placeholder}
         disabled={disabled}
-        class="w-full border-none outline-none text-xs font-medium text-neutral-900 dark:text-base-content bg-transparent py-1 pl-1 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
+        class="w-full border-none outline-none text-xs font-medium text-neutral-900 bg-transparent py-1 pl-1 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
       />
     </div>
 
@@ -501,7 +501,7 @@
           on:click|stopPropagation={toggleTooltip}
           class="p-1.5 rounded-lg transition-colors relative flex items-center justify-center
                  opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100
-                 {isTooltipOpen ? 'bg-neutral-200/60 dark:bg-base-300 text-neutral-900 dark:text-white' : 'hover:bg-neutral-200/50 dark:hover:bg-base-300 hover:text-neutral-700 dark:hover:text-neutral-200'}"
+                 {isTooltipOpen ? 'bg-neutral-200/60 text-neutral-900' : 'hover:bg-neutral-200/50 hover:text-neutral-700'}"
           title="Resumen de selección"
           aria-label="Resumen de selección"
         >
@@ -544,7 +544,7 @@
         <button
           type="button"
           on:click|stopPropagation={clearAll}
-          class="p-1.5 rounded-lg hover:bg-neutral-200/50 dark:hover:bg-base-300 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
+          class="p-1.5 rounded-lg hover:bg-neutral-200/50 hover:text-neutral-700 transition-colors"
           title="Limpiar todo"
           aria-label="Limpiar todo"
         >
@@ -555,7 +555,7 @@
       <button
         type="button"
         on:click|stopPropagation={toggleDropdown}
-        class="p-1.5 rounded-lg hover:bg-neutral-200/50 dark:hover:bg-base-300 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
+        class="p-1.5 rounded-lg hover:bg-neutral-200/50 hover:text-neutral-700 transition-colors"
         aria-label="Abrir lista"
       >
         <svg class="w-3.5 h-3.5 transition-transform duration-200 {isOpen ? 'rotate-180' : ''}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
@@ -565,14 +565,14 @@
 
   <!-- Dropdown panel -->
   {#if isOpen}
-    <div class="absolute left-0 right-0 mt-1.5 bg-white dark:bg-base-100 border border-black/[0.08] dark:border-base-300 rounded-xl shadow-[0_12px_32px_rgba(0,0,0,0.08)] dark:shadow-[0_12px_32px_rgba(0,0,0,0.4)] z-50 max-h-80 overflow-y-auto p-1.5 animate-pop">
+    <div class="absolute left-0 right-0 mt-1.5 bg-white border border-black/[0.08] rounded-xl shadow-[0_12px_32px_rgba(0,0,0,0.08)],0,0,0.4)] z-50 max-h-80 overflow-y-auto p-1.5 animate-pop">
       {#if searchQuery.trim() && !hasExactMatch}
         <!-- Create-custom row -->
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
         <div
           on:click={addCustomItem}
-          class="mb-1 p-2.5 bg-neutral-50 dark:bg-base-200 hover:bg-neutral-100 dark:hover:bg-base-300 border border-neutral-200/80 dark:border-base-300 rounded-lg cursor-pointer transition-all flex items-center justify-between text-neutral-900 dark:text-base-content text-xs font-medium"
+          class="mb-1 p-2.5 bg-neutral-50 hover:bg-neutral-100 border border-neutral-200/80 rounded-lg cursor-pointer transition-all flex items-center justify-between text-neutral-900 text-xs font-medium"
           role="button"
           tabindex="-1"
         >
@@ -580,7 +580,7 @@
             <span class="w-5 h-5 rounded-md bg-primary text-primary-content flex items-center justify-center font-bold text-xs">+</span>
             <span>Añadir "<strong class="text-primary">{searchQuery}</strong>"</span>
           </div>
-          <span class="text-[10px] bg-neutral-200 dark:bg-base-300 text-neutral-700 dark:text-neutral-300 px-2 py-0.5 rounded font-mono">Enter ↵</span>
+          <span class="text-[10px] bg-neutral-200 text-neutral-700 px-2 py-0.5 rounded font-mono">Enter ↵</span>
         </div>
       {/if}
 
@@ -600,7 +600,7 @@
               type="button"
               on:mousedown|stopPropagation={(e) => e.preventDefault()}
               on:click|stopPropagation|preventDefault={() => toggleGroup(group.label)}
-              class="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-neutral-100/70 dark:hover:bg-base-200 rounded-md text-[11px] font-semibold text-neutral-400 dark:text-neutral-500 tracking-wider uppercase transition-colors"
+              class="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-neutral-100/70 rounded-md text-[11px] font-semibold text-neutral-400 tracking-wider uppercase transition-colors"
             >
               <span>{group.label} ({group.items.length})</span>
               <svg class="w-3 h-3 transition-transform duration-200 text-neutral-400 {$collapsed.has(group.label) ? '' : 'rotate-180'}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
@@ -616,8 +616,8 @@
                     on:click|stopPropagation={() => toggleItem(item.id)}
                     class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-colors text-xs group
                            {checkedBox
-                             ? 'bg-neutral-100/80 dark:bg-base-300/60 text-neutral-900 dark:text-base-content'
-                             : 'hover:bg-neutral-50 dark:hover:bg-base-200 text-neutral-700 dark:text-neutral-300'}"
+                             ? 'bg-neutral-100/80 text-neutral-900'
+                             : 'hover:bg-neutral-50 text-neutral-700'}"
                     role={single ? 'radio' : 'checkbox'}
                     tabindex="-1"
                     aria-checked={checkedBox}
@@ -626,19 +626,19 @@
                     <div
                       class="w-4 h-4 {single ? 'rounded-full' : 'rounded'} border flex items-center justify-center transition-all shrink-0
                              {checkedBox
-                               ? 'bg-neutral-900 dark:bg-neutral-100 border-neutral-900 dark:border-neutral-100 text-white dark:text-neutral-900'
-                               : 'border-neutral-300 dark:border-base-300 bg-white dark:bg-base-100 group-hover:border-neutral-400'}"
+                               ? 'bg-neutral-900 border-neutral-900 text-white'
+                               : 'border-neutral-300 bg-white group-hover:border-neutral-400'}"
                     >
                       {#if checkedBox}
                         {#if single}
-                          <span class="w-1.5 h-1.5 rounded-full bg-white dark:bg-neutral-900"></span>
+                          <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
                         {:else}
                           <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path></svg>
                         {/if}
                       {/if}
                     </div>
                     <div class="flex flex-col flex-1 min-w-0">
-                      <span class="font-medium truncate text-neutral-800 dark:text-neutral-100">{item.label}</span>
+                      <span class="font-medium truncate text-neutral-800">{item.label}</span>
                       {#if item.description}
                         <span class="text-[11px] text-neutral-400 truncate leading-tight font-normal">{item.description}</span>
                       {/if}
@@ -660,8 +660,8 @@
               on:click|stopPropagation={() => toggleItem(item.id)}
               class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-colors text-xs group
                      {checkedBox
-                       ? 'bg-neutral-100/80 dark:bg-base-300/60 text-neutral-900 dark:text-base-content'
-                       : 'hover:bg-neutral-50 dark:hover:bg-base-200 text-neutral-700 dark:text-neutral-300'}"
+                       ? 'bg-neutral-100/80 text-neutral-900'
+                       : 'hover:bg-neutral-50 text-neutral-700'}"
               role={single ? 'radio' : 'checkbox'}
               tabindex="-1"
               aria-checked={checkedBox}
@@ -669,19 +669,19 @@
               <div
                 class="w-4 h-4 {single ? 'rounded-full' : 'rounded'} border flex items-center justify-center transition-all shrink-0
                        {checkedBox
-                         ? 'bg-neutral-900 dark:bg-neutral-100 border-neutral-900 dark:border-neutral-100 text-white dark:text-neutral-900'
-                         : 'border-neutral-300 dark:border-base-300 bg-white dark:bg-base-100 group-hover:border-neutral-400'}"
+                         ? 'bg-neutral-900 border-neutral-900 text-white'
+                         : 'border-neutral-300 bg-white group-hover:border-neutral-400'}"
               >
                 {#if checkedBox}
                   {#if single}
-                    <span class="w-1.5 h-1.5 rounded-full bg-white dark:bg-neutral-900"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
                   {:else}
                     <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path></svg>
                   {/if}
                 {/if}
               </div>
               <div class="flex flex-col flex-1 min-w-0">
-                <span class="font-medium truncate text-neutral-800 dark:text-neutral-100">{item.label}</span>
+                <span class="font-medium truncate text-neutral-800">{item.label}</span>
                 {#if item.description}
                   <span class="text-[11px] text-neutral-400 truncate leading-tight font-normal">{item.description}</span>
                 {/if}

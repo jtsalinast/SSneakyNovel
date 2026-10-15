@@ -99,10 +99,11 @@
   // search text replaces the mirror; the caret behaviour when typing is
   // unchanged from SmartCombobox.
   // Color parity with SmartCombobox's chips is handled by utility classes on
-  // the input itself (`text-neutral-800 dark:text-base-content`) — do NOT add
+  // the input itself (`text-neutral-800`) — do NOT add
   // a scoped `.ss-value`/`.ss-input { color: ... }` rule: scoped styles win
   // over utilities and hardcoding `var(--color-base-content)` made the text
-  // near-white under this app's default dark theme (xianii).
+  // near-white under the app's former dark theme (xianii). The app now ships
+  // the light theme (`xianii-light`).
   $: showValueAsText = !searchQuery.trim();
 
   // —— Value <-> display plumbing (single choice) ————————————————
@@ -265,11 +266,11 @@
     class="min-h-[36px] border rounded-lg pl-3 pr-1 py-1 flex items-center gap-1 transition-all duration-150
            {disabled ? 'opacity-60 cursor-not-allowed bg-base-200' : 'cursor-pointer'}
            {isOpen
-             ? 'ring-2 ring-black/[0.08] dark:ring-white/15 border-neutral-400 dark:border-neutral-500 bg-white dark:bg-base-100 shadow-sm'
-             : 'border-neutral-200/80 dark:border-base-300 bg-neutral-50/50 dark:bg-base-200/50 hover:bg-neutral-50 dark:hover:bg-base-200 hover:border-neutral-300 dark:hover:border-base-300'}"
+             ? 'ring-2 ring-black/[0.08] border-neutral-400 bg-white shadow-sm'
+             : 'border-neutral-200/80 bg-neutral-50/50 hover:bg-neutral-50 hover:border-neutral-300'}"
   >
     <!-- The selected label is REAL input text (full-strength foreground,
-         `text-neutral-800 dark:text-base-content` — same color as SmartCombobox's
+         `text-neutral-800` — same color as SmartCombobox's
          chips), never the native placeholder — Tailwind preflight renders
          ::placeholder at 50% alpha, which made selections look grey.
          The placeholder attribute only carries genuine hints: "Añadir..."
@@ -291,10 +292,10 @@
         ? addPlaceholderText
         : (String(value || '').trim() ? '' : (placeholder || emptyLabel))}
       disabled={disabled}
-      class="ss-input flex-1 min-w-0 border-none outline-none text-xs font-medium text-neutral-800 dark:text-base-content bg-transparent py-1 pl-1 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
+      class="ss-input flex-1 min-w-0 border-none outline-none text-xs font-medium text-neutral-800 bg-transparent py-1 pl-1 placeholder:text-neutral-400 focus:outline-none focus:ring-0"
     />
 
-    <div class="flex items-center gap-1 ml-auto shrink-0 text-neutral-400 dark:text-neutral-500">
+    <div class="flex items-center gap-1 ml-auto shrink-0 text-neutral-400">
       <!-- Summary tooltip trigger (ⓘ), identical to SmartCombobox's: opens
            the Revolut-style dark popover listing the current selection. -->
       <div class="relative">
@@ -303,7 +304,7 @@
           on:click|stopPropagation={toggleTooltip}
           class="p-1.5 rounded-lg transition-colors relative flex items-center justify-center
                  opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100
-                 {isTooltipOpen ? 'bg-neutral-200/60 dark:bg-base-300 text-neutral-900 dark:text-white' : 'hover:bg-neutral-200/50 dark:hover:bg-base-300 hover:text-neutral-700 dark:hover:text-neutral-200'}"
+                 {isTooltipOpen ? 'bg-neutral-200/60 text-neutral-900' : 'hover:bg-neutral-200/50 hover:text-neutral-700'}"
           title="Resumen de selección"
           aria-label="Resumen de selección"
         >
@@ -343,7 +344,7 @@
         <button
           type="button"
           on:click|stopPropagation={clearSelection}
-          class="p-1.5 rounded-lg hover:bg-neutral-200/50 dark:hover:bg-base-300 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
+          class="p-1.5 rounded-lg hover:bg-neutral-200/50 hover:text-neutral-700 transition-colors"
           title={clearLabelText}
           aria-label={clearLabelText}
         >
@@ -353,7 +354,7 @@
       <button
         type="button"
         on:click|stopPropagation={toggleDropdown}
-        class="p-1.5 rounded-lg hover:bg-neutral-200/50 dark:hover:bg-base-300 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
+        class="p-1.5 rounded-lg hover:bg-neutral-200/50 hover:text-neutral-700 transition-colors"
         aria-label="Abrir lista"
       >
         <svg class="w-3.5 h-3.5 transition-transform duration-200 {isOpen ? 'rotate-180' : ''}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
@@ -363,14 +364,14 @@
 
   <!-- Dropdown panel: flat single-choice list, two-line rows like SmartCombobox -->
   {#if isOpen}
-    <div id="smart-select-list" role="listbox" class="absolute left-0 right-0 mt-1.5 bg-white dark:bg-base-100 border border-black/[0.08] dark:border-base-300 rounded-xl shadow-[0_12px_32px_rgba(0,0,0,0.08)] dark:shadow-[0_12px_32px_rgba(0,0,0,0.4)] z-50 max-h-80 overflow-y-auto p-1.5 animate-pop">
+    <div id="smart-select-list" role="listbox" class="absolute left-0 right-0 mt-1.5 bg-white border border-black/[0.08] rounded-xl shadow-[0_12px_32px_rgba(0,0,0,0.08)],0,0,0.4)] z-50 max-h-80 overflow-y-auto p-1.5 animate-pop">
       {#if allowCustom && searchQuery.trim() && !hasExactMatch}
         <!-- Create-custom row (coral accent, unified with the app theme) -->
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
         <div
           on:click={addCustomItem}
-          class="mb-1 p-2.5 bg-neutral-50 dark:bg-base-200 hover:bg-neutral-100 dark:hover:bg-base-300 border border-neutral-200/80 dark:border-base-300 rounded-lg cursor-pointer transition-all flex items-center justify-between text-neutral-900 dark:text-base-content text-xs font-medium"
+          class="mb-1 p-2.5 bg-neutral-50 hover:bg-neutral-100 border border-neutral-200/80 rounded-lg cursor-pointer transition-all flex items-center justify-between text-neutral-900 text-xs font-medium"
           role="button"
           tabindex="-1"
         >
@@ -378,7 +379,7 @@
             <span class="w-5 h-5 rounded-md bg-primary text-primary-content flex items-center justify-center font-bold text-xs">+</span>
             <span>{addPlaceholderText} "<strong class="text-primary">{searchQuery}</strong>"</span>
           </div>
-          <span class="text-[10px] bg-neutral-200 dark:bg-base-300 text-neutral-700 dark:text-neutral-300 px-2 py-0.5 rounded font-mono">Enter ↵</span>
+          <span class="text-[10px] bg-neutral-200 text-neutral-700 px-2 py-0.5 rounded font-mono">Enter ↵</span>
         </div>
       {/if}
 
@@ -394,8 +395,8 @@
               on:click|stopPropagation={() => selectOption(item)}
               class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-colors text-xs group
                      {active
-                       ? 'bg-neutral-100/80 dark:bg-base-300/60 text-neutral-900 dark:text-base-content'
-                       : 'hover:bg-neutral-50 dark:hover:bg-base-200 text-neutral-700 dark:text-neutral-300'}"
+                       ? 'bg-neutral-100/80 text-neutral-900'
+                       : 'hover:bg-neutral-50 text-neutral-700'}"
               role="option"
               tabindex="-1"
               aria-selected={active}
@@ -403,7 +404,7 @@
               <!-- Two-line row, exactly like SmartCombobox: label on top,
                    muted description below (both truncate). -->
               <div class="flex flex-col flex-1 min-w-0">
-                <span class="font-medium truncate text-neutral-800 dark:text-neutral-100">{item.label}</span>
+                <span class="font-medium truncate text-neutral-800">{item.label}</span>
                 {#if item.description}
                   <span class="text-[11px] text-neutral-400 truncate leading-tight font-normal">{item.description}</span>
                 {/if}
@@ -429,13 +430,13 @@
   }
 
   /* The selected value must read exactly like SmartCombobox's chips: the
-     chip text uses `text-neutral-800 dark:text-base-content` (see the option
-     rows too). The hardcoded fallback below was wrong — this app ships a DARK
-     theme by default (`data-theme="xianii"` sets --color-base-content to a
-     near-WHITE oklch(96%)), so a light-mode fallback of #171717 made the input
-     inherit that white token and the selection looked white instead of black.
+     chip text uses `text-neutral-800` (see the option
+     rows too). The hardcoded fallback below was wrong — a light-mode fallback
+     of #171717 combined with the old DARK default theme (`data-theme="xianii"`,
+     --color-base-content near-WHITE oklch(96%)) made the input inherit that
+     white token and the selection looked white instead of black.
      No color override here: let the Tailwind classes on `.ss-input` decide,
-     which keeps light/dark parity with the chips automatically. */
+     which keeps parity with the chips automatically. */
   .ss-input {
     -webkit-text-fill-color: currentColor;
     opacity: 1;
