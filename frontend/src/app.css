@@ -179,6 +179,95 @@ body {
   100% { opacity: 1; transform: scale(1) translateY(0); }
 }
 
+/* ── Selectable-chip system (Revolut/Notion style) ─────────────────────────
+   The "Specific Settings" and "Modifiers" shortcut lists are real pill
+   buttons now, matching the unified interface language used by the smart
+   selectors' trigger boxes:
+
+     unselected : white surface · 1px neutral-200 border · neutral-800 text
+                  hover → neutral-300 border + neutral-50 surface
+     selected   : neutral-900 fill · white text · same-dark border ·
+                  shadow-sm + soft ring (ring-2 black/10) · scale-[1.02]
+     press      : active:scale-95 spring feel (transition-all 150ms)
+     disabled   : opacity 60% + not-allowed cursor
+
+   The native checkbox inside each chip is visually hidden — the pill itself
+   carries the state (check icon on the left when selected), exactly like the
+   prototype. `:where()` keeps everything at zero specificity so per-element
+   utility classes still win, mirroring the input/textarea rules above. */
+:where(.chip-selectable) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;                            /* gap-2   */
+  padding: 0.5rem 1rem;                   /* px-4 py-2 */
+  border-radius: 9999px;                  /* rounded-full */
+  font-size: 0.75rem;                     /* text-xs */
+  line-height: 1rem;
+  font-weight: 600;                       /* font-semibold */
+  cursor: pointer;
+  user-select: none;
+  background-color: #ffffff;              /* bg-white */
+  color: rgb(38 38 38);                   /* text-neutral-800 */
+  border: 1px solid rgb(229 229 229);     /* border-neutral-200 */
+  box-shadow: none;
+  transform: scale(1);
+  transition: all 150ms ease;             /* transition-all duration-150 */
+}
+:where(.chip-selectable:hover:not(:has(input:disabled))) {
+  background-color: rgb(250 250 250);     /* hover:bg-neutral-50 */
+  border-color: rgb(212 212 212);         /* hover:border-neutral-300 */
+}
+:where(.chip-selectable:active:not(:has(input:disabled))) {
+  transform: scale(0.95);                 /* active:scale-95 */
+}
+/* Selected state — driven by the hidden checkbox, so the pill stays in sync
+   with whatever handler owns the underlying config value. */
+:where(.chip-selectable:has(input:checked)) {
+  background-color: rgb(23 23 23);        /* bg-neutral-900 */
+  color: #ffffff;                         /* text-white */
+  border-color: rgb(23 23 23);            /* border-neutral-900 */
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05),          /* shadow-sm */
+              0 0 0 2px rgb(0 0 0 / 0.10);            /* ring-2 ring-black/10 */
+  transform: scale(1.02);               /* scale-[1.02] */
+}
+:where(.chip-selectable:has(input:checked):hover) {
+  background-color: rgb(10 10 10);        /* slightly deeper fill on hover */
+  border-color: rgb(10 10 10);
+}
+/* Native checkbox: keep it functional (state, keyboard, a11y) but invisible —
+   the check SVG inside the pill is the visible indicator. */
+:where(.chip-selectable > input[type="checkbox"]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+/* Check indicator: pops in/out with the selection (same spring curve as the
+   chip-pop entrance). */
+:where(.chip-selectable .chip-check-icon) {
+  width: 0.875rem;                        /* w-3.5 */
+  height: 0.875rem;                       /* h-3.5 */
+  flex-shrink: 0;
+  display: none;
+}
+:where(.chip-selectable:has(input:checked) .chip-check-icon) {
+  display: block;
+  animation: popIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* Disabled chips (task running): faded + inert, like the smart controls. */
+:where(.chip-selectable:has(input:disabled)) {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chip-selectable, .chip-selectable .chip-check-icon { transition: none; animation: none; }
+}
+
 /* Card surfaces used across the config form sections. */
 .surface-card {
   border: 1px solid var(--surface-border);

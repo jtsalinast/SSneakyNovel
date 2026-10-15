@@ -1080,11 +1080,15 @@
         {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
       </span>
       {#if showSettingShortcuts}
-        <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+        <div class="flex flex-wrap gap-2">
           {#each settingOpts as s}
-            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
-              <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
-              {s.replaceAll('_', ' ')}
+            <label class="chip-selectable chip-pop" title={settingsHintMap[s] || ''}>
+              <input type="checkbox" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
+              <!-- Check indicator (visible only while selected) -->
+              <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span>{s.replaceAll('_', ' ')}</span>
             </label>
           {/each}
         </div>
@@ -1094,11 +1098,14 @@
       {#if hasSubgenre && modifierGroups.length}
         <details class="mt-1.5" open>
           <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
-          <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+          <div class="flex flex-wrap gap-2 mt-1">
             {#each modifierGroups as grp}
-              <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
-                <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
-                {grp.name}
+              <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+                <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
+                <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+                </svg>
+                <span>{grp.name}</span>
               </label>
             {/each}
           </div>
@@ -1348,11 +1355,15 @@
       {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
     </span>
     {#if showSettingShortcuts}
-      <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+      <div class="flex flex-wrap gap-2">
         {#each settingOpts as s}
-          <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
-            <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
-            {s.replaceAll('_', ' ')}
+          <label class="chip-selectable chip-pop" title={settingsHintMap[s] || ''}>
+            <input type="checkbox" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
+            <!-- Check indicator (visible only while selected) -->
+            <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+            </svg>
+            <span>{s.replaceAll('_', ' ')}</span>
           </label>
         {/each}
       </div>
@@ -1362,11 +1373,14 @@
     {#if hasSubgenre && modifierGroups.length}
       <details class="mt-1.5" open>
         <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
-        <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+        <div class="flex flex-wrap gap-2 mt-1">
           {#each modifierGroups as grp}
-            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
-              <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
-              {grp.name}
+            <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+              <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
+              <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span>{grp.name}</span>
             </label>
           {/each}
         </div>
