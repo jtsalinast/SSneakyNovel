@@ -4,6 +4,11 @@
   import { t } from '../lib/i18n/index.js';
   import { onMount, tick } from 'svelte';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
+  // Interfaz unificada: los <select> nativos del panel de pre-planificación
+  // usan SmartSelect (single-select con búsqueda y popover ⓘ igual que el
+  // resto de la app). allowClear={false}: son campos obligatorios sin opción
+  // vacía, como el <select> original.
+  import SmartSelect from '../lib/components/SmartSelect.svelte';
 
   // Passed down from App.svelte: the same chat dispatch the config-page
   // Generate buttons use, so Pre-planning's button runs through the agent's
@@ -455,14 +460,36 @@
       <p class="text-xs text-base-content/70">{$t('ending.directionHelp')}</p>
       <textarea id="batch-direction" class="textarea textarea-sm w-full h-20" bind:value={longTermDirection} placeholder={$t('ending.directionExample')} disabled={batchBlocked}></textarea>
       <label class="block text-sm" for="ending-intent">{$t('ending.intent')}</label>
-      <select id="ending-intent" class="select select-sm w-full" bind:value={endingIntent} disabled={batchBlocked}>
-        <option value="serial">{$t('ending.serial')}</option><option value="final">{$t('ending.final')}</option><option value="sequel">{$t('ending.sequel')}</option>
-      </select>
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
+        id="ending-intent"
+        options={[
+          { value: 'serial', label: $t('ending.serial') },
+          { value: 'final', label: $t('ending.final') },
+          { value: 'sequel', label: $t('ending.sequel') },
+        ]}
+        allowCustom={false}
+        allowClear={false}
+        disabled={batchBlocked}
+        ariaLabel={$t('ending.intent')}
+        bind:value={endingIntent}
+      />
       {#if endingIntent !== 'serial'}
         <label class="block text-sm" for="ending-style">{$t('ending.style')}</label>
-        <select id="ending-style" class="select select-sm w-full" bind:value={endingStyle} disabled={batchBlocked}>
-          <option value="closed">{$t('ending.closed')}</option><option value="open">{$t('ending.open')}</option><option value="custom">{$t('ending.custom')}</option>
-        </select>
+        <!-- svelte-ignore a11y-no-redundant-roles -->
+        <SmartSelect
+          id="ending-style"
+          options={[
+            { value: 'closed', label: $t('ending.closed') },
+            { value: 'open', label: $t('ending.open') },
+            { value: 'custom', label: $t('ending.custom') },
+          ]}
+          allowCustom={false}
+          allowClear={false}
+          disabled={batchBlocked}
+          ariaLabel={$t('ending.style')}
+          bind:value={endingStyle}
+        />
         <p class="text-xs text-base-content/70">{$t('ending.help')}</p>
         <label class="block text-sm" for="ending-requirements">{$t('ending.requirements')}</label>
         <textarea id="ending-requirements" class="textarea textarea-sm w-full" bind:value={endingRequirements} required={endingStyle === 'custom'} disabled={batchBlocked}></textarea>

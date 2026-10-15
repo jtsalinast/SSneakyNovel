@@ -40,7 +40,18 @@
   export let clearLabel = 'Clear';
   export let otherLabel = 'Other';
   export let allowCustom = true;
+  // Show the ✕ clear button when a value is selected. Mandatory fields
+  // (gender bias, ending intent…) must always keep one option chosen, so the
+  // parent can set this to false and the control behaves like a plain
+  // non-empty <select>. Optional fields keep it true (default).
+  export let allowClear = true;
   export let ariaLabel = '';
+  export let id = '';
+  // Classes utilitarias extra aplicadas al contenedor raíz (p. ej. para
+  // acotar el ancho del control en filtros compactos). El div raíz ya es
+  // `w-full`, así que cualquier ancho se pasa por aquí.
+  export let classes = '';
+  export let title = '';
   export let disabled = false;
 
   let isOpen = false;
@@ -113,9 +124,16 @@
   let lastEmitted = null;
 
   function findItem(v) {
-    const s = String(v || '').trim().toLowerCase();
-    if (!s) return null;
-    return allOptions.find((it) => String(it.value).toLowerCase() === s) || null;
+    // Exact (case-sensitive) match first: catalogs like the worldview
+    // categories hold keys that differ only by case ('rule' vs 'Rule'), and a
+    // lowercased search would silently resolve 'Rule' to 'rule'.
+    const s = String(v || '');
+    if (!s.trim()) return null;
+    return (
+      allOptions.find((it) => String(it.value) === s) ||
+      allOptions.find((it) => String(it.value).toLowerCase() === s.trim().toLowerCase()) ||
+      null
+    );
   }
 
   function emitValue(v, item) {
@@ -244,9 +262,11 @@
 
 <div
   bind:this={root}
-  class="smart-select-root group relative select-none w-full"
+  class="smart-select-root group relative select-none w-full {classes}"
   role="group"
   aria-label={ariaLabel || undefined}
+  {id}
+  {title}
 >
   <!-- Control box: label-less, like a plain <select>. Center: live search
        input that mirrors the current selection as full-strength text while
@@ -340,7 +360,7 @@
         {/if}
       </div>
 
-      {#if String(value || '').trim()}
+      {#if allowClear && String(value || '').trim()}
         <button
           type="button"
           on:click|stopPropagation={clearSelection}
