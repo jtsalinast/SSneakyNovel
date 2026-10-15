@@ -6,6 +6,9 @@
     foreshadowSuggestions, foreshadowShowSuggestions
   } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
+  // Interfaz unificada: el selector de estado del formulario usa SmartSelect
+  // en lugar del <select> nativo (búsqueda + popover ⓘ, como el resto).
+  import SmartSelect from '../lib/components/SmartSelect.svelte';
 
   let viewMode = 'list'; // list | timeline | markdown
   let roadmapMarkdown = '';
@@ -470,11 +473,15 @@
         {#if editing}
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.status')}</span>
-            <select class="select select-bordered select-sm w-full" bind:value={form.status} disabled={$taskRunning}>
-              {#each Object.entries(statusMeta) as [val, meta]}
-                <option value={val}>{meta.label}</option>
-              {/each}
-            </select>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={Object.entries(statusMeta).map(([val, meta]) => ({ value: val, label: meta.label }))}
+              allowCustom={false}
+              allowClear={false}
+              ariaLabel={$t('fs.form.status')}
+              bind:value={form.status}
+              disabled={$taskRunning}
+            />
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.resolution')}</span>

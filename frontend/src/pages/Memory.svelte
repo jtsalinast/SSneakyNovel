@@ -2,6 +2,9 @@
   import { api } from '../lib/api.js';
   import { progress, addToast } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
+  // Interfaz unificada: el filtro de categoría usa SmartSelect en lugar del
+  // <select> nativo (búsqueda + popover ⓘ, como el resto del proyecto).
+  import SmartSelect from '../lib/components/SmartSelect.svelte';
 
   let categoryFilter = 'all';
 
@@ -99,14 +102,21 @@
       <div class="card-body py-4 gap-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap gap-2">
-            <select class="select select-bordered select-xs" bind:value={categoryFilter}>
-              <option value="all">{$t('memory.filter.allCategories')}</option>
-              {#each categoryKeys as key}
-                {#if categoryCounts[key] > 0}
-                  <option value={key}>{$t('memory.category.' + key)} ({categoryCounts[key]})</option>
-                {/if}
-              {/each}
-            </select>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              classes="w-56"
+              options={[
+                { value: 'all', label: $t('memory.filter.allCategories') },
+                ...categoryKeys
+                  .filter((key) => categoryCounts[key] > 0)
+                  .map((key) => ({ value: key, label: `${$t('memory.category.' + key)} (${categoryCounts[key]})` })),
+              ]}
+              emptyLabel={$t('memory.filter.allCategories')}
+              allowCustom={false}
+              allowClear={false}
+              ariaLabel={$t('memory.filter.allCategories')}
+              bind:value={categoryFilter}
+            />
           </div>
         </div>
 

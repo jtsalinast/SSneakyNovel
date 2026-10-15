@@ -3,6 +3,9 @@
   import { api, apiFetch } from '../lib/api.js';
   import { progress, postprocess, taskRunning, addToast, confirmModal, config } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
+  // Interfaz unificada: los filtros de estado/categoría usan SmartSelect en
+  // lugar de los <select> nativos (búsqueda + popover ⓘ, como el resto).
+  import SmartSelect from '../lib/components/SmartSelect.svelte';
 
   $: pp = $postprocess?.state || $postprocess || {};
   $: complete = $progress?.book_status === 'completed';
@@ -105,7 +108,36 @@
 
     <div class="proofread-grid grid grid-cols-[345px_minmax(0,1fr)] gap-3 min-h-[520px]">
       <div class="card bg-base-200"><div class="card-body p-3 gap-2 overflow-y-auto max-h-[70vh]">
-        <div class="flex gap-1"><select class="select select-xs flex-1" bind:value={selectedStatus}><option value="all">{$t('proofread.allStatus')}</option><option value="pending">{$t('proofread.pending')}</option><option value="resolved">{$t('proofread.resolved')}</option><option value="ignored">{$t('proofread.ignored')}</option></select><select class="select select-xs flex-1" bind:value={selectedCategory}><option value="all">{$t('proofread.allCategory')}</option>{#each categories as c}<option value={c}>{$t('proofread.category.' + c)}</option>{/each}</select></div>
+        <div class="flex gap-1">
+          <!-- svelte-ignore a11y-no-redundant-roles -->
+          <SmartSelect
+            classes="flex-1 min-w-0"
+            options={[
+              { value: 'all', label: $t('proofread.allStatus') },
+              { value: 'pending', label: $t('proofread.pending') },
+              { value: 'resolved', label: $t('proofread.resolved') },
+              { value: 'ignored', label: $t('proofread.ignored') },
+            ]}
+            emptyLabel={$t('proofread.allStatus')}
+            allowCustom={false}
+            allowClear={false}
+            ariaLabel={$t('proofread.allStatus')}
+            bind:value={selectedStatus}
+          />
+          <!-- svelte-ignore a11y-no-redundant-roles -->
+          <SmartSelect
+            classes="flex-1 min-w-0"
+            options={[
+              { value: 'all', label: $t('proofread.allCategory') },
+              ...categories.map((c) => ({ value: c, label: $t('proofread.category.' + c) })),
+            ]}
+            emptyLabel={$t('proofread.allCategory')}
+            allowCustom={false}
+            allowClear={false}
+            ariaLabel={$t('proofread.allCategory')}
+            bind:value={selectedCategory}
+          />
+        </div>
         {#each filtered as issue}
           <div class="border border-base-300 rounded p-2 space-y-1"><div class="font-medium text-sm">{issue.title}</div><div class="text-xs opacity-70">{issue.detail}</div><div class="text-xs">{$t('proofread.suggestion')}：{issue.suggestion}</div>
             <div class="flex flex-wrap gap-1">{#each issue.anchors as a}<button class="btn btn-outline btn-xs" on:click={()=>jump(a)}>{$t('proofread.anchor',{chapter:a.chapter_num,block:a.block_id})}</button>{/each}</div>
