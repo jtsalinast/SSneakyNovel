@@ -15,6 +15,7 @@
   // Round 21: brand-new, self-contained cascade block rendered BELOW the legacy
   // fields (which stay untouched). All filtering lives in lib/subgenreTaxonomy.js.
   import GenreCascadeFields from '../lib/components/GenreCascadeFields.svelte';
+  import SegmentedControl from '../lib/components/SegmentedControl.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
   import { GENRES, SUBGENRE_DATA, SUBGENRE_PARENT, parentGenreForSubgenre, genreBucketKeys, canonicalSubgenreLabel } from '../lib/novelwriterGenres.js';
   // Round 19: the cascade now flows EXCLUSIVELY through these two modules.
@@ -2284,12 +2285,22 @@ function randomizeStoryParams() {
               bind:value={localStoryCfg.sexual_content}
             />
           </div>
-          <div>
+          <div class="col-span-2">
             <span class="field-label">{$t('config.story.goreLevel')}</span>
+            <!-- Revolut-style segmented control (ported from the Alpine
+                 prototype): 3 segments + external Auto button. The stored
+                 value keeps the SAME vocabulary as before — random / none /
+                 mid / explicit — so the backend contract is untouched; the
+                 Auto button maps to 'random' and the header shows the
+                 current selection name. -->
             <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['random', 'none', 'mid', 'explicit'].map((g) => ({ value: g, label: $t('config.story.goreLevel.' + g) }))}
-              allowCustom={false}
+            <SegmentedControl
+              options={[
+                { value: 'none', label: $t('config.story.goreLevel.none'), description: '[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.' },
+                { value: 'mid', label: $t('config.story.goreLevel.mid'), description: '[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.' },
+                { value: 'explicit', label: $t('config.story.goreLevel.explicit'), description: '[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.' },
+              ]}
+              autoValue="random"
               emptyLabel={$t('config.story.content.unset')}
               disabled={$taskRunning}
               title={$t('config.tip.goreLevel')}

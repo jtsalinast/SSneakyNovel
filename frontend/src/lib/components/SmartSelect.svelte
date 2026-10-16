@@ -322,8 +322,7 @@
         <button
           type="button"
           on:click|stopPropagation={toggleTooltip}
-          class="p-1.5 rounded-lg transition-colors relative flex items-center justify-center
-                 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100
+          class="tip-trigger p-1.5 rounded-lg relative flex items-center justify-center
                  {isTooltipOpen ? 'bg-neutral-200/60 text-neutral-900' : 'hover:bg-neutral-200/50 hover:text-neutral-700'}"
           title="Resumen de selección"
           aria-label="Resumen de selección"

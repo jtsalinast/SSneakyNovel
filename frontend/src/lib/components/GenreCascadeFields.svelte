@@ -1096,9 +1096,12 @@
         <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
       {/if}
       {#if hasSubgenre && modifierGroups.length}
-        <details class="mt-1.5" open>
+        <details class="mt-1.5">
           <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
-          <div class="flex flex-wrap gap-2 mt-1">
+          <!-- Modifiers listed vertically in 3 content-width columns; the layout
+               lives in app.css `.chips-columns` (column-dense flow, each chip
+               spans ceil(count/3) rows), so chips never stretch to full width. -->
+          <div class="chips-columns mt-1" style="--chip-count: {modifierGroups.length}">
             {#each modifierGroups as grp}
               <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
                 <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
@@ -1371,9 +1374,10 @@
       <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
     {/if}
     {#if hasSubgenre && modifierGroups.length}
-      <details class="mt-1.5" open>
+      <details class="mt-1.5">
         <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
-        <div class="flex flex-wrap gap-2 mt-1">
+        <!-- Modifiers in 3 content-width columns (see .chips-columns in app.css). -->
+        <div class="chips-columns mt-1" style="--chip-count: {modifierGroups.length}">
           {#each modifierGroups as grp}
             <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
               <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
