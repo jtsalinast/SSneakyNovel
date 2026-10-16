@@ -197,6 +197,9 @@ body {
    utility classes still win, mirroring the input/textarea rules above. */
 :where(.chip-selectable) {
   display: inline-flex;
+  width: fit-content;                     /* keep the pill at its text width even
+                                             inside grid/flex parents that would
+                                             otherwise stretch it full-width */
   align-items: center;
   gap: 0.5rem;                            /* gap-2   */
   padding: 0.5rem 1rem;                   /* px-4 py-2 */
@@ -268,6 +271,60 @@ body {
   .chip-selectable, .chip-selectable .chip-check-icon { transition: none; animation: none; }
 }
 
+/* Modifier chips listed vertically in exactly 4 balanced columns that TOGETHER
+   span the full width of the container. Trick #1 (column order): CSS
+   auto-placement can't be told "fill columns top-to-bottom", but it CAN be
+   told "fill rows left-to-right" (the default). So we pin the grid to 4
+   explicit columns and give every chip `grid-row: span N` where
+   N = ceil(count / 4): row-major placement then fills each column with
+   almost N chips before moving to the next one — visually a vertical list
+   per column, perfectly balanced, and it degrades gracefully if a browser
+   ignores the row-span (chips just wrap row-by-row across the 4 columns).
+   Trick #2 (full width): columns are `1fr` tracks and the horizontal gap is
+   `auto` (justify-content: space-evenly), so the four chip "columns" spread
+   across the entire width of the wrapper div automatically, while each chip
+   keeps its natural text width (max-content track + width:fit-content +
+   justify-self:start — pills never stretch to fill the track). */
+.chips-columns {
+  --chip-rows: 1;                                  /* fallback for no round() */
+  display: grid;
+  row-gap: 0.5rem;                                 /* gap-y-2 */
+  column-gap: auto;                                /* gaps absorb leftover width */
+  justify-content: space-evenly;                   /* ...spread evenly → full width */
+  grid-template-columns: repeat(4, minmax(max-content, 1fr));
+  justify-items: start;
+}
+@supports (width: round(up, 1px)) {
+  .chips-columns {
+    --chip-rows: round(up, calc(var(--chip-count, 1) / 4));
+  }
+}
+.chips-columns > * {
+  grid-row: span var(--chip-rows);
+  justify-self: start;
+  width: fit-content;
+}
+
+/* ── Tooltip trigger icons (SmartSelect / SmartCombobox / SegmentedControl) ──
+   The ⓘ buttons that open the dark summary popovers are hidden until the
+   pointer hovers the control's `group` wrapper (or keyboard focus reaches
+   them), then fade IN — and fade OUT again on leave, since the element stays
+   mounted and only its opacity changes. Declared globally (not as scoped
+   per-component styles) so all three triggers share one identical 200ms
+   opacity transition. */
+.tip-trigger {
+  opacity: 0;
+  transition: opacity 200ms ease, background-color 150ms ease, color 150ms ease;
+}
+.group:hover .tip-trigger,
+.group:focus-within .tip-trigger,
+.tip-trigger:focus,
+.tip-trigger:focus-visible {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tip-trigger { transition: none; }
+}
 /* Card surfaces used across the config form sections. */
 .surface-card {
   border: 1px solid var(--surface-border);
