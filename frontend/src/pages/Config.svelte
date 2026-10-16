@@ -2246,12 +2246,24 @@ function randomizeStoryParams() {
             />
           </div>
           -->
-          <div>
+          <div class="col-span-2">
             <span class="field-label">{$t('config.story.targetAudience')}</span>
+            <!-- Revolut-style segmented control (same chrome as Gore Level):
+                 6 segments + external Auto button. The stored value keeps the
+                 SAME vocabulary as before — kid / middle_grade / ya /
+                 new_adult / adult / all_ages — so the backend contract is
+                 untouched; '' (unset) renders as auto mode. -->
             <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages'].map((a) => ({ value: a, label: $t('config.story.targetAudience.' + a) }))}
-              allowCustom={false}
+            <SegmentedControl
+              options={[
+                { value: 'kid', label: $t('config.story.targetAudience.kid'), description: $t('config.story.targetAudience.desc.kid') },
+                { value: 'middle_grade', label: $t('config.story.targetAudience.middle_grade'), description: $t('config.story.targetAudience.desc.middle_grade') },
+                { value: 'ya', label: $t('config.story.targetAudience.ya'), description: $t('config.story.targetAudience.desc.ya') },
+                { value: 'new_adult', label: $t('config.story.targetAudience.new_adult'), description: $t('config.story.targetAudience.desc.new_adult') },
+                { value: 'adult', label: $t('config.story.targetAudience.adult'), description: $t('config.story.targetAudience.desc.adult') },
+                { value: 'all_ages', label: $t('config.story.targetAudience.all_ages'), description: $t('config.story.targetAudience.desc.all_ages') },
+              ]}
+              autoValue=""
               emptyLabel={$t('config.story.targetAudience.none')}
               disabled={$taskRunning}
               title={$t('config.tip.targetAudience')}
@@ -2259,12 +2271,21 @@ function randomizeStoryParams() {
               bind:value={localStoryCfg.target_audience}
             />
           </div>
-          <div>
+          <div class="col-span-2">
             <span class="field-label">{$t('config.story.romanceLevel')}</span>
+            <!-- Segmented control; 'random' maps to the external Auto button
+               and the remaining levels (none/subplot/moderate/central) become
+               the segments — same stored values as before. -->
             <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['random', 'none', 'subplot', 'moderate', 'central'].map((r) => ({ value: r, label: $t('config.story.romanceLevel.' + r) }))}
-              allowCustom={false}
+            <SegmentedControl
+              options={[
+                { value: 'random', label: $t('config.story.romanceLevel.random') },
+                { value: 'none', label: $t('config.story.romanceLevel.none') },
+                { value: 'subplot', label: $t('config.story.romanceLevel.subplot') },
+                { value: 'moderate', label: $t('config.story.romanceLevel.moderate') },
+                { value: 'central', label: $t('config.story.romanceLevel.central') },
+              ]}
+              autoValue="random"
               emptyLabel={$t('config.story.content.unset')}
               disabled={$taskRunning}
               title={$t('config.tip.romanceLevel')}
@@ -2272,12 +2293,20 @@ function randomizeStoryParams() {
               bind:value={localStoryCfg.romance_level}
             />
           </div>
-          <div>
+          <div class="col-span-2">
             <span class="field-label">{$t('config.story.sexualContent')}</span>
+            <!-- Segmented control; 'random' maps to the external Auto button
+               and clean/fade_to_black/explicit become the segments — same
+               stored values as before. -->
             <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['random', 'clean', 'fade_to_black', 'explicit'].map((s) => ({ value: s, label: $t('config.story.sexualContent.' + s) }))}
-              allowCustom={false}
+            <SegmentedControl
+              options={[
+                { value: 'random', label: $t('config.story.sexualContent.random') },
+                { value: 'clean', label: $t('config.story.sexualContent.clean') },
+                { value: 'fade_to_black', label: $t('config.story.sexualContent.fade_to_black') },
+                { value: 'explicit', label: $t('config.story.sexualContent.explicit') },
+              ]}
+              autoValue="random"
               emptyLabel={$t('config.story.content.unset')}
               disabled={$taskRunning}
               title={$t('config.tip.sexualContent')}
@@ -2308,12 +2337,17 @@ function randomizeStoryParams() {
               bind:value={localStoryCfg.gore_level}
             />
           </div>
-          <div>
+          <div class="col-span-2">
             <span class="field-label">{$t('config.story.worldDarkness')}</span>
+            <!-- Segmented control (no SmartSelect header inside the cell: the
+                 component no longer renders its own label, so this is the only
+                 one). 'random' maps to the external Auto button and
+                 idyllic/temperate/gritty/grim/abyssal become the segments —
+                 same stored values as before. -->
             <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
+            <SegmentedControl
               options={['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'].map((d) => ({ value: d, label: $t('config.story.worldDarkness.' + d) }))}
-              allowCustom={false}
+              autoValue=""
               emptyLabel={$t('config.story.content.unset')}
               disabled={$taskRunning}
               title={$t('config.tip.worldDarkness')}
@@ -2321,17 +2355,17 @@ function randomizeStoryParams() {
               bind:value={localStoryCfg.world_darkness}
             />
           </div>
-          <div>
+          <div class="col-span-2">
             <span class="field-label">{$t('config.story.genderBias')}</span>
-            <!-- Sin opción vacía: el género siempre mantiene un valor (el
-                 backend normaliza '' → 'random'), así que allowClear=false
-                 oculta el botón ✕ y el control se comporta como el <select>
-                 cerrado original. -->
+            <!-- Sin opción vacía explícita: el género siempre mantiene un valor
+                 (el backend normaliza '' → 'random'), así que 'random' es el
+                 valor del botón Auto externo y balanced/male/female son los
+                 segmentos — mismos valores guardados que antes. -->
             <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
+            <SegmentedControl
               options={['random', 'balanced', 'male', 'female'].map((g) => ({ value: g, label: $t('config.story.genderBias.' + g) }))}
-              allowCustom={false}
-              allowClear={false}
+              autoValue="random"
+              emptyLabel={$t('config.story.genderBias.random')}
               disabled={$taskRunning}
               title={$t('config.tip.genderBias')}
               ariaLabel={$t('config.story.genderBias')}
