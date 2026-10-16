@@ -874,7 +874,10 @@
   $: lengthOpts = (() => {
     const vals = (paramsPayload && Array.isArray(paramsPayload.length_keys) && paramsPayload.length_keys.length)
       ? paramsPayload.length_keys : STATIC_LENGTH_KEYS;
-    return vals.map((k) => ({ value: k, label: locLabel(k, 'length.', String(k).replaceAll('_', ' ')), desc: lengthBlurb(k) }));
+    // NOTE: the key is `description`, not `desc` — SmartCombobox and
+    // SmartSelect read item.description for their two-line dropdown rows and
+    // summary popovers; a misnamed field silently drops every second line.
+    return vals.map((k) => ({ value: k, label: locLabel(k, 'length.', String(k).replaceAll('_', ' ')), description: lengthBlurb(k) }));
   })();
   function onLengthChange(e) {
     const v = String(e.detail.value || '').trim();
@@ -955,26 +958,6 @@
         />
       </div>
     {/if}
-
-    <!-- Smart Structure: single-select twin of the "Story structure" field
-         below (same structureOpts data, same cfg.structure binding). Derived
-         from SmartCombobox but simplified to select semantics: ONE value, no
-         label element — only the ⓘ icon that triggers the summary tooltip
-         remains, with the same dark popover and two-line item rows. -->
-    <div class="col-span-2">
-      <!-- svelte-ignore a11y-no-redundant-roles -->
-      <SmartSelect
-        options={structureOpts}
-        allowCustom={true}
-        otherLabel={otherLabel}
-        placeholder={labels.structurePlaceholder || ''}
-        emptyLabel={emptyLabel}
-        disabled={disabled}
-        ariaLabel={labels.structure || 'Narrative structure'}
-        bind:value={cfg.structure}
-        on:change={onStructureChange}
-      />
-    </div>
 
     <!-- Smart Genre: all top-level genres as ONE flat list, NO group headers
          (grouped={false}). Multi-select; writes cfg.type and purges orphaned
@@ -1097,11 +1080,15 @@
         {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
       </span>
       {#if showSettingShortcuts}
-        <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+        <div class="flex flex-wrap gap-2">
           {#each settingOpts as s}
-            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
-              <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
-              {s.replaceAll('_', ' ')}
+            <label class="chip-selectable chip-pop" title={settingsHintMap[s] || ''}>
+              <input type="checkbox" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
+              <!-- Check indicator (visible only while selected) -->
+              <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span>{s.replaceAll('_', ' ')}</span>
             </label>
           {/each}
         </div>
@@ -1109,13 +1096,19 @@
         <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
       {/if}
       {#if hasSubgenre && modifierGroups.length}
-        <details class="mt-1.5" open>
+        <details class="mt-1.5">
           <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
-          <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+          <!-- Modifiers listed vertically in 3 content-width columns; the layout
+               lives in app.css `.chips-columns` (column-dense flow, each chip
+               spans ceil(count/3) rows), so chips never stretch to full width. -->
+          <div class="chips-columns mt-1" style="--chip-count: {modifierGroups.length}">
             {#each modifierGroups as grp}
-              <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
-                <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
-                {grp.name}
+              <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+                <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
+                <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+                </svg>
+                <span>{grp.name}</span>
               </label>
             {/each}
           </div>
@@ -1151,36 +1144,44 @@
       {/if}
     </div>
 
+    <!-- Story length — SmartSelect (unified UI). Same lengthOpts data and
+         onLengthChange handler as the old ComboSelect: ONE value, searchable
+         two-line rows (label + blurb), ⓘ summary popover and ✕ clear button.
+         Optional field → clearing maps to the legacy "—" (empty) state, so
+         allowCustom stays off (a free-text length makes no sense here). -->
     <div>
       <span class="field-label flex items-center gap-1">
         {labels.length || 'Story length'}
       </span>
-      <ComboSelect
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
         options={lengthOpts}
-        allowOther={false}
+        allowCustom={false}
         placeholder={labels.lengthNone || '—'}
         emptyLabel={labels.lengthNone || '—'}
-        clearLabel={clearLabel}
         disabled={disabled}
-        fieldTip={tips.length}
+        title={tips.length || ''}
         ariaLabel={labels.length || 'Story length'}
         bind:value={cfg.story_length}
         on:change={onLengthChange}
       />
     </div>
+    <!-- Narrative structure — SmartSelect (unified UI). Same structureOpts /
+         onStructureChange as the old ComboSelect; custom values allowed
+         ("Other"), matching the legacy allowOther={true} behaviour. -->
     <div>
       <span class="field-label flex items-center gap-1">
         {labels.structure || 'Narrative structure'}
       </span>
-      <ComboSelect
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
         options={structureOpts}
-        allowOther={true}
+        allowCustom={true}
         otherLabel={otherLabel}
         placeholder={labels.structurePlaceholder || ''}
         emptyLabel={emptyLabel}
-        clearLabel={clearLabel}
         disabled={disabled}
-        fieldTip={tips.structure}
+        title={tips.structure || ''}
         ariaLabel={labels.structure || 'Narrative structure'}
         bind:value={cfg.structure}
         on:change={onStructureChange}
@@ -1357,11 +1358,15 @@
       {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
     </span>
     {#if showSettingShortcuts}
-      <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+      <div class="flex flex-wrap gap-2">
         {#each settingOpts as s}
-          <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer font-mono" title={settingsHintMap[s] || ''}>
-            <input type="checkbox" class="checkbox checkbox-xs" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
-            {s.replaceAll('_', ' ')}
+          <label class="chip-selectable chip-pop" title={settingsHintMap[s] || ''}>
+            <input type="checkbox" checked={checked(s)} on:change={() => toggle(s)} disabled={disabled} />
+            <!-- Check indicator (visible only while selected) -->
+            <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+            </svg>
+            <span>{s.replaceAll('_', ' ')}</span>
           </label>
         {/each}
       </div>
@@ -1369,13 +1374,17 @@
       <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
     {/if}
     {#if hasSubgenre && modifierGroups.length}
-      <details class="mt-1.5" open>
+      <details class="mt-1.5">
         <summary class="text-xs text-base-content/65 cursor-pointer select-none">{labels.modifiers || 'Modifiers'}</summary>
-        <div class="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+        <!-- Modifiers in 3 content-width columns (see .chips-columns in app.css). -->
+        <div class="chips-columns mt-1" style="--chip-count: {modifierGroups.length}">
           {#each modifierGroups as grp}
-            <label class="chip-pop flex items-center gap-1.5 text-xs cursor-pointer" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
-              <input type="checkbox" class="checkbox checkbox-xs" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
-              {grp.name}
+            <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+              <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
+              <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span>{grp.name}</span>
             </label>
           {/each}
         </div>
@@ -1414,22 +1423,23 @@
     {/if}
   </div>
 
-  <!-- Length & structure: same comboboxes as the legacy fields, populated from
-       the backend payload. Picking a length applies its word-per-chapter
-       preset and a default structure when the current one is empty/auto. -->
+  <!-- Length & structure: SmartSelect twins of the flat-mode fields above
+       (same lengthOpts/structureOpts data and handlers). Picking a length
+       applies its word-per-chapter preset; clearing maps to the legacy
+       empty/"Auto" states. -->
   <div class="grid grid-cols-2 gap-3">
     <div>
       <span class="field-label flex items-center gap-1">
         {labels.length || 'Story length'}
       </span>
-      <ComboSelect
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
         options={lengthOpts}
-        allowOther={false}
+        allowCustom={false}
         placeholder={labels.lengthNone || '—'}
         emptyLabel={labels.lengthNone || '—'}
-        clearLabel={clearLabel}
         disabled={disabled}
-        fieldTip={tips.length}
+        title={tips.length || ''}
         ariaLabel={labels.length || 'Story length'}
         bind:value={cfg.story_length}
         on:change={onLengthChange}
@@ -1439,15 +1449,15 @@
       <span class="field-label flex items-center gap-1">
         {labels.structure || 'Narrative structure'}
       </span>
-      <ComboSelect
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
         options={structureOpts}
-        allowOther={true}
+        allowCustom={true}
         otherLabel={otherLabel}
         placeholder={labels.structurePlaceholder || ''}
         emptyLabel={emptyLabel}
-        clearLabel={clearLabel}
         disabled={disabled}
-        fieldTip={tips.structure}
+        title={tips.structure || ''}
         ariaLabel={labels.structure || 'Narrative structure'}
         bind:value={cfg.structure}
         on:change={onStructureChange}

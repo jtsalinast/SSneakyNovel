@@ -7,10 +7,15 @@
   import { resolveChatCompletionsURL } from '../lib/apiUrl.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
   import ComboSelect from '../lib/components/ComboSelect.svelte';
+  // Interfaz unificada: los <select> nativos del formulario de historia y de
+  // los formularios de lore usan SmartSelect (la variante single-select del
+  // SmartCombobox) — misma estética, búsqueda en vivo, popover ⓘ de resumen.
+  import SmartSelect from '../lib/components/SmartSelect.svelte';
   import GenreSubgenrePicker from '../lib/components/GenreSubgenrePicker.svelte';
   // Round 21: brand-new, self-contained cascade block rendered BELOW the legacy
   // fields (which stay untouched). All filtering lives in lib/subgenreTaxonomy.js.
   import GenreCascadeFields from '../lib/components/GenreCascadeFields.svelte';
+  import SegmentedControl from '../lib/components/SegmentedControl.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
   import { GENRES, SUBGENRE_DATA, SUBGENRE_PARENT, parentGenreForSubgenre, genreBucketKeys, canonicalSubgenreLabel } from '../lib/novelwriterGenres.js';
   // Round 19: the cascade now flows EXCLUSIVELY through these two modules.
@@ -2141,11 +2146,19 @@ function randomizeStoryParams() {
           </div>
           <div>
             <span class="field-label">{$t('config.story.language')}</span>
-            <select class="select select-sm w-full" bind:value={localStoryCfg.output_language} disabled={$taskRunning} title={$t('config.tip.language')}>
-              <option value="">{$t('config.story.language.auto')}</option>
-              <option value="en">EN — {$t('config.story.language.en')}</option>
-              <option value="es">ES — {$t('config.story.language.es')}</option>
-            </select>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={[
+                { value: 'en', label: 'EN — ' + $t('config.story.language.en') },
+                { value: 'es', label: 'ES — ' + $t('config.story.language.es') },
+              ]}
+              allowCustom={false}
+              emptyLabel={$t('config.story.language.auto')}
+              disabled={$taskRunning}
+              title={$t('config.tip.language')}
+              ariaLabel={$t('config.story.language')}
+              bind:value={localStoryCfg.output_language}
+            />
           </div>
           <!-- LEGACY TONE FIELD (round 23 — replaced by the tone input + chips
                inside GenreCascadeFields):
@@ -2235,56 +2248,95 @@ function randomizeStoryParams() {
           -->
           <div>
             <span class="field-label">{$t('config.story.targetAudience')}</span>
-            <select class="select select-sm w-full" bind:value={localStoryCfg.target_audience} disabled={$taskRunning} title={$t('config.tip.targetAudience')}>
-              <option value="">{$t('config.story.targetAudience.none')}</option>
-              {#each ['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages'] as a}
-                <option value={a}>{$t('config.story.targetAudience.' + a)}</option>
-              {/each}
-            </select>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages'].map((a) => ({ value: a, label: $t('config.story.targetAudience.' + a) }))}
+              allowCustom={false}
+              emptyLabel={$t('config.story.targetAudience.none')}
+              disabled={$taskRunning}
+              title={$t('config.tip.targetAudience')}
+              ariaLabel={$t('config.story.targetAudience')}
+              bind:value={localStoryCfg.target_audience}
+            />
           </div>
           <div>
             <span class="field-label">{$t('config.story.romanceLevel')}</span>
-            <select class="select select-sm w-full" bind:value={localStoryCfg.romance_level} disabled={$taskRunning} title={$t('config.tip.romanceLevel')}>
-              <option value="">{$t('config.story.content.unset')}</option>
-              {#each ['random', 'none', 'subplot', 'moderate', 'central'] as r}
-                <option value={r}>{$t('config.story.romanceLevel.' + r)}</option>
-              {/each}
-            </select>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={['random', 'none', 'subplot', 'moderate', 'central'].map((r) => ({ value: r, label: $t('config.story.romanceLevel.' + r) }))}
+              allowCustom={false}
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.romanceLevel')}
+              ariaLabel={$t('config.story.romanceLevel')}
+              bind:value={localStoryCfg.romance_level}
+            />
           </div>
           <div>
             <span class="field-label">{$t('config.story.sexualContent')}</span>
-            <select class="select select-sm w-full" bind:value={localStoryCfg.sexual_content} disabled={$taskRunning} title={$t('config.tip.sexualContent')}>
-              <option value="">{$t('config.story.content.unset')}</option>
-              {#each ['random', 'clean', 'fade_to_black', 'explicit'] as s}
-                <option value={s}>{$t('config.story.sexualContent.' + s)}</option>
-              {/each}
-            </select>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={['random', 'clean', 'fade_to_black', 'explicit'].map((s) => ({ value: s, label: $t('config.story.sexualContent.' + s) }))}
+              allowCustom={false}
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.sexualContent')}
+              ariaLabel={$t('config.story.sexualContent')}
+              bind:value={localStoryCfg.sexual_content}
+            />
           </div>
-          <div>
+          <div class="col-span-2">
             <span class="field-label">{$t('config.story.goreLevel')}</span>
-            <select class="select select-sm w-full" bind:value={localStoryCfg.gore_level} disabled={$taskRunning} title={$t('config.tip.goreLevel')}>
-              <option value="">{$t('config.story.content.unset')}</option>
-              {#each ['random', 'none', 'mid', 'explicit'] as g}
-                <option value={g}>{$t('config.story.goreLevel.' + g)}</option>
-              {/each}
-            </select>
+            <!-- Revolut-style segmented control (ported from the Alpine
+                 prototype): 3 segments + external Auto button. The stored
+                 value keeps the SAME vocabulary as before — random / none /
+                 mid / explicit — so the backend contract is untouched; the
+                 Auto button maps to 'random' and the header shows the
+                 current selection name. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'none', label: $t('config.story.goreLevel.none'), description: '[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.' },
+                { value: 'mid', label: $t('config.story.goreLevel.mid'), description: '[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.' },
+                { value: 'explicit', label: $t('config.story.goreLevel.explicit'), description: '[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.' },
+              ]}
+              autoValue="random"
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.goreLevel')}
+              ariaLabel={$t('config.story.goreLevel')}
+              bind:value={localStoryCfg.gore_level}
+            />
           </div>
           <div>
             <span class="field-label">{$t('config.story.worldDarkness')}</span>
-            <select class="select select-sm w-full" bind:value={localStoryCfg.world_darkness} disabled={$taskRunning} title={$t('config.tip.worldDarkness')}>
-              <option value="">{$t('config.story.content.unset')}</option>
-              {#each ['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'] as d}
-                <option value={d}>{$t('config.story.worldDarkness.' + d)}</option>
-              {/each}
-            </select>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'].map((d) => ({ value: d, label: $t('config.story.worldDarkness.' + d) }))}
+              allowCustom={false}
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.worldDarkness')}
+              ariaLabel={$t('config.story.worldDarkness')}
+              bind:value={localStoryCfg.world_darkness}
+            />
           </div>
           <div>
             <span class="field-label">{$t('config.story.genderBias')}</span>
-            <select class="select select-sm w-full" bind:value={localStoryCfg.gender_bias} disabled={$taskRunning} title={$t('config.tip.genderBias')}>
-              {#each ['random', 'balanced', 'male', 'female'] as g}
-                <option value={g}>{$t('config.story.genderBias.' + g)}</option>
-              {/each}
-            </select>
+            <!-- Sin opción vacía: el género siempre mantiene un valor (el
+                 backend normaliza '' → 'random'), así que allowClear=false
+                 oculta el botón ✕ y el control se comporta como el <select>
+                 cerrado original. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={['random', 'balanced', 'male', 'female'].map((g) => ({ value: g, label: $t('config.story.genderBias.' + g) }))}
+              allowCustom={false}
+              allowClear={false}
+              disabled={$taskRunning}
+              title={$t('config.tip.genderBias')}
+              ariaLabel={$t('config.story.genderBias')}
+              bind:value={localStoryCfg.gender_bias}
+            />
           </div>
         </div>
         <label class="flex items-center gap-2 text-sm cursor-pointer" title={$t('config.tip.locationsEnabled')}>
@@ -2563,15 +2615,15 @@ function randomizeStoryParams() {
               </div>
               <div>
                 <span class="field-label">{$t('config.wv.category')}</span>
-                <select class="select select-sm w-full" bind:value={wvCategory} disabled={$taskRunning}>
-                  <option value="geography">{$t('config.wv.cat.geography')}</option>
-                  <option value="location">{$t('config.wv.cat.location')}</option>
-                  <option value="faction">{$t('config.wv.cat.faction')}</option>
-                  <option value="rule">{$t('config.wv.cat.rule')}</option>
-                  <option value="knowledge">{$t('config.wv.cat.knowledge')}</option>
-                  <option value="history">{$t('config.wv.cat.history')}</option>
-                  <option value="other">{$t('config.wv.cat.other')}</option>
-                </select>
+                <!-- svelte-ignore a11y-no-redundant-roles -->
+                <SmartSelect
+                  options={['geography', 'location', 'faction', 'rule', 'knowledge', 'history', 'other'].map((c) => ({ value: c, label: $t('config.wv.cat.' + c) }))}
+                  allowCustom={false}
+                  allowClear={false}
+                  disabled={$taskRunning}
+                  ariaLabel={$t('config.wv.category')}
+                  bind:value={wvCategory}
+                />
               </div>
             </div>
             <div>
@@ -2725,22 +2777,32 @@ function randomizeStoryParams() {
             <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
               <div>
                 <span class="field-label">{$t('config.rel.source')}</span>
-                <select class="select select-sm w-full" bind:value={relSource} disabled={$taskRunning}>
-                  <option value="" disabled>{$t('config.rel.entityHint')}</option>
-                  {#each entityOptions as opt}
-                    <option value={opt.key}>{opt.label}</option>
-                  {/each}
-                </select>
+                <!-- svelte-ignore a11y-no-redundant-roles -->
+                <SmartSelect
+                  options={entityOptions.map((opt) => ({ value: opt.key, label: opt.label }))}
+                  allowCustom={false}
+                  allowClear={false}
+                  placeholder={$t('config.rel.entityHint')}
+                  emptyLabel={$t('config.rel.entityHint')}
+                  disabled={$taskRunning}
+                  ariaLabel={$t('config.rel.source')}
+                  bind:value={relSource}
+                />
               </div>
               <span class="text-base-content/65 pb-1.5">→</span>
               <div>
                 <span class="field-label">{$t('config.rel.target')}</span>
-                <select class="select select-sm w-full" bind:value={relTarget} disabled={$taskRunning}>
-                  <option value="" disabled>{$t('config.rel.entityHint')}</option>
-                  {#each entityOptions as opt}
-                    <option value={opt.key}>{opt.label}</option>
-                  {/each}
-                </select>
+                <!-- svelte-ignore a11y-no-redundant-roles -->
+                <SmartSelect
+                  options={entityOptions.map((opt) => ({ value: opt.key, label: opt.label }))}
+                  allowCustom={false}
+                  allowClear={false}
+                  placeholder={$t('config.rel.entityHint')}
+                  emptyLabel={$t('config.rel.entityHint')}
+                  disabled={$taskRunning}
+                  ariaLabel={$t('config.rel.target')}
+                  bind:value={relTarget}
+                />
               </div>
             </div>
             <div>
