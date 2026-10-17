@@ -128,8 +128,8 @@ func EnsureContextBudget(apiCfg *config.APIConfig) {
 	}
 }
 
-// FetchModelContextWindow 从 API 的 /models 端点获取指定模型的上下文窗口大小。
-// 成功返回 context_window > 0，失败返回 0（调用方应使用默认值）。
+// FetchModelContextWindow from API /models dotwithdrawfinger upperlowerwindowmouthbigsmall.
+// return context_window > 0, return 0(usesquareshouldmakeusevalue).
 func FetchModelContextWindow(apiCfg *config.APIConfig) int {
 	if apiCfg == nil || strings.TrimSpace(apiCfg.BaseURL) == "" || strings.TrimSpace(apiCfg.Model) == "" {
 		return 0
@@ -169,10 +169,10 @@ func FetchModelContextWindow(apiCfg *config.APIConfig) int {
 
 func ValidateConfig(apiCfg *config.APIConfig) error {
 	if strings.TrimSpace(apiCfg.BaseURL) == "" {
-		return fmt.Errorf("API Base URL 未配置")
+		return fmt.Errorf("API Base URL not yetplace")
 	}
 	if strings.TrimSpace(apiCfg.Model) == "" {
-		return fmt.Errorf("Model 未配置")
+		return fmt.Errorf("Model not yetplace")
 	}
 	return nil
 }
@@ -190,15 +190,15 @@ func IsFatalAPIError(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	// 注意：不要把所有 "dial tcp" 都当作致命错误——
-	// "dial tcp ... i/o timeout" 等临时网络故障应当重试。
+	// intent: not want toBAhas "dial tcp" allwhenmakelife-fate——
+	// "dial tcp ... i/o timeout" etchourshouldwhenheavy.
 	if strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "no such host") {
 		return true
 	}
-	if strings.Contains(msg, "状态码: 401") ||
-		strings.Contains(msg, "状态码: 403") ||
-		strings.Contains(msg, "状态码: 404") {
+	if strings.Contains(msg, "status code: 401") ||
+		strings.Contains(msg, "status code: 403") ||
+		strings.Contains(msg, "status code: 404") {
 		return true
 	}
 	if strings.Contains(msg, "context canceled") {
@@ -240,8 +240,8 @@ func CallAPI(ctx context.Context, apiCfg *config.APIConfig, system, user string)
 	})
 }
 
-// CallAPIMessages 以完整的多轮消息数组调用 API。
-// 内部优先走流式并缓冲全文，使 token 计数在等待期间也能更新；流式不可用时回退同步请求。
+// CallAPIMessages by multiroundnumbergroupuse API.
+// insidepartfirstwalkand, make token countnumberinetcwaitexpect-toocanmorenew; not canusehourreturnretreatplease.
 func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []Message) (string, error) {
 	messages = applyPromptAddon(ctx, messages)
 	result, err := CallAPIStreamMessages(ctx, apiCfg, messages, nil)
@@ -265,7 +265,7 @@ func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []M
 	return completionText(syncResult, syncErr, apiCfg.MaxTokens)
 }
 
-// CallAPIMessagesSync 同步 HTTP 调用（仅作流式失败时的回退）。
+// CallAPIMessagesSync HTTP use(onlymakehour returnretreat).
 func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages []Message) (CompletionResult, error) {
 	if err := validateContextBudget(apiCfg, messages); err != nil {
 		return CompletionResult{}, err
@@ -309,7 +309,7 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return CompletionResult{}, fmt.Errorf("API 响应错误，状态码: %d, 返回内容: %s", resp.StatusCode, string(bodyBytes))
+		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var chatResp ChatResponse
@@ -328,7 +328,7 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 		}
 		return CompletionResult{Content: content, FinishReason: chatResp.Choices[0].FinishReason}, nil
 	}
-	return CompletionResult{}, fmt.Errorf("接口未响应有效 Choices 文本")
+	return CompletionResult{}, fmt.Errorf("API returned no valid Choices text")
 }
 
 func CallAPIWithRetry(ctx context.Context, apiCfg *config.APIConfig, system, user string) string {
@@ -342,13 +342,13 @@ func CallAPIWithRetry(ctx context.Context, apiCfg *config.APIConfig, system, use
 			return result
 		}
 		if IsFatalAPIError(err) {
-			fmt.Printf(" ❌ [致命错误] %v，不再重试\n", err)
+			fmt.Printf(" ❌ [life-fate] %v, not againheavy\n", err)
 			return ""
 		}
 
 		retryCount++
 		waitTime := RetryWaitTime(retryCount)
-		fmt.Printf(" ⚠️ [错误] API调用失败: %v。第 %d 次重试，等待 %ds 后重试...\n", err, retryCount, waitTime)
+		fmt.Printf(" ⚠️ [] APIuse: %v. # %d timesheavy, etcwait %ds laterheavy...\n", err, retryCount, waitTime)
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
@@ -408,7 +408,7 @@ func CallAPIStream(ctx context.Context, apiCfg *config.APIConfig, system, user s
 	return completionText(result, err, apiCfg.MaxTokens)
 }
 
-// CallAPIStreamMessages 以完整的多轮消息数组调用 API（流式）。
+// CallAPIStreamMessages by multiroundnumbergroupuse API().
 func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messages []Message, onChunk func(string)) (CompletionResult, error) {
 	if err := validateContextBudget(apiCfg, messages); err != nil {
 		return CompletionResult{}, err
@@ -450,7 +450,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return CompletionResult{}, fmt.Errorf("API 响应错误，状态码: %d, 返回内容: %s", resp.StatusCode, string(bodyBytes))
+		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var fullContent strings.Builder
@@ -520,7 +520,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 		return completion, fmt.Errorf("stream ended without finish_reason or [DONE] after %d bytes: %w", len(result), io.ErrUnexpectedEOF)
 	}
 	if result == "" {
-		return completion, fmt.Errorf("流式响应为空")
+		return completion, fmt.Errorf("streaming response was empty")
 	}
 	return completion, nil
 }

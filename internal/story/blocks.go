@@ -52,11 +52,11 @@ func splitBlockParagraphs(content string) ([]string, string) {
 func classifyBlock(text string) string {
 	t := strings.TrimSpace(text)
 	switch t {
-	case "---", "----", "＊＊＊", "***", "⁂", "* * *":
+	case "---", "----", "", "***", "⁂", "* * *":
 		return BlockSceneBreak
 	}
 	switch {
-	case strings.HasPrefix(t, "“"), strings.HasPrefix(t, "「"), strings.HasPrefix(t, "『"),
+	case strings.HasPrefix(t, "“"), strings.HasPrefix(t, "\""), strings.HasPrefix(t, "\""),
 		strings.HasPrefix(t, "\""), strings.HasPrefix(t, "'"), strings.HasPrefix(t, "‘"):
 		return BlockDialogue
 	}
@@ -171,7 +171,7 @@ func InsertBlockAfter(ch *ChapterState, blockID int, text string) (int, error) {
 func ReviseBlockAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, chapterNum, blockID int, feedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
 	chapterIdx := FindChapterIdx(state, chapterNum)
 	if chapterIdx < 0 {
-		return fmt.Errorf("第 %d 章不存在", chapterNum)
+		return fmt.Errorf("# %d chapternot depositin", chapterNum)
 	}
 	ch := &state.Chapters[chapterIdx]
 	bi := FindBlockIdx(ch, blockID)
@@ -211,11 +211,11 @@ func ReviseBlockAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 
 	rawResp := llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
 	if rawResp == "" {
-		return fmt.Errorf("block 修订 API 调用失败或被取消")
+		return fmt.Errorf("block revision API call failed or was canceled")
 	}
 	newText := strings.TrimSpace(stripChapterMetaProse(rawResp, lang))
 	if newText == "" {
-		return fmt.Errorf("block 修订返回空内容")
+		return fmt.Errorf("block returnemptyinside")
 	}
 
 	ch.Blocks[bi].Text = newText
@@ -225,7 +225,7 @@ func ReviseBlockAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("保存进度失败: %w", err)
+		return fmt.Errorf("insuredepositadvancedegree: %w", err)
 	}
 	logger.SuccessKey("log.block_revised", ch.Num, blockID)
 	return nil

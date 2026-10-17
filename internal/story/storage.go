@@ -234,7 +234,7 @@ func prepareChapterFiles(progressPath string, p *Progress) ([]progressFile, erro
 			Blocks: ch.Blocks, NextBlockID: ch.NextBlockID, BlockSep: ch.BlockSep,
 		}, "", "  ")
 		if err != nil {
-			return nil, fmt.Errorf("序列化第 %d 章失败: %w", ch.Num, err)
+			return nil, fmt.Errorf("orderrow# %d chapter: %w", ch.Num, err)
 		}
 		files = append(files, progressFile{Num: ch.Num, Data: data})
 	}

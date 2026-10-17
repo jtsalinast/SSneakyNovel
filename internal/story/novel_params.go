@@ -13,59 +13,59 @@ import (
 // generation when the user picks a story structure in the config.
 var structureDescriptions = map[string][2]string{ // [zh, en]
 	"three_act": {
-		"三幕结构：第1幕(约25%)铺垫与激励事件、进入第二世界；第2幕(约50%)冲突升级、中点反转、最低谷；第3幕(约25%)高潮与结局。",
+		"three: #1(approx25%)laymatanditem, advanceenter#two; #2(approx50%)riselevel, middledotrotate, mostlow; #3(approx25%)highand. ",
 		"Three-act structure: Act I (~25%) setup and inciting incident; Act II (~50%) rising conflict, midpoint reversal, low point; Act III (~25%) climax and resolution.",
 	},
 	"six_act": {
-		"六幕结构：开始(日常世界)、触发事件、上升行动(计划与试探)、考验/中点转折、高潮前危机、结局。",
+		"six: open(sun), tentaclehairitem, upperrisetravelmove(countand), /middledotrotate, highfrontmachine, . ",
 		"Six-part structure: beginning (ordinary world), trigger event, rising action, midpoint test/turn, pre-climax crisis, resolution.",
 	},
 	"fichtean": {
-		"菲希特ean五危机结构：以一连串不断升级的危机推进，每个危机含快速铺垫、 Rising 冲突、决断时刻；从高潮倒推布局。",
+		"eanfivemachine: byoneconnectnot disconnectriselevel machineadvance, eachmachinefastlaymat, Rising , disconnecthourengrave; fromhighpushcloth. ",
 		"Fichtean five-crisis structure: a chain of escalating crises, each with brief setup, rising conflict and decision moment; plot backwards from the climax.",
 	},
 	"freytag": {
-		"金字塔结构(Freytag)：开端→上升动作→高潮(居中)→下降动作→结局/灾难。",
+		"goldcharacter-count(Freytag): open→upperrisemovemake→high(middle)→lowerdescendmovemake→/disaster. ",
 		"Freytag's pyramid: exposition, rising action, climax at the middle, falling action, denouement/catastrophe.",
 	},
 	"seven_point": {
-		"七点结构：钩子(0%)→第一转折点(15%)→掐点(35%)→中点(50%)→反转(65%)→第二转折点(85%)→结局(100%)。",
+		"sevendot: hook(0%)→#onerotatedot(15%)→dot(35%)→middledot(50%)→rotate(65%)→#tworotatedot(85%)→(100%). ",
 		"Seven-point structure: hook (0%), first plot turn (15%), pinch 1 (35%), midpoint (50%), plot turn 2 (65%), pinch 2 (85%), resolution (100%).",
 	},
 	"heros_journey": {
-		"英雄之旅(12阶段)：日常世界→冒险召唤→犹豫→遇见导师→跨越门槛→试炼盟友敌人→接近深洞→磨难→奖赏→归途→复活→携灵药归来。",
+		"of(12stepsparagraph): sun→risk→→meetsee→acrosscrossdoor→alliancefriendenemy→connectneardeep→→reward→→alive→spiritualmedicinecome. ",
 		"Hero's journey (12 stages): ordinary world, call to adventure, refusal, mentor, crossing the threshold, tests/allies/enemies, approach, ordeal, reward, road back, resurrection, return with the elixir.",
 	},
 	"heros_journey_simple": {
-		"简化英雄之旅：出发(日常与召唤)→启蒙(试炼与觉醒)→归来(蜕变与回归)，适合中短篇。",
+		"of: exithair(sunand)→enable(andfeelawake)→come(andreturn), joinmiddleshortpiece. ",
 		"Simplified hero's journey: departure (ordinary world & call), initiation (trials & awakening), return (transformation & homecoming); suits novellas.",
 	},
 	"save_the_cat": {
-		"Save the Cat节拍表：开场画面→主题陈述→铺垫→催化剂→争论→进入第二世界→B故事→游戏时间→中点→坏蛋逼近→一无所有→灵魂暗夜→顿悟→高潮→终场画面。",
+		"Save the Catsectiontable: opendrawnoodles→→laymat→→→advanceenter#two→B→swimhour→middledot→badeggnear→onenohas→spiritualsouldarknight→realize→high→drawnoodles. ",
 		"Save the Cat beats: opening image, theme staked, setup, catalyst, debate, break into two, B story, fun and games, midpoint, bad guys close in, all is lost, dark night of the soul, finale, final image.",
 	},
 	"episodic": {
-		"章节式/单元剧结构：每章或每组章节为相对独立的单元（案件/冒险），由一条贯穿主线逐步串联收束。",
+		"chaptersection/billyuan: eachchapteroreachgroupchaptersectionforto billyuan(item/risk), onestriprun throughthreadunioncollect. ",
 		"Episodic structure: each chapter (or group) is a self-contained unit (case/adventure) loosely threaded by an overarching storyline that converges over time.",
 	},
 	"story_circle": {
-		"故事圈(Dan Harmon)：你(舒适区)→需要→进入陌生领域→适应→寻找→得到付出代价→回归→改变。八步闭环，单元剧与长篇兼用。",
+		"circle(Dan Harmon): you(district)→want to→advanceenterlife→should→seek→ topayexitprice→return→. eightring, billyuanandlongpieceuse. ",
 		"Story circle (Dan Harmon): you → need → go → adapt → search → take → return → change. An eight-step loop that works for episodic and serialized stories alike.",
 	},
 	"kishotenketsu": {
-		"起承転結(四段结构)：起(引入)→承(发展铺陈)→転(意外转折)→結(收束呼应)，无强制冲突对抗，适合日常系、轻小说与短篇集。",
+		"(fourparagraph): (enter)→(hairlay)→(intentoutsiderotate)→(collectcallshould), nostrongmanufactureto, joinsunis, lightsmallsayandshortpiece. ",
 		"Kishōtenketsu (four-act East-Asian structure): introduction → development → surprise/twist → reconciliation. Conflict is optional; suits slice-of-life, light novels and anthologies.",
 	},
 	"snowflake": {
-		"雪花结构：从一句话 premise 逐层扩展(段落→场景列表→人物→大纲)，章节密度随迭代递增，适合史诗与多线叙事。",
+		"snowflower: fromonesentence premise layer(paragraphpassage→rowtable→→big), chaptersectionsecretdegreealong with, joinandmultithread. ",
 		"Snowflake method: expand a one-sentence premise in layers (paragraph → scene list → characters → outline); chapter density grows with each iteration, ideal for epics and multi-POV books.",
 	},
 	"quest": {
-		"追寻结构(Quest)：明确的目标驱动主角跨越空间/阶段前进，沿途考验逐步揭示目标背后的真相，终点即蜕变。",
+		"chaseseek(Quest): bright metricmovehornacrosscrossempty/stepsparagraphfrontadvance, alongmetricbacklater true, doti.e.. ",
 		"Quest structure: a clear goal drives the protagonist across spaces/stages; trials along the way reveal the truth behind the goal, and reaching it brings transformation.",
 	},
 	"romance_arc": {
-		"情感弧线结构：相遇/吸引→靠近与误解→承诺危机→分离低谷→觉醒与奔赴→圆满(或释然)，节拍围绕关系推进。",
+		"feelthread: meet/→nearanduntie→machine→divideleavelow→feelawakeand→full(or), sectionrevolve aroundcloseisadvance. ",
 		"Romance arc structure: meet/attract → closeness & misreading → commitment crisis → separation low point → awakening & pursuit → happy ending (or bittersweet release); beats turn on the relationship.",
 	},
 }
@@ -94,42 +94,42 @@ func lengthLabel(length, lang string) string {
 		if en {
 			return "flash fiction"
 		}
-		return "微型小说"
+		return "smallsay"
 	case config.LengthShort:
 		if en {
 			return "short story"
 		}
-		return "短篇"
+		return "shortpiece"
 	case config.LengthNovelette:
 		if en {
 			return "novelette"
 		}
-		return "短中篇"
+		return "shortmiddlepiece"
 	case config.LengthNovella:
 		if en {
 			return "novella"
 		}
-		return "中篇"
+		return "middlepiece"
 	case config.LengthLightNovel:
 		if en {
 			return "light novel"
 		}
-		return "轻小说"
+		return "lightsmallsay"
 	case config.LengthAnthology:
 		if en {
 			return "anthology"
 		}
-		return "短篇小说集"
+		return "shortpiecesmallsay"
 	case config.LengthNovel:
 		if en {
 			return "novel"
 		}
-		return "长篇"
+		return "longpiece"
 	case config.LengthEpic:
 		if en {
 			return "epic"
 		}
-		return "史诗/超长篇"
+		return "/longpiece"
 	}
 	if min > 0 && en {
 		return fmt.Sprintf("%s (%d-%d chapters suggested)", length, min, max)
@@ -157,47 +157,47 @@ func NovelParametersBlock(cfg *config.Config) string {
 		}
 	}
 	if m := sc.EffectiveMotif(); m != "" {
-		add("【文学母题】"+m+"（请将其作为贯穿全书的意象与主题线索，自然织入情节、人物与场景，不要生硬说教）", "[LITERARY MOTIF] "+m+" (weave it as a recurring image/thematic thread through plot, characters and scenes; never heavy-handed)")
+		add("[learn]"+m+"(pleaseBAitsmakeforrun through intentelephantandthreadcord, weaveentersection, and, not want tolifehardsay)", "[LITERARY MOTIF] "+m+" (weave it as a recurring image/thematic thread through plot, characters and scenes; never heavy-handed)")
 	}
 	if b := strings.TrimSpace(sc.StoryIdea); b != "" {
 		if en {
 			lines = append(lines, "[STORY IDEA - authoritative premise]\n"+b)
 		} else {
-			lines = append(lines, "【故事构想·权威前提】\n"+b)
+			lines = append(lines, "[think·front]\n"+b)
 		}
 	}
 	if v := strings.TrimSpace(sc.Subgenre); v != "" {
 		// Multi-select support: the stored value may be a comma-separated list
 		// ("Cozy Mystery, Noir"); every entry is surfaced to the AI.
 		for _, part := range config.SplitSubgenreList(v) {
-			add("【子类型】"+part, "[SUBGENRE] "+part)
+			add("[class]"+part, "[SUBGENRE] "+part)
 		}
 	}
 	if v := strings.TrimSpace(sc.Theme); v != "" {
-		add("【主题】"+v, "[THEME] "+v)
+		add("[]"+v, "[THEME] "+v)
 	}
 	if v := strings.TrimSpace(sc.Tone); v != "" {
-		add("【基调】"+v, "[TONE] "+v)
+		add("[]"+v, "[TONE] "+v)
 	}
 	if v := strings.TrimSpace(sc.InspirationalPieces); v != "" {
-		add("【灵感作品】"+v+"（作为风格、氛围与叙事手法上的参考坐标：借鉴其气质与技法，但不要照搬其情节、人物或专有设定）",
+		add("[spiritualfeelmake]"+v+"(makeforwindgrid, andhandupper sitmetric: borrowitsqiand, butnot want toperitssection, orhas)",
 			"[INSPIRATIONAL PIECES] "+v+" (use them as style/atmosphere/craft reference points: borrow their tone and techniques, never copy their plots, characters or proprietary settings)")
 	}
 	if v := strings.TrimSpace(sc.Author); v != "" {
-		add("【署名作者】"+v, "[AUTHOR] "+v)
+		add("[make]"+v, "[AUTHOR] "+v)
 	}
 	if v := strings.TrimSpace(sc.StoryLength); v != "" {
 		min, max := config.SuggestedChaptersByLength(v)
 		lbl := lengthLabel(v, cfg.Language)
 		if min > 0 {
 			if en {
-				add(fmt.Sprintf("【篇幅】%s（建议总章数约 %d-%d 章）", lbl, min, max),
+				add(fmt.Sprintf("[piece]%s(chapternumberapprox %d-%d chapter)", lbl, min, max),
 					fmt.Sprintf("[LENGTH] %s (suggested total: ~%d-%d chapters)", lbl, min, max))
 			} else {
-				add(fmt.Sprintf("【篇幅】%s（建议总章数约 %d-%d 章）", lbl, min, max), "")
+				add(fmt.Sprintf("[piece]%s(chapternumberapprox %d-%d chapter)", lbl, min, max), "")
 			}
 		} else {
-			add("【篇幅】"+lbl, "[LENGTH] "+lbl)
+			add("[piece]"+lbl, "[LENGTH] "+lbl)
 		}
 	}
 	if desc := structureDescription(sc.Structure, cfg.Language); desc != "" {
@@ -205,17 +205,17 @@ func NovelParametersBlock(cfg *config.Config) string {
 		if en {
 			lines = append(lines, "[STRUCTURE] "+lbl+": "+desc)
 		} else {
-			lines = append(lines, "【故事结构】"+lbl+"："+desc)
+			lines = append(lines, "[]"+lbl+": "+desc)
 		}
 	}
 	if v := strings.TrimSpace(sc.EffectiveConflict()); v != "" {
-		add("【冲突规模】"+v+"（建议方向，不必强制）", "[CONFLICT SCALE] "+v+" (a suggestion, not a constraint)")
+		add("[]"+v+"(squaredirection, not strongmanufacture)", "[CONFLICT SCALE] "+v+" (a suggestion, not a constraint)")
 	}
 	if v := strings.TrimSpace(sc.EffectiveProtagonist()); v != "" {
-		add("【主角类型】"+v+"（建议方向，不必强制）", "[PROTAGONIST TYPE] "+v+" (a suggestion, not a constraint)")
+		add("[hornclass]"+v+"(squaredirection, not strongmanufacture)", "[PROTAGONIST TYPE] "+v+" (a suggestion, not a constraint)")
 	}
 	if v := strings.TrimSpace(sc.SpecificSettings); v != "" {
-		add("【特定设定】\n"+v, "[SPECIFIC SETTINGS]\n"+v)
+		add("[]\n"+v, "[SPECIFIC SETTINGS]\n"+v)
 	}
 	if v := config.AudienceGuidance(sc.TargetAudience, cfg.Language); v != "" {
 		lines = append(lines, v)
@@ -228,7 +228,7 @@ func NovelParametersBlock(cfg *config.Config) string {
 		if en {
 			lines = append(lines, "[GENRE MODIFIER] This story uses the \""+mod+"\" anime/manhwa/game convention set: honor its signature tropes, pacing and reader expectations (a suggestion, not a constraint).")
 		} else {
-			lines = append(lines, "【类型修饰】本作带有「"+mod+"」的动漫/漫画/游戏系惯例：请体现其标志性桥段、节奏与读者预期（建议方向，不必强制）。")
+			lines = append(lines, "[classaccessory]thismakebelthas\""+mod+"\" move/draw/swimisproportion: pleasebodyitsmetricambitionbridgeparagraph, sectionandreadexpect(squaredirection, not strongmanufacture). ")
 		}
 	}
 	// Genre/subgenre flavor: derived from the free-form Type/Subgenre so it also
@@ -236,27 +236,27 @@ func NovelParametersBlock(cfg *config.Config) string {
 	if g := strings.TrimSpace(sc.Type); g != "" || strings.TrimSpace(sc.Subgenre) != "" {
 		flavor := strings.TrimSpace(g + " " + sc.Subgenre)
 		if flavor != "" {
-			add("【类型风味】本作属于「"+flavor+"」：请采用该类型/子类型的典型惯例、读者预期与标志性元素（建议方向，不必强制）。",
+			add("[classwindflavor]thismakebelongs toin\""+flavor+"\": pleaseusetheclass/class proportion, readexpectandmetricambitionyuanplain(squaredirection, not strongmanufacture). ",
 				"[GENRE FLAVOR] This book is "+flavor+": honor the typical conventions, reader expectations and signature elements of that genre/subgenre (a suggestion, not a constraint).")
 		}
 	}
 	switch bias := strings.TrimSpace(sc.GenderBias); bias {
 	case "", "random":
-		add("【人物性别】随机自然即可，不要刻意偏向任何性别。",
+		add("[other]along withmachinei.e.can, not want toengraveintentdirectionhowother. ",
 			"[CHARACTER GENDER] Leave it to chance; do not deliberately skew toward any gender.")
 	case "male":
-		add("【人物性别】主要角色倾向男性为主。", "[CHARACTER GENDER] Skew main characters toward male.")
+		add("[other]want tohorndirectionfor. ", "[CHARACTER GENDER] Skew main characters toward male.")
 	case "female":
-		add("【人物性别】主要角色倾向女性为主。", "[CHARACTER GENDER] Skew main characters toward female.")
+		add("[other]want tohorndirectionfor. ", "[CHARACTER GENDER] Skew main characters toward female.")
 	case "balanced":
-		add("【人物性别】主要角色男女均衡分布。", "[CHARACTER GENDER] Keep main characters gender-balanced.")
+		add("[other]want tohornalldividecloth. ", "[CHARACTER GENDER] Keep main characters gender-balanced.")
 	}
 	if len(lines) == 0 {
 		return ""
 	}
 	block := "NOVEL PARAMETERS (plan the whole book accordingly):\n" + strings.Join(lines, "\n")
 	if !en {
-		block = "小说参数（整体规划须遵循）：\n" + strings.Join(lines, "\n")
+		block = "smallsaynumber(bodywhiskerfollow): \n" + strings.Join(lines, "\n")
 	}
 	// Story output language (EN/ES): when the author pins a generation language
 	// in "Story parameters", every AI text must stay in it — this hard rule is
@@ -279,33 +279,33 @@ func structureLabel(structure, lang string) string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	switch key {
 	case "three_act":
-		return label(en, "三幕结构", "Three-act structure")
+		return label(en, "three", "Three-act structure")
 	case "six_act":
-		return label(en, "六幕结构", "Six-part structure")
+		return label(en, "six", "Six-part structure")
 	case "fichtean":
-		return label(en, "菲希特ean五危机", "Fichtean five-crisis")
+		return label(en, "eanfivemachine", "Fichtean five-crisis")
 	case "freytag":
-		return label(en, "金字塔结构", "Freytag's pyramid")
+		return label(en, "goldcharacter-count", "Freytag's pyramid")
 	case "seven_point":
-		return label(en, "七点结构", "Seven-point structure")
+		return label(en, "sevendot", "Seven-point structure")
 	case "heros_journey":
-		return label(en, "英雄之旅", "Hero's journey")
+		return label(en, "of", "Hero's journey")
 	case "heros_journey_simple":
-		return label(en, "简化英雄之旅", "Simplified hero's journey")
+		return label(en, "of", "Simplified hero's journey")
 	case "save_the_cat":
-		return label(en, "Save the Cat 节拍表", "Save the Cat beats")
+		return label(en, "Save the Cat sectiontable", "Save the Cat beats")
 	case "episodic":
-		return label(en, "章节式/单元剧", "Episodic")
+		return label(en, "chaptersection/billyuan", "Episodic")
 	case "story_circle":
-		return label(en, "故事圈", "Story circle")
+		return label(en, "circle", "Story circle")
 	case "kishotenketsu":
-		return label(en, "起承転結", "Kishōtenketsu")
+		return label(en, "", "Kishōtenketsu")
 	case "snowflake":
-		return label(en, "雪花结构", "Snowflake method")
+		return label(en, "snowflower", "Snowflake method")
 	case "quest":
-		return label(en, "追寻结构", "Quest structure")
+		return label(en, "chaseseek", "Quest structure")
 	case "romance_arc":
-		return label(en, "情感弧线", "Romance arc")
+		return label(en, "feelthread", "Romance arc")
 	}
 	return key
 }

@@ -29,7 +29,7 @@ func formatRegisteredCharactersForCheck(settings *ProjectSettings, lang string) 
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			return "(none registered)"
 		}
-		return "（无已登记角色）"
+		return "(noalreadyhorn)"
 	}
 	var sb strings.Builder
 	for _, c := range settings.Characters {
@@ -95,10 +95,10 @@ func CheckOutlineCharacterConsistency(ctx context.Context, apiCfg *config.APICon
 			return &OutlineCharacterReport{
 				HasSuggestions: true,
 				Suggestions:    heuristic,
-				Summary:        "检测到未登记的大纲人物（启发式扫描）",
+				Summary:        "detected unregistered outline characters (heuristic scan)",
 			}, nil
 		}
-		return nil, fmt.Errorf("API 调用失败或被取消")
+		return nil, fmt.Errorf("API call failed or was canceled")
 	}
 
 	var report OutlineCharacterReport
@@ -108,13 +108,13 @@ func CheckOutlineCharacterConsistency(ctx context.Context, apiCfg *config.APICon
 			return &OutlineCharacterReport{
 				HasSuggestions: true,
 				Suggestions:    heuristic,
-				Summary:        "检测到未登记的大纲人物（启发式扫描）",
+				Summary:        "detected unregistered outline characters (heuristic scan)",
 			}, nil
 		}
-		return nil, fmt.Errorf("无法解析大纲人物检查结果")
+		return nil, fmt.Errorf("nountiebigfruit")
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &report); err != nil {
-		return nil, fmt.Errorf("解析大纲人物检查JSON失败: %w", err)
+		return nil, fmt.Errorf("untiebigJSON: %w", err)
 	}
 
 	report.Suggestions = mergeOutlineCharacterSuggestions(heuristic, report.Suggestions)

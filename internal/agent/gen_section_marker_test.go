@@ -19,7 +19,7 @@ func TestParseGenerateSectionTagSmoke(t *testing.T) {
 }
 
 func TestCfgGetterPrecedence(t *testing.T) {
-	snap := &config.Config{Language: "zh"}
+	snap := &config.Config{Language: "en"}
 	live := &config.Config{Language: "en"}
 	ctx := &AgentContext{Config: snap, ConfigGetter: func() *config.Config { return live }}
 	if ctx.cfg() != live {

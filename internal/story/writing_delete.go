@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"showmethestory/internal/fsutil"
-	"showmethestory/internal/i18n"
 	"strings"
 )
 
@@ -115,32 +114,22 @@ func FormatWritingFrontierInfo(state *Progress, lang string) string {
 		return ""
 	}
 
-	zh := i18n.NormalizeLanguage(lang) == i18n.LangZH
 	var sb strings.Builder
 	if frontier := state.CurrentChapterIndex; frontier < len(state.Chapters) {
 		ch := state.Chapters[frontier]
-		if zh {
-			sb.WriteString(fmt.Sprintf("写作指针: 第 %d 章 [%s]\n", ch.Num, ch.Status))
-		} else {
-			sb.WriteString(fmt.Sprintf("Writing pointer: chapter %d [%s]\n", ch.Num, ch.Status))
-		}
-	} else if zh {
-		sb.WriteString("写作指针: 全书章节已确认完毕\n")
+		sb.WriteString(fmt.Sprintf("Writing pointer: chapter %d [%s]\n", ch.Num, ch.Status))
+
 	} else {
 		sb.WriteString("Writing pointer: all chapters confirmed\n")
 	}
 
 	if idx, err := ResolveDeleteChapterTarget(state); err == nil {
 		num := state.Chapters[idx].Num
-		if zh {
-			sb.WriteString(fmt.Sprintf("delete_chapter 当前可删: 第 %d 章（写作前沿）\n", num))
-		} else {
-			sb.WriteString(fmt.Sprintf("delete_chapter can remove: chapter %d (writing frontier)\n", num))
-		}
-	} else if zh {
-		sb.WriteString("delete_chapter 当前不可用（如无正文可删或正在写作中）\n")
+		sb.WriteString(fmt.Sprintf("delete_chapter can remove: chapter %d (writing frontier)\n", num))
+
 	} else {
 		sb.WriteString("delete_chapter unavailable (nothing to delete or a chapter is writing)\n")
 	}
+
 	return sb.String()
 }

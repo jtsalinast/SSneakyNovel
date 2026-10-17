@@ -17,7 +17,7 @@ type WritingConflictError struct {
 
 func (e *WritingConflictError) Error() string {
 	if e == nil || e.Conflict == nil {
-		return "写作冲突需用户处理"
+		return "writing in progress"
 	}
 	return e.Conflict.Summary
 }
@@ -56,16 +56,16 @@ func analyzeWritingConflict(ctx context.Context, apiCfg *config.APIConfig, cfg *
 	systemPrompt := i18n.SystemPromptFor(lang, "writing_conflict_analyst_json")
 	rawResp := llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
 	if rawResp == "" {
-		return nil, fmt.Errorf("API 调用失败或被取消")
+		return nil, fmt.Errorf("API call failed or was canceled")
 	}
 
 	var analysis writingConflictAnalysis
 	jsonStr := llm.ExtractJSON(cleanJSONResponse(rawResp))
 	if jsonStr == "" {
-		return nil, fmt.Errorf("无法解析写作冲突分析结果")
+		return nil, fmt.Errorf("writing segment split produced no result")
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &analysis); err != nil {
-		return nil, fmt.Errorf("解析写作冲突分析JSON失败: %w", err)
+		return nil, fmt.Errorf("parse writing segment split JSON: %w", err)
 	}
 	analysis.SuggestedActions = ensureConflictActions(analysis.SuggestedActions, lang)
 	return &analysis, nil
@@ -80,10 +80,10 @@ func ensureConflictActions(actions []ConflictActionOption, lang string) []Confli
 		}
 	}
 	defaults := []ConflictActionOption{
-		{ID: "edit_outline", Label: pickLang(lang, "修改本章大纲", "Edit chapter outline"), Description: pickLang(lang, "在大纲页调整本章或后续章节大纲，使情节与伏笔/前情一致", "Adjust this or later chapter outlines on the Outline page")},
-		{ID: "adjust_foreshadow", Label: pickLang(lang, "调整伏笔", "Adjust foreshadows"), Description: pickLang(lang, "在伏笔页修改埋设/回收章节或描述，或放弃无法实现的伏笔", "Change plant/payoff chapters or descriptions on the Foreshadows page, or abandon unworkable foreshadows")},
-		{ID: "retry", Label: pickLang(lang, "修改后重试生成", "Retry after edits"), Description: pickLang(lang, "完成大纲或伏笔调整后，重新生成本章", "Regenerate this chapter after you have edited the outline or foreshadows")},
-		{ID: "force_review", Label: pickLang(lang, "保留当前稿进入审核", "Keep draft for review"), Description: pickLang(lang, "接受当前版本，进入人工审核后再决定修订或确认", "Accept the current draft and review it manually")},
+		{ID: "edit_outline", Label: "Edit chapter outline", Description: "Adjust this or later chapter outlines on the Outline page"},
+		{ID: "adjust_foreshadow", Label: "Adjust foreshadows", Description: "Change plant/payoff chapters or descriptions on the Foreshadows page, or abandon unworkable foreshadows"},
+		{ID: "retry", Label: "Retry after edits", Description: "Regenerate this chapter after you have edited the outline or foreshadows"},
+		{ID: "force_review", Label: "Keep draft for review", Description: "Accept the current draft and review it manually"},
 	}
 	_ = en
 	out := make([]ConflictActionOption, 0, len(defaults))
@@ -103,19 +103,12 @@ func ensureConflictActions(actions []ConflictActionOption, lang string) []Confli
 	return out
 }
 
-func pickLang(lang, zh, en string) string {
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return en
-	}
-	return zh
-}
-
 func buildWritingConflict(state *Progress, idx int, failedIssues []string, analysis *writingConflictAnalysis) *WritingConflict {
 	ch := state.Chapters[idx]
-	summary := "事实核查多次失败，需人工决定修改方向"
+	summary := "multitimes, squaredirection"
 	rootCause := "other"
 	reconcilable := false
-	actions := ensureConflictActions(nil, i18n.LangZH)
+	actions := ensureConflictActions(nil, i18n.LangEN)
 	if analysis != nil {
 		if strings.TrimSpace(analysis.Summary) != "" {
 			summary = strings.TrimSpace(analysis.Summary)
@@ -158,7 +151,7 @@ func splitFactCheckIssues(issues string) []string {
 	if strings.TrimSpace(issues) == "" {
 		return nil
 	}
-	parts := strings.Split(issues, "；")
+	parts := strings.Split(issues, "; ")
 	if len(parts) == 1 {
 		parts = strings.Split(issues, ";")
 	}
@@ -169,11 +162,11 @@ func splitFactCheckIssues(issues string) []string {
 // pending conflict chapter if set, otherwise the writing frontier chapter.
 func ResolveForceReviewIndex(state *Progress) (int, error) {
 	if state == nil {
-		return -1, fmt.Errorf("无进度状态")
+		return -1, fmt.Errorf("noadvancedegreeposture")
 	}
 	if c := state.PendingWritingConflict; c != nil {
 		if c.ChapterIndex < 0 || c.ChapterIndex >= len(state.Chapters) {
-			return -1, fmt.Errorf("冲突章节索引无效")
+			return -1, fmt.Errorf("chaptersectioncordno")
 		}
 		return c.ChapterIndex, nil
 	}
@@ -181,13 +174,13 @@ func ResolveForceReviewIndex(state *Progress) (int, error) {
 	if i >= 0 && i < len(state.Chapters) && state.Chapters[i].Status == StatusWriting {
 		return i, nil
 	}
-	return -1, fmt.Errorf("当前没有可保留进入审核的写作中章节")
+	return -1, fmt.Errorf("there is already a confirmed chapter ready to advance into the writing stage")
 }
 
 // PromoteWritingToReview moves the chapter at idx to review and clears any pending conflict.
 func PromoteWritingToReview(state *Progress, idx int) error {
 	if state == nil || idx < 0 || idx >= len(state.Chapters) {
-		return fmt.Errorf("章节索引无效")
+		return fmt.Errorf("chaptersectioncordno")
 	}
 	state.Chapters[idx].Status = StatusReview
 	state.PendingWritingConflict = nil

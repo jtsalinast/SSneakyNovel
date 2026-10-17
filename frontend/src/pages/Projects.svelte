@@ -3,10 +3,10 @@
   import logo from '../../../docs/show-me-the-story.webp';
   import { api, apiFetch } from '../lib/api.js';
   import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage } from '../lib/stores.js';
-  import { t, setLocale } from '../lib/i18n/index.js';
+  import { t } from '../lib/i18n/index.js';
 
   let newProjectName = '';
-  let newProjectLang = 'zh';
+  let newProjectLang = 'en';
   let creating = false;
   let backupBusy = false;
   let restoreName = '';
@@ -51,7 +51,6 @@
         config.set(cfg);
         if (cfg && cfg.language) {
           projectLanguage.set(cfg.language);
-          setLocale(cfg.language);
         }
       } catch (e) {}
       try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
@@ -158,7 +157,6 @@
           <div class="flex items-center gap-2">
             <span class="text-xs text-base-content/65">{$t('projects.create.lang')}</span>
             <div class="tabs tabs-box tabs-sm" role="tablist">
-              <button type="button" role="tab" class="tab tab-sm" class:tab-active={newProjectLang === 'zh'} aria-selected={newProjectLang === 'zh'} disabled={creating} on:click={() => newProjectLang = 'zh'}>中文</button>
               <button type="button" role="tab" class="tab tab-sm" class:tab-active={newProjectLang === 'en'} aria-selected={newProjectLang === 'en'} disabled={creating} on:click={() => newProjectLang = 'en'}>EN</button>
             </div>
           </div>
@@ -213,7 +211,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate flex items-center gap-2">
                     <span class="truncate" title={p.name}>{p.name}</span>
-                    <span class="badge badge-accent badge-xs uppercase shrink-0">{(p.language || 'zh') === 'en' ? 'EN' : 'ZH'}</span>
+                    <span class="badge badge-accent badge-xs uppercase shrink-0">{(p.language || 'en') === 'zh' ? 'ZH' : 'EN'}</span>
                     {#if p.compatibility !== 'supported'}
                       <span class="badge badge-warning badge-xs">{$t('projects.incompatible.badge')}</span>
                     {/if}

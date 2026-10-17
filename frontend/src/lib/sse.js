@@ -10,7 +10,7 @@ let tokenPollTimer = null;
 let taskEventVersion = 0;
 let statusRequest = 0;
 
-// —— 流式输出节流缓冲 + 尾部窗口 ——
+// —— Streaming-output throttle buffer + tail window ——
 const FLUSH_INTERVAL = 150;
 const TAIL_MAX = 3000;
 
@@ -203,8 +203,8 @@ export function connectSSE() {
       // Notify ChatPanel so sendMessageToChat() callers (Generate buttons)
       // can unblock once the assistant turn is over.
       chatTurnEnd.update(n => n + 1);
-      // 异步工具可能仍有子任务；须在此取消 chat_chunk 延迟 flush，
-      // 否则 reload 后的 messages 与 streaming_text 会各显示一遍相同 reply。
+      // async tools may still have subtasks；must cancel here chat_chunk delayed flush，
+      // otherwise the reloaded messages and streaming_text would each show the same reply twice.
       clearChatBuf();
       let sessionId = null;
       currentChatSession.update(s => {

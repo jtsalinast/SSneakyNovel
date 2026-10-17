@@ -233,7 +233,7 @@
 </script>
 
 <div class="space-y-4">
-  <!-- 统计与操作 -->
+  <!-- Stats and actions -->
   <div class="card bg-base-200">
     <div class="card-body py-4 gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -290,7 +290,7 @@
     </div>
   {/if}
 
-  <!-- AI 建议确认 -->
+  <!-- AI AI suggestion confirmation -->
   {#if $foreshadowShowSuggestions && $foreshadowSuggestions.length > 0}
     <div class="card bg-base-200 border border-primary/30 ">
       <div class="card-body py-4 gap-3">
@@ -318,7 +318,7 @@
     </div>
   {/if}
 
-  <!-- 超期告警 -->
+  <!-- Overdue warnings -->
   {#if overdueList.length > 0}
     <div class="alert alert-warning py-3 text-sm">
       <div>
@@ -332,7 +332,7 @@
     </div>
   {/if}
 
-  <!-- 视图切换 -->
+  <!-- View switch -->
   <div class="tabs tabs-box bg-base-200 w-fit">
     <button class="tab tab-sm" class:tab-active={viewMode === 'list'} on:click={() => viewMode = 'list'}>{$t('fs.tabs.list')}</button>
     <button class="tab tab-sm" class:tab-active={viewMode === 'timeline'} on:click={() => viewMode = 'timeline'}>{$t('fs.tabs.timeline')}</button>
@@ -446,7 +446,7 @@
   {/if}
 </div>
 
-<!-- 编辑/创建弹窗（DaisyUI 5：不用已移除的 form-control / 旧 label-text） -->
+<!-- Edit/create modal (DaisyUI 5: avoid the removed form-control / old label-text) -->
 {#if showForm}
   <dialog class="modal modal-open">
     <div class="modal-box max-w-lg">

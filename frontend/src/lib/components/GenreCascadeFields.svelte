@@ -80,20 +80,6 @@
       adventure: 'Movement-driven fiction: quests, exploration, survival and treasure hunts where the journey and its dangers are the plot.',
       mystery_thriller: 'Crime, puzzles and suspense: investigations from cozy whodunits to hard-boiled noir, plus chases, conspiracies and high-stakes thrillers.',
     },
-    zh: {
-      fantasy: '幻想世界：魔法、神话生物或超自然规则——从史诗第二世界到都市隐秘社会。',
-      scifi: '以科技、科学或未来社会为根基的推想小说：太空歌剧、赛博朋克、反乌托邦、初次接触……',
-      mystery: '以罪案与谜团为核心：调查推动情节，从乡村安乐椅推理到硬汉黑色侦探与劫案故事。',
-      romance: '爱情故事即主线情节——情感弧线、关系障碍与令读者满意的结局是这类作品的承诺。',
-      thriller: '节奏、危险与悬念：追逐、阴谋与高风险，无论是谍战、律政、家庭还是动作向。',
-      horror: '以制造恐惧与不安为目的：超自然惊悚、宇宙性渺小、肉体恐怖或身边的怪物。',
-      historical: '扎根于真实历史时期的小说，时代风物、习俗与事件塑造人物命运。',
-      western: '边疆故事：无法无天、荣誉准则与旷野——经典、意大利面式、怪异或移植到太空的西部片。',
-      drama: '以人物为先的文学小说：家族史诗、成长、心理写实、元小说、存在主义与哲思故事。',
-      comedy: '以笑声为首要承诺的小说：戏仿、闹剧、情景喜剧群像、黑色与荒诞幽默、职场与超自然喜剧。',
-      adventure: '以行动驱动的虚构：冒险、探索、求生与寻宝——旅程与危险即情节。',
-      mystery_thriller: '罪案、谜团与悬念：从安乐椅推理到硬汉黑色侦探，外加追逐、阴谋与高风险惊悚。',
-    },
   };
   const LENGTH_BLURBS = {
     en: {
@@ -105,16 +91,6 @@
       anthology: 'Anthology: a collection of self-contained stories linked by theme or world; each entry has its own arc.',
       novel: 'Standard novel (~60k–90k words): full multi-chapter arc; ~4,000-word chapters balance pace and depth.',
       epic: 'Epic novel (100k+ words): multiple POVs/subplots and world-scale stakes; longer ~5,000-word chapters.',
-    },
-    zh: {
-      flash: '微型小说：一篇连续完成（约1500字内），聚焦一个瞬间与一次反转。',
-      short: '短篇小说（约1500–7500词）：单一线索、少量角色、迅速收束。',
-      novelette: '中短篇（约7500–17500词）：主线之外可容纳一条副线与更多成长。',
-      novella: '中篇（约17500–40000词）：情节集中、人物精简，具备长篇质感。',
-      light_novel: '轻小说：日式连载文体——短章节（约3500词）、对白密集、以篇章推进。',
-      anthology: '短篇集：多篇独立故事以主题或世界观串联，各自成篇。',
-      novel: '标准长篇（约6–9万词）：完整多章结构，单章约4000词平衡节奏与深度。',
-      epic: '史诗长篇（10万词以上）：多视角多支线、世界级冲突，单章约5000词。',
     },
   };
   const CONFLICT_FAMILIES = {

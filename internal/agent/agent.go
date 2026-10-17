@@ -102,14 +102,14 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 	var messages []llm.Message
 	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 
-	toolResultLabel := "[工具结果]"
+	toolResultLabel := "[toolfruit]"
 	if projectLang(ctx) == i18n.LangEN {
 		toolResultLabel = "[Tool result]"
 	}
 
-	// 找到最后一个 user 步骤的索引（即当前轮用户消息），用于去重。
-	// handlers.go 在 agent loop 启动前就把当前用户消息追加到了 session.Messages，
-	// 所以 history 中最后一条 user 步骤与 userMessage 相同，需跳过避免重复。
+	// tomostlaterone user cord(i.e.whenfrontrounduse), useingoheavy.
+	// handlers.go in agent loop enablemovefrontthenBAwhenfrontusechaseto session.Messages,
+	// so history middlemostlateronestrip user and userMessage , jumppassheavy.
 	lastUserIdx := -1
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Role == "user" {
@@ -187,7 +187,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			for _, m := range messages {
 				roleSeq = append(roleSeq, fmt.Sprintf("%s(%d)", m.Role, len([]rune(m.Content))))
 			}
-			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d/%d: 消息 %d 条: %v", step+1, maxSteps, len(messages), roleSeq))
+			ctx.logger().Info(fmt.Sprintf("[Agent] %d/%d: %d strip: %v", step+1, maxSteps, len(messages), roleSeq))
 		}
 
 		fullResp := ""
@@ -196,7 +196,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 		})
 		if err != nil {
 			if ctx.Logger != nil {
-				ctx.logger().Error(fmt.Sprintf("[Agent] 步骤 %d: API 调用失败: %v", step+1, err))
+				ctx.logger().Error(fmt.Sprintf("[Agent] %d: API use: %v", step+1, err))
 			}
 			if forcedCall != nil {
 				// Tagged turn: the generate_section tool already ran. Give the
@@ -212,7 +212,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 		}
 
 		if ctx.Logger != nil {
-			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: API 响应 %d 字符 (finish_reason=%s)", step+1, len(fullResp), finishReason))
+			ctx.logger().Info(fmt.Sprintf("[Agent] step %d: API response %d chars (finish_reason=%s)", step+1, len(fullResp), finishReason))
 		}
 
 		toolCall := parseToolCall(fullResp)
@@ -255,18 +255,18 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 				if len([]rune(preview)) > 200 {
 					preview = string([]rune(preview)[:200]) + "..."
 				}
-				ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: 未检测到工具调用，作为最终回复返回。内容预览: %s", step+1, preview))
+				ctx.logger().Info(fmt.Sprintf("[Agent] %d: not yettotooluse, makeformostreturnreturn. insidebrowse: %s", step+1, preview))
 			}
 			history = append(history, AgentStep{Role: "assistant", Content: fullResp})
 			return fullResp, history, nil
 		}
 
 		if ctx.Logger != nil {
-			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: 检测到工具调用 → %s", step+1, toolCall.Name))
+			ctx.logger().Info(fmt.Sprintf("[Agent] %d: totooluse → %s", step+1, toolCall.Name))
 		}
 
-		// 保存到历史时，剥离 <tool_call> 标签，只保留工具调用结构。
-		// 避免前端同时从 m.tool_calls 和 m.content 渲染导致重复显示。
+		// insuredeposittohour, leave <tool_call> metric, onlyinsurestaytooluse.
+		// fronthourfrom m.tool_calls and m.content heavy.
 		strippedContent := stripToolCallTags(fullResp)
 		history = append(history, AgentStep{Role: "assistant", Content: strippedContent, ToolCall: toolCall})
 
@@ -281,7 +281,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			if len([]rune(resultPreview)) > 100 {
 				resultPreview = string([]rune(resultPreview)[:100]) + "..."
 			}
-			ctx.logger().Info(fmt.Sprintf("[Agent] 步骤 %d: 工具 %s 执行完成，结果: %s", step+1, toolCall.Name, resultPreview))
+			ctx.logger().Info(fmt.Sprintf("[Agent] %d: tool %s travel, fruit: %s", step+1, toolCall.Name, resultPreview))
 		}
 
 		history = append(history, AgentStep{
@@ -373,8 +373,8 @@ func forcedSectionName(call *ToolCall) string {
 }
 
 func callAgentAPI(ctx context.Context, apiCfg *config.APIConfig, messages []llm.Message, onChunk func(string)) (finishReason string, err error) {
-	// Agent 调用需要足够的输出 token 来生成工具调用 JSON。
-	// 如果用户未设置或设置过低，使用 8192 作为下限。
+	// The agent must output tool calls as JSON tokens.
+	// such asfruitusenot yetplaceorplacepasslow, makeuse 8192 makeforlower.
 	agentCfg := *apiCfg
 	agentCfg.MaxTokens = agentEffectiveMaxTokens(apiCfg)
 
@@ -390,7 +390,7 @@ func callAgentAPI(ctx context.Context, apiCfg *config.APIConfig, messages []llm.
 		return "", err
 	}
 	if syncResult.Content == "" {
-		return "", fmt.Errorf("API 返回空响应: %v", err)
+		return "", fmt.Errorf("API returned empty response: %v", err)
 	}
 	if onChunk != nil {
 		onChunk(syncResult.Content)
@@ -457,7 +457,7 @@ func buildAgentSystemPrompt(ctx *AgentContext, toolDesc string) string {
 	if projectLang(ctx) == i18n.LangEN {
 		return buildAgentSystemPromptEN(ctx, toolDesc)
 	}
-	return buildAgentSystemPromptZH(ctx, toolDesc)
+	return buildAgentSystemPromptEN(ctx, toolDesc)
 }
 
 // calcSynopsisLengthRange returns recommended synopsis length bounds (characters)
@@ -485,124 +485,6 @@ func calcSynopsisLengthRange(chapterCount, targetWordsPerChapter int) (minLen, m
 		minLen = maxLen * 2 / 3
 	}
 	return minLen, maxLen
-}
-
-func buildAgentSystemPromptZH(ctx *AgentContext, toolDesc string) string {
-	var sb strings.Builder
-	sb.WriteString("结尾用途 ending_intent 可选 serial/final/sequel；ending_style 可选 closed/open/custom，自定义必填 ending_requirements。预定完结后继续追加必须先征得用户同意，才传 confirm_continue=true。编辑正文前读取 read_chapter 的事实关联和 content_rev；影响关联事实须向用户列出事实及相关章节并征得同意，才传 confirm_fact_impact=true。确认章节后自动同步设定；失败可在写作页重试。\n")
-	sb.WriteString("大纲按批次规划。generate_outline 必须传 chapter_count（1–36）与 outline_synopsis；默认追加，只有末尾全部未写批次可用 replace_last 重新规划。先 read_outline 获取批次 ID；全书梗概不是配置项。\n")
-	sb.WriteString("你是一个小说创作助手，全权负责管理小说项目的一切操作，包括：生成/修订/确认大纲、生成/修订/确认章节、管理角色/世界观/组织/关系/伏笔、技能管理、项目配置等。\n\n")
-
-	sb.WriteString("## 项目信息\n")
-	if ctx.State.Title != "" {
-		sb.WriteString(fmt.Sprintf("小说标题: 《%s》\n", ctx.State.Title))
-	}
-	sb.WriteString(fmt.Sprintf("当前阶段: %s\n", ctx.State.Phase))
-	sb.WriteString(fmt.Sprintf("当前大纲章节数: %d\n", len(ctx.State.Chapters)))
-	cfg := ctx.safeCfg()
-	sb.WriteString(fmt.Sprintf("每章目标字数: %d\n", cfg.Story.TargetWordsPerChapter))
-	totalWords := len(ctx.State.Chapters) * cfg.Story.TargetWordsPerChapter
-	sb.WriteString(fmt.Sprintf("现有章纲预计总字数: 约 %d 字\n", totalWords))
-
-	if storyFields := story.FormatStoryConfigForPrompt(cfg.Story, i18n.LangZH); storyFields != "" {
-		sb.WriteString("\n### 故事参数（当前值，来自配置页，可直接引用；修改须用 update_project_config）\n")
-		sb.WriteString(storyFields)
-	}
-
-	if ctx.Settings != nil {
-		sb.WriteString(fmt.Sprintf("角色数: %d\n", len(ctx.Settings.Characters)))
-		sb.WriteString(fmt.Sprintf("世界观条目: %d\n", len(ctx.Settings.Worldview)))
-		sb.WriteString(fmt.Sprintf("组织数: %d\n", len(ctx.Settings.Organizations)))
-	}
-
-	if ctx.ContextPage != "" {
-		pageNames := map[string]string{
-			"config":        "配置",
-			"novel-params":  "小说参数",
-			"theme":         "主题与母题",
-			"style":         "写作风格与视角",
-			"lore":          "设定",
-			"characters":    "角色",
-			"worldview":     "世界观",
-			"organizations": "组织",
-			"relations":     "图谱",
-			"foreshadows":   "伏笔",
-			"memory":        "记忆",
-			"proofread":     "校对",
-			"outline":       "大纲",
-			"writing":       "写作",
-			"skills":        "技能",
-		}
-		if name, ok := pageNames[ctx.ContextPage]; ok {
-			sb.WriteString(fmt.Sprintf("\n用户当前正在查看「%s」页面。\n", name))
-		}
-	}
-
-	if frontierInfo := story.FormatWritingFrontierInfo(ctx.State, i18n.LangZH); frontierInfo != "" {
-		sb.WriteString("\n")
-		sb.WriteString(frontierInfo)
-	}
-
-	sb.WriteString("\n")
-
-	enabledSkills := story.ResolveSkills(ctx.Skills, cfg.SkillConfig, story.SkillScopeAssistantChat, cfg.Language)
-	if len(enabledSkills) > 0 {
-		sb.WriteString("## 已启用技能\n")
-		sb.WriteString(story.FormatSkillsContent(enabledSkills))
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString("## 可用工具\n")
-	sb.WriteString(toolDesc)
-	sb.WriteString("\n\n")
-
-	sb.WriteString("## 工具调用格式\n")
-	sb.WriteString("当需要调用工具时，严格使用以下格式。注意：必须是合法的JSON，不要用XML标签包裹：\n")
-	sb.WriteString("<tool_call>\n")
-	sb.WriteString(`{"name": "工具名称", "arguments": {"参数名": "参数值"}}`)
-	sb.WriteString("\n</tool_call>\n\n")
-	sb.WriteString("正确示例：\n")
-	sb.WriteString("<tool_call>\n")
-	sb.WriteString(`{"name": "search_project", "arguments": {"query": "人物"}}`)
-	sb.WriteString("\n</tool_call>\n\n")
-	sb.WriteString("错误示例（不要这样写）：\n")
-	sb.WriteString("- 不要在 tool_call 标签内使用 arguments 等XML标签\n")
-	sb.WriteString("- 不要在 tool_call 标签外写工具调用JSON\n")
-	sb.WriteString("- 不要输出多个 tool_call 标签\n")
-	sb.WriteString("一次只能调用一个工具。等收到工具结果后再继续。\n")
-	sb.WriteString("当不需要调用工具时，直接回复用户即可。\n\n")
-
-	sb.WriteString("## 安全规则（最高优先级，违反将造成用户数据永久丢失）\n")
-	sb.WriteString("1. **修改 ≠ 删除**。当用户要求「修改/调整/润色/修正某一章」时，必须且只能使用 revise_chapter 工具（通过 num 参数指定章节号）。绝对禁止通过 delete_chapter / delete_chapters_from / delete_outline / reset_progress 来实现任何形式的「修改」需求。\n")
-	sb.WriteString("2. revise_chapter 支持修订任意已有内容的章节（包括已确认的早期章节），它只改动目标章节本身，不影响其他章节。修改第 6 章的细节就调用 revise_chapter(num=6, feedback=具体意见)，仅此而已。\n")
-	sb.WriteString("3. 删除类工具（delete_chapter、delete_chapters_from、delete_outline、reset_progress）是不可逆的危险操作，仅当用户**明确使用「删除/清空/重置」等字眼**并指明范围时才可使用。使用前必须：先用一条纯文本回复向用户复述将被删除的确切范围（如「将清除第 6~30 章共 25 章的正文内容（大纲保留）」），等用户明确回复确认后，才在下一轮调用工具并传入 confirm=true。注意：delete_chapter / delete_chapters_from 只清除正文（Content、Summary、markdown 文件），保留大纲条目且**不会减少章节总数**；delete_outline / reset_progress 才会删除大纲和全部数据。\n")
-	sb.WriteString("5. 拿不准用户意图时，先提问澄清，不要猜测着执行写操作。\n\n")
-
-	sb.WriteString("## 工具选择指南\n")
-	sb.WriteString("- 修改某章内容细节 → revise_chapter(num, feedback)（AI 重写整章）\n")
-	sb.WriteString("- 局部编辑某章（替换行/替换文本/插入/追加）→ edit_chapter_content(num, operation, ...)（精确编辑，不重写整章，适合微调个别段落或修正错误）\n")
-	sb.WriteString("- 修改某章的大纲（pending / writing / review；已确认不可改）→ edit_chapter_outline(num, title, outline)\n")
-	sb.WriteString("- 对现有大纲提修改意见且**章数不变** → revise_outline(feedback)（只更新未确认章节的标题/大纲，不能增减章节总数）\n")
-	sb.WriteString("- 删除写作前沿章节正文（待确认章，或已确认但下一章尚未开始写作）→ delete_chapter。先核对项目信息中的「delete_chapter 当前可删」章号；**禁止**为此使用 delete_chapters_from\n")
-	sb.WriteString("- 删除更早某一章及之后全部正文 → delete_chapters_from(num)（从第 num 章清到全书末章，须先向用户复述范围并确认）。若用户只想删前沿那一章，必须用 delete_chapter\n")
-	sb.WriteString("- 生成下一章正文 → generate_chapter\n")
-
-	sb.WriteString("## 重要规则\n")
-	sb.WriteString("- 异步工具（如 generate_outline、generate_chapter 等）会立即返回「任务已启动」，任务结果通过日志推送到界面。你必须先调用工具，收到工具结果后才能告知用户任务已启动。绝对不要在没有调用工具的情况下输出「请等待」「请耐心等待」「请稍等」「正在生成」等文字——如果用户请求的操作你无法完成，直接说明原因即可。\n")
-	sb.WriteString("- 调用工具时，**不要输出任何解释文字**，直接输出 <tool_call> 标签。解释放在收到工具结果之后。\n")
-	sb.WriteString("- 当用户提交故事配置时（如「请更新以下故事配置」），使用 update_project_config 工具。\n")
-	sb.WriteString("- 当用户提交写作风格或故事梗概的更新时（如「请更新写作风格:」或「请更新故事梗概:」），使用 update_project_config 工具保存对应字段。\n")
-	sb.WriteString("- **配置保护**：若某字段用户已在配置页填写（非空），你不得静默覆盖。需要修改时，先在对话中说明当前值与建议值的差异及理由，等用户明确同意后再调用 update_project_config 并传入 confirm_overwrite=true。\n")
-	sb.WriteString("- 当用户要求创建/修改角色、世界观等设定时，直接使用对应的工具完成操作。\n")
-	sb.WriteString("- 当用户要求生成大纲、生成章节等操作时，使用对应的工具。如果是异步工具，告知用户等待。\n")
-	sb.WriteString("- 当用户要求生成某个配置板块（写作风格、角色/人物、组织、关系、地点、世界观、主题与动机、故事构想、读者画像、灵感作品、预规划）时——包括点击「生成」按钮发来的消息（如「请生成角色设定」，或带有 [generate-section:<section>] 标记的消息）——必须调用 generate_section 工具；若消息含 [generate-section:X] 标记，section 参数必须直接使用 X（style / characters / organizations / relations / locations / worldview / motif / story_idea / audience_profile / inspirational_pieces / pre_planning），不要自行改写或推断。该工具会依据全部小说参数后台生成并自动写入对应字段。\n")
-	sb.WriteString("- 在生成大纲之前，提醒用户检查配置页面中的各项设定（故事类型、写作风格、故事梗概、角色、世界观），确认无误后再进行。\n")
-	sb.WriteString("- 在正式开始写作（确认大纲）之前，再次提醒用户确认所有设定，包括角色详情和世界观条目。\n")
-	sb.WriteString("- 执行写操作前，优先用读工具（read_outline、read_chapter 等）确认目标存在且状态符合预期。\n")
-	sb.WriteString("- 对话中的 [工具结果] 是你之前调用工具的返回值，代表你已经完成的操作。如果你已通过工具修复了某个问题，后续不需要再次检查同一问题。需要验证修复结果时，直接基于工具返回值判断，不要重新读取数据来「确认」。\n")
-	sb.WriteString("- 所有操作完成后，简要告知用户结果，并在末尾建议接下来可以进行的 1-2 个操作（如：检查角色设定、生成大纲、确认章节等），帮助用户推进项目。\n")
-
-	return sb.String()
 }
 
 func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
@@ -726,7 +608,7 @@ func buildAgentSystemPromptEN(ctx *AgentContext, toolDesc string) string {
 func buildToolDescriptions(tools []Tool) string {
 	var sb strings.Builder
 	for _, t := range tools {
-		sb.WriteString(fmt.Sprintf("- **%s**: %s\n  参数: %s\n", t.Name, t.Description, t.Parameters))
+		sb.WriteString(fmt.Sprintf("- **%s**: %s\n number: %s\n", t.Name, t.Description, t.Parameters))
 	}
 	return sb.String()
 }
@@ -766,7 +648,7 @@ func parseToolCall(content string) *ToolCall {
 
 	endIdx := strings.Index(content[idx:], "</tool_call>")
 	if endIdx == -1 {
-		// 标签未闭合：可能是流式截断；不在此修复 JSON，由 finish_reason==length 时显式报错。
+		// metricnot yetjoin: cancanisdisconnect; not inthis JSON, finish_reason==length hour.
 		inner := strings.TrimSpace(content[idx+len("<tool_call>"):])
 		if tc := parseToolCallFromJSON(inner); tc != nil {
 			return tc
@@ -782,23 +664,23 @@ func parseToolCall(content string) *ToolCall {
 
 	inner := strings.TrimSpace(content[idx+len("<tool_call>") : idx+endIdx])
 
-	// 优先尝试直接 JSON 解析
+	// firsttasteconnect JSON untie
 	if tc := parseToolCallFromJSON(inner); tc != nil {
 		return tc
 	}
 
-	// 尝试 XML 格式解析（<name>...</name> + <arguments>...</arguments>）
+	// taste XML griduntie(<name>...</name> + <arguments>...</arguments>)
 	if tc := parseToolCallFromXML(inner); tc != nil {
 		return tc
 	}
 
-	// 标签内解析失败，fallback：在 </tool_call> 之后继续搜索 JSON
+	// metricinsideuntie, fallback: in </tool_call> oflatercord JSON
 	remaining := content[idx+endIdx+len("</tool_call>"):]
 	if tc := parseToolCallJSON(remaining); tc != nil {
 		return tc
 	}
 
-	// 最终 fallback：在全部内容中搜索 JSON 工具调用
+	// most fallback: inpartinsidemiddlecord JSON tooluse
 	if tc := parseToolCallJSON(content); tc != nil {
 		return tc
 	}
@@ -970,8 +852,8 @@ func executeTool(call *ToolCall, tools []Tool, ctx *AgentContext) (string, strin
 	return i18n.T(lang, "agent.unknown_tool", call.Name), "agent.unknown_tool", i18n.MsgArgs(call.Name)
 }
 
-// requireConfirm 检查危险操作的 confirm 参数。
-// 未确认时返回非空提示（作为工具结果反馈给 AI，要求其先征得用户同意）。
+// requireConfirm riskmake confirm number.
+// not yethourreturnempty(makefortoolfruitgive AI, want toitsfirst useintent).
 func requireConfirm(ctx *AgentContext, args json.RawMessage, action string) string {
 	var params struct {
 		Confirm bool `json:"confirm"`
@@ -987,8 +869,8 @@ func getBuiltinTools() []Tool {
 	return []Tool{
 		{
 			Name:        "read_characters",
-			Description: "获取角色列表，可按名称过滤",
-			Parameters:  `{"filter": "可选，按名称过滤"}`,
+			Description: "withdrawhornrowtable, canby pass",
+			Parameters:  `{"filter": "can, by pass"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Filter string `json:"filter"`
@@ -1004,15 +886,15 @@ func getBuiltinTools() []Tool {
 					if params.Filter != "" && !strings.Contains(c.Name, params.Filter) {
 						continue
 					}
-					result.WriteString(fmt.Sprintf("【%s】(ID:%s)\n", c.Name, c.ID))
+					result.WriteString(fmt.Sprintf("[%s](ID:%s)\n", c.Name, c.ID))
 					if c.Age != "" {
-						result.WriteString(fmt.Sprintf("  年龄: %s\n", c.Age))
+						result.WriteString(fmt.Sprintf(" year: %s\n", c.Age))
 					}
 					if c.Personality != "" {
-						result.WriteString(fmt.Sprintf("  性格: %s\n", c.Personality))
+						result.WriteString(fmt.Sprintf(" grid: %s\n", c.Personality))
 					}
 					if c.Background != "" {
-						result.WriteString(fmt.Sprintf("  背景: %s\n", c.Background))
+						result.WriteString(fmt.Sprintf(" back: %s\n", c.Background))
 					}
 					result.WriteString("\n")
 				}
@@ -1025,8 +907,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_character",
-			Description: "获取单个角色详情，通过ID或名称",
-			Parameters:  `{"id": "角色ID或名称"}`,
+			Description: "withdrawbillhorn, passIDor",
+			Parameters:  `{"id": "hornIDor"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -1048,8 +930,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_worldview",
-			Description: "获取世界观条目列表，可按分类过滤",
-			Parameters:  `{"category": "可选分类: geography/faction/rule/history/other"}`,
+			Description: "Remove a worldview entry by ID; optionally filter by category",
+			Parameters:  `{"category": "candivideclass: geography/faction/rule/history/other"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Category string `json:"category"`
@@ -1065,7 +947,7 @@ func getBuiltinTools() []Tool {
 					if params.Category != "" && w.Category != params.Category {
 						continue
 					}
-					result.WriteString(fmt.Sprintf("【%s】(%s)\n  %s\n\n", w.Name, w.Category, w.Description))
+					result.WriteString(fmt.Sprintf("[%s](%s)\n %s\n\n", w.Name, w.Category, w.Description))
 				}
 
 				if result.Len() == 0 {
@@ -1076,7 +958,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_organizations",
-			Description: "获取组织列表",
+			Description: "Remove an organization from its roster",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.Settings == nil || len(ctx.Settings.Organizations) == 0 {
@@ -1085,9 +967,9 @@ func getBuiltinTools() []Tool {
 
 				var result strings.Builder
 				for _, o := range ctx.Settings.Organizations {
-					result.WriteString(fmt.Sprintf("【%s】(ID:%s, 类型:%s)\n  %s\n", o.Name, o.ID, o.Type, o.Description))
+					result.WriteString(fmt.Sprintf("[%s](ID:%s, class:%s)\n %s\n", o.Name, o.ID, o.Type, o.Description))
 					if len(o.Members) > 0 {
-						result.WriteString(fmt.Sprintf("  成员IDs: %s\n", strings.Join(o.Members, ", ")))
+						result.WriteString(fmt.Sprintf(" IDs: %s\n", strings.Join(o.Members, ", ")))
 					}
 					result.WriteString("\n")
 				}
@@ -1096,7 +978,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_chapter",
-			Description: "获取指定章节内容",
+			Description: "withdrawfingerchaptersectioninside",
 			Parameters:  `{"num": 1}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1109,17 +991,17 @@ func getBuiltinTools() []Tool {
 						var result strings.Builder
 						facts, _ := json.Marshal(story.FactsForChapter(ctx.State, ch.Num, 0))
 						fmt.Fprintf(&result, "content_rev: %s\nfacts: %s\n", story.ChapterRevision(ch), facts)
-						result.WriteString(fmt.Sprintf("第%d章《%s》[%s]\n\n", ch.Num, ch.Title, ch.Status))
+						result.WriteString(fmt.Sprintf("#%dchapter<%s>[%s]\n\n", ch.Num, ch.Title, ch.Status))
 						if ch.Outline != "" {
-							result.WriteString(fmt.Sprintf("大纲: %s\n\n", ch.Outline))
+							result.WriteString(fmt.Sprintf("big: %s\n\n", ch.Outline))
 						}
 						if ch.Summary != "" {
-							result.WriteString(fmt.Sprintf("摘要: %s\n\n", ch.Summary))
+							result.WriteString(fmt.Sprintf("want to: %s\n\n", ch.Summary))
 						}
 						if ch.Content != "" {
 							result.WriteString(ch.Content)
 						} else {
-							result.WriteString("(尚未生成内容)")
+							result.WriteString("(not yetlifeinside)")
 						}
 						return result.String(), nil
 					}
@@ -1129,7 +1011,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_outline",
-			Description: "获取完整大纲",
+			Description: "withdrawbig",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if len(ctx.State.Chapters) == 0 {
@@ -1138,7 +1020,7 @@ func getBuiltinTools() []Tool {
 
 				var result strings.Builder
 				result.WriteString(story.BatchSynopses(ctx.State, ctx.safeCfg().Language))
-				result.WriteString(fmt.Sprintf("《%s》\n\n", ctx.State.Title))
+				result.WriteString(fmt.Sprintf("<%s>\n\n", ctx.State.Title))
 				for _, ch := range ctx.State.Chapters {
 					status := ""
 					switch ch.Status {
@@ -1149,14 +1031,14 @@ func getBuiltinTools() []Tool {
 					case story.StatusWriting:
 						status = "⏳"
 					}
-					result.WriteString(fmt.Sprintf("第%d章 %s《%s》: %s\n", ch.Num, status, ch.Title, ch.Outline))
+					result.WriteString(fmt.Sprintf("#%dchapter %s<%s>: %s\n", ch.Num, status, ch.Title, ch.Outline))
 				}
 				return result.String(), nil
 			},
 		},
 		{
 			Name:        "read_foreshadows",
-			Description: "获取伏笔列表",
+			Description: "withdrawrowtable",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if len(ctx.State.Foreshadows) == 0 {
@@ -1166,20 +1048,20 @@ func getBuiltinTools() []Tool {
 				var result strings.Builder
 				for _, fs := range ctx.State.Foreshadows {
 					result.WriteString(fmt.Sprintf("#%d [%s] %s\n", fs.ID, story.ForeshadowStatusLabel(fs.Status), fs.Name))
-					result.WriteString(fmt.Sprintf("  描述: %s\n", fs.Description))
-					result.WriteString(fmt.Sprintf("  埋设: 第%d章", fs.PlantChapter))
+					result.WriteString(fmt.Sprintf(" : %s\n", fs.Description))
+					result.WriteString(fmt.Sprintf(" : #%dchapter", fs.PlantChapter))
 					if fs.TargetChapter > 0 {
-						result.WriteString(fmt.Sprintf(" → 预计回收: 第%d章", fs.TargetChapter))
+						result.WriteString(fmt.Sprintf(" → countreturncollect: #%dchapter", fs.TargetChapter))
 					}
 					result.WriteString("\n")
 					if len(fs.Events) > 0 {
-						result.WriteString("  进展:\n")
+						result.WriteString(" advance:\n")
 						for _, ev := range fs.Events {
-							result.WriteString(fmt.Sprintf("    - 第%d章: %s\n", ev.Chapter, ev.Note))
+							result.WriteString(fmt.Sprintf(" - #%dchapter: %s\n", ev.Chapter, ev.Note))
 						}
 					}
 					if fs.Resolution != "" {
-						result.WriteString(fmt.Sprintf("  回收方式: %s\n", fs.Resolution))
+						result.WriteString(fmt.Sprintf(" returncollectsquare: %s\n", fs.Resolution))
 					}
 					result.WriteString("\n")
 				}
@@ -1188,8 +1070,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "search_project",
-			Description: "全文搜索项目数据（角色名、世界观、大纲等）",
-			Parameters:  `{"query": "搜索关键词"}`,
+			Description: "corditemnumberreceipt(horn, observe, bigetc)",
+			Parameters:  `{"query": "cordclosekeyword"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Query string `json:"query"`
@@ -1206,19 +1088,19 @@ func getBuiltinTools() []Tool {
 				if ctx.Settings != nil {
 					for _, c := range ctx.Settings.Characters {
 						if strings.Contains(strings.ToLower(c.Name), q) || strings.Contains(strings.ToLower(c.Background), q) {
-							results = append(results, fmt.Sprintf("[角色] %s: %s", c.Name, story.Truncate(c.Background, 100)))
+							results = append(results, fmt.Sprintf("[horn] %s: %s", c.Name, story.Truncate(c.Background, 100)))
 						}
 					}
 					for _, w := range ctx.Settings.Worldview {
 						if strings.Contains(strings.ToLower(w.Name), q) || strings.Contains(strings.ToLower(w.Description), q) {
-							results = append(results, fmt.Sprintf("[世界观] %s: %s", w.Name, story.Truncate(w.Description, 100)))
+							results = append(results, fmt.Sprintf("[observe] %s: %s", w.Name, story.Truncate(w.Description, 100)))
 						}
 					}
 				}
 
 				for _, ch := range ctx.State.Chapters {
 					if strings.Contains(strings.ToLower(ch.Title), q) || strings.Contains(strings.ToLower(ch.Outline), q) {
-						results = append(results, fmt.Sprintf("[章节] 第%d章《%s》: %s", ch.Num, ch.Title, story.Truncate(ch.Outline, 100)))
+						results = append(results, fmt.Sprintf("[chaptersection] #%dchapter<%s>: %s", ch.Num, ch.Title, story.Truncate(ch.Outline, 100)))
 					}
 				}
 
@@ -1230,8 +1112,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_character",
-			Description: "创建新角色",
-			Parameters:  `{"name": "角色名", "age": "", "appearance": "", "personality": "", "background": "", "motivation": "", "abilities": "", "notes": ""}`,
+			Description: "newhorn",
+			Parameters:  `{"name": "character", "age": "", "appearance": "", "personality": "", "background": "", "motivation": "", "abilities": "", "notes": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var c story.Character
 				if err := json.Unmarshal(args, &c); err != nil {
@@ -1256,8 +1138,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_character",
-			Description: "更新角色信息",
-			Parameters:  `{"id": "角色ID", "name": "", "age": "", "personality": "", "background": ""}`,
+			Description: "morenewhorn",
+			Parameters:  `{"id": "hornID", "name": "", "age": "", "personality": "", "background": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID          string `json:"id"`
@@ -1316,8 +1198,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_character",
-			Description: "删除角色",
-			Parameters:  `{"id": "角色ID"}`,
+			Description: "excepthorn",
+			Parameters:  `{"id": "hornID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -1341,8 +1223,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_worldview",
-			Description: "创建世界观条目",
-			Parameters:  `{"name": "名称", "category": "分类", "description": "描述", "tags": ""}`,
+			Description: "worldview entry",
+			Parameters:  `{"name": "", "category": "divideclass", "description": "", "tags": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var w story.WorldviewEntry
 				if err := json.Unmarshal(args, &w); err != nil {
@@ -1367,8 +1249,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_worldview",
-			Description: "更新世界观条目",
-			Parameters:  `{"id": "条目ID", "name": "", "category": "", "description": "", "tags": ""}`,
+			Description: "update worldview entry",
+			Parameters:  `{"id": "stripID", "name": "", "category": "", "description": "", "tags": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID          string `json:"id"`
@@ -1411,8 +1293,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_worldview",
-			Description: "删除世界观条目",
-			Parameters:  `{"id": "条目ID"}`,
+			Description: "delete worldview entry",
+			Parameters:  `{"id": "stripID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -1436,7 +1318,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_project_config",
-			Description: "读取当前故事配置（所有小说参数，含简介、主题、基调等）",
+			Description: "readwithdrawwhenfrontplace(hassmallsaynumber, , , etc)",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				// Always read from the live config: the form (PUT /api/config) and
@@ -1448,8 +1330,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_project_config",
-			Description: "更新全局故事设定的任意字段：type/subgenre/title/author/theme/tone/motif/story_length/structure/story_idea/conflict_scale/conflict_other/specific_settings/protagonist_type/protagonist_other/target_audience/audience_profile/inspirational_pieces/output_language/romance_level/sexual_content/gore_level/world_darkness/gender_bias/locations_enabled/character_arcs_enabled/target_words_per_chapter/writing_style/writing_pov。story_idea 是全书核心创意/前提（Story idea），不是章节梗概；批次梗概和章数直接传给 generate_outline，不在全局配置填写。覆盖已有字段需 confirm_overwrite=true。",
-			Parameters:  `{"type":"故事类型","title":"标题","subgenre":"子类型","theme":"主题","tone":"基调","author":"作者","story_length":"篇幅","structure":"结构","motif":"母题","story_idea":"故事构想（Story idea：全书核心创意与前提，勿与章节/大纲梗概混淆）","conflict_scale":"冲突规模","conflict_other":"自定义冲突","specific_settings":"特定设定(每行一条)","protagonist_type":"主角类型","protagonist_other":"自定义主角","target_audience":"目标读者","audience_profile":"读者画像","inspirational_pieces":"灵感作品（参考作品，每行一条）","output_language":"en","romance_level":"恋爱线","sexual_content":"性描写","gore_level":"暴力尺度","world_darkness":"世界黑暗度","gender_bias":"性别倾向","locations_enabled":false,"character_arcs_enabled":false,"target_words_per_chapter":2500,"writing_style":"写作风格","writing_pov":"叙述视角","confirm_overwrite":false}`,
+			Description: "morenew intentcharacter-countparagraph: type/subgenre/title/author/theme/tone/motif/story_length/structure/story_idea/conflict_scale/conflict_other/specific_settings/protagonist_type/protagonist_other/target_audience/audience_profile/inspirational_pieces/output_language/romance_level/sexual_content/gore_level/world_darkness/gender_bias/locations_enabled/character_arcs_enabled/target_words_per_chapter/writing_style/writing_pov. story_idea isheartintent/front(Story idea), is notchaptersectionprobability; batchtimesprobabilityandchapternumberconnectgive generate_outline, not inplacewrite. coveralreadyhascharacter-countparagraph confirm_overwrite=true. ",
+			Parameters:  `{"type":"class","title":"metric","subgenre":"class","theme":"","tone":"","author":"make","story_length":"piece","structure":"","motif":"","story_idea":"think(Story idea: heartintentandfront, andchaptersection/bigprobability)","conflict_scale":"","conflict_other":"","specific_settings":"(eachtravelonestrip)","protagonist_type":"protagonist type","protagonist_other":"character","target_audience":"metricread","audience_profile":"readdraw","inspirational_pieces":"spiritualfeelmake(make, eachtravelonestrip)","output_language":"en","romance_level":"lovethread","sexual_content":"write","gore_level":"forcedegree","world_darkness":"blackdarkdegree","gender_bias":"otherdirection","locations_enabled":false,"character_arcs_enabled":false,"target_words_per_chapter":2500,"writing_style":"writing style","writing_pov":"POV","confirm_overwrite":false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params map[string]json.RawMessage
 				if err := json.Unmarshal(args, &params); err != nil {
@@ -1529,7 +1411,7 @@ func getBuiltinTools() []Tool {
 					ctx.StartAsync("settings_reconciliation", func(goCtx context.Context) error {
 						err := story.ReconcileSettingsAction(goCtx, ctx.APICfg, cfg, ctx.State, newSettings, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, ctx.Logger)
 						if err != nil {
-							ctx.logger().Error(fmt.Sprintf("设定协调失败: %v", err))
+							ctx.logger().Error(fmt.Sprintf(": %v", err))
 						}
 						return err
 					})
@@ -1544,7 +1426,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_section",
-			Description: "AI 生成小说配置的某一区块（异步），与配置页的 Generate 按钮完全等价：style(写作风格与视角)/characters(角色)/organizations(组织)/relations(关系)/locations(地点)/worldview(世界观条目)/motif(主题与母题)/story_idea(故事构想)/audience_profile(读者画像)/inspirational_pieces(灵感作品)/pre_planning(预规划：基于 Story structure 生成全书计划、总章数建议、长期走向与各幕批次梗概，写入进度而非配置)。会先保存传入的小说参数，再基于全部 Novel parameters 生成并写入对应字段/实体。可选参数用于定向生成：character_id/org_id/entry_id(只填充该已有条目的空白字段)、source_id+target_id(只生成这一对角色间的关系)、name+category(worldview 新条目的名称/类别)。",
+			Description: "AI generation section blocks (style/characters/organizations/relations/locations/worldview/motif/story_idea/audience_profile/inspirational_pieces/pre_planning): generate the content of a given block type based on the current story parameters; pre_planning plans the book-level structure, chapter count, long-term direction and per-batch synopses before writing. First confirm the target book number, then fill in the novel parameters and write into the corresponding fields/body. Optional direct references: character_id/org_id/entry_id (only for entries that already exist with empty fields), source_id+target_id (only when these two characters have a relationship), name+category (new worldview entry / other category).",
 			Parameters:  `{"section":"characters","character_id":"","org_id":"","entry_id":"","source_id":"","target_id":"","name":"","category":""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1611,8 +1493,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_outline",
-			Description: "按本批必填梗概生成章节大纲（异步），默认追加。chapter_count 为本批章数（1–36）；replace_last 仅替换末尾全部未写批次，需 batch_id 和 confirm=true。",
-			Parameters:  `{"chapter_count":12,"outline_synopsis":"本批剧情梗概","long_term_direction":"跨批次长期走向","mode":"append","batch_id":0,"confirm":false,"ending_intent":"serial|final|sequel","ending_style":"closed|open|custom","ending_requirements":"","confirm_continue":false}`,
+			Description: "Generate chapter outlines for this batch from the required synopsis (async); appends by default. chapter_count is the number of chapters in this batch (1-36); replace_last only replaces all unwritten batches at the end and requires batch_id and confirm=true.",
+			Parameters:  `{"chapter_count":12,"outline_synopsis":"thisbatchprobability","long_term_direction":"acrossbatchtimeslongexpectwalkdirection","mode":"append","batch_id":0,"confirm":false,"ending_intent":"serial|final|sequel","ending_style":"closed|open|custom","ending_requirements":"","confirm_continue":false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var req story.OutlineBatchRequest
 				if err := json.Unmarshal(args, &req); err != nil {
@@ -1637,7 +1519,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "confirm_outline",
-			Description: "确认大纲，进入写作阶段",
+			Description: "Large step: enter the writing stage paragraphs",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.State.Phase != "outline" {
@@ -1655,8 +1537,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "revise_outline",
-			Description: "根据反馈修订大纲（异步）。**仅适用于章数不变**的调整（改剧情、改某章情节等）；**不能**增减章节总数。用户要缩章/增章/整本重生时，应 generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true)，不要用本工具。",
-			Parameters:  `{"feedback": "修改意见"}`,
+			Description: "Revise the outline based on feedback (async). Only for adjustments that keep the chapter count unchanged (plot changes, per-chapter tweaks); it cannot add or remove chapters. If the user wants to shrink/expand the chapter count or regenerate the whole book, use generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true) instead of this tool.",
+			Parameters:  `{"feedback": "intentsee"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Feedback string `json:"feedback"`
@@ -1671,7 +1553,7 @@ func getBuiltinTools() []Tool {
 				ctx.StartAsync("outline_revision", func(goCtx context.Context) error {
 					err := story.ReviseOutlineAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.Settings, ctx.ProgressPath, ctx.CfgPath, feedback, ctx.Logger)
 					if err != nil {
-						ctx.logger().Error(fmt.Sprintf("大纲修订失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("big: %v", err))
 					}
 					return err
 				})
@@ -1680,10 +1562,10 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_outline",
-			Description: "【危险·不可逆】清空整个大纲及全部章节数据。仅当用户明确要求「删除/清空大纲」且暂不需要立即重新生成时使用。用户要「删掉重生成 N 章」且无已确认章节时，直接 generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true)，无需先调用本工具。严禁用于修改单章大纲/正文。",
+			Description: "[DANGER - irreversible] Clear the entire outline and all chapter data. Use only when the user explicitly asks to delete/clear the outline and does not need an immediate regeneration. If the user wants to \"delete and regenerate N chapters\" and there are no accepted chapters, call generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true) directly without this tool. Never use it to modify a single chapter's outline/prose.",
 			Parameters:  `{"confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
-				if msg := requireConfirm(ctx, args, fmt.Sprintf("删除整个大纲（共 %d 章）", len(ctx.State.Chapters))); msg != "" {
+				if msg := requireConfirm(ctx, args, fmt.Sprintf("exceptbig( %d chapter)", len(ctx.State.Chapters))); msg != "" {
 					return msg, nil
 				}
 				for _, ch := range ctx.State.Chapters {
@@ -1706,8 +1588,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "edit_chapter_outline",
-			Description: "编辑指定章节的标题和大纲（pending / writing / review 可编辑；已确认不可改）",
-			Parameters:  `{"num": 1, "title": "新标题", "outline": "新大纲"}`,
+			Description: "compilefingerchaptersection metricandbig(pending / writing / review cancompile; alreadynot can)",
+			Parameters:  `{"num": 1, "title": "newmetric", "outline": "newbig"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Num     int    `json:"num"`
@@ -1729,7 +1611,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_chapter",
-			Description: "生成当前章节内容（异步）",
+			Description: "lifewhenfrontchaptersectioninside()",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.State.Phase != "writing" {
@@ -1742,7 +1624,7 @@ func getBuiltinTools() []Tool {
 				ctx.StartAsync("chapter_generation", func(goCtx context.Context) error {
 					err := story.GenerateChapterAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.ProgressPath, ctx.Settings, ctx.Skills, ctx.Logger)
 					if err != nil {
-						ctx.logger().Error(fmt.Sprintf("章节创作失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("chaptersectionmake: %v", err))
 					}
 					return err
 				})
@@ -1751,7 +1633,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "confirm_chapter",
-			Description: "确认当前章节",
+			Description: "whenfrontchaptersection",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.State.Phase != "writing" {
@@ -1767,8 +1649,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "edit_chapter_content",
-			Description: "对章节正文进行局部编辑（同步），无需重写整章。支持 4 种操作：replace_lines（替换行范围）、replace_text（查找替换文本片段）、insert_after_line（在指定行后插入）、append（末尾追加）。适合微调个别段落、修正错误、追加场景等。",
-			Parameters:  `{"num": 1, "operation": "replace_lines|replace_text|insert_after_line|append", "start_line": 1, "end_line": 5, "old_text": "要查找的原文", "line": 10, "new_text": "新内容", "content_rev":"read_chapter 返回的版本", "confirm_fact_impact":false}`,
+			Description: "tochaptersectionadvancetravelpartcompile(), noheavywritechapter. pay 4 seedmake: replace_lines(travel), replace_text(thispieceparagraph), insert_after_line(infingertravellaterenter), append(tailchase). joinotherparagraphpassage, , chaseetc. ",
+			Parameters:  `{"num": 1, "operation": "replace_lines|replace_text|insert_after_line|append", "start_line": 1, "end_line": 5, "old_text": "text to find", "line": 10, "new_text": "new content", "content_rev":"version returned by read_chapter", "confirm_fact_impact":false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var req story.EditChapterContentRequest
 				if err := json.Unmarshal(args, &req); err != nil {
@@ -1801,8 +1683,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "revise_chapter",
-			Description: "根据反馈修订章节正文（异步）。通过 num 指定要修订的章节号（可以是任意已有内容的章节，包括已确认章节）；省略 num 则修订当前写作中的章节。这是修改章节内容的唯一正确方式：只改动目标章节本身，不影响其他章节和大纲。",
-			Parameters:  `{"num": 6, "feedback": "具体修改意见"}`,
+			Description: "Revise a chapter. Pass a chapter number (any existing chapter, including accepted ones); omit the number to revise the chapter currently being written. This is the only operation within a chapter: it rewrites just that chapter's body and does not touch other chapters or the outline.",
+			Parameters:  `{"num": 6, "feedback": "toolbodyintentsee"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Num      int    `json:"num"`
@@ -1817,7 +1699,7 @@ func getBuiltinTools() []Tool {
 				feedback := params.Feedback
 				num := params.Num
 
-				// 未指定章节号 → 修订当前章节（写作流程内）
+				// no chapter number given -> frontier chapter (currently writing)
 				if num <= 0 {
 					if ctx.State.Phase != "writing" || ctx.State.CurrentChapterIndex >= len(ctx.State.Chapters) {
 						return "", agentErr(ctx, "chapter_not_found")
@@ -1825,7 +1707,7 @@ func getBuiltinTools() []Tool {
 					num = ctx.State.Chapters[ctx.State.CurrentChapterIndex].Num
 				}
 
-				// 校验目标章节
+				// metricchaptersection
 				var target *story.ChapterState
 				for i := range ctx.State.Chapters {
 					if ctx.State.Chapters[i].Num == num {
@@ -1840,8 +1722,8 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "chapter_content_empty")
 				}
 
-				// 当前审核中的章节走完整修订流程（含后续大纲联动），
-				// 其他章节走定向最小化修订（零副作用）。
+				// whenfrontmiddle chaptersectionwalk(laterbigunionmove),
+				// itshechaptersectionwalkdirectionmostsmall(zeromakeuse).
 				isCurrent := ctx.State.Phase == "writing" &&
 					ctx.State.CurrentChapterIndex < len(ctx.State.Chapters) &&
 					ctx.State.Chapters[ctx.State.CurrentChapterIndex].Num == num &&
@@ -1856,7 +1738,7 @@ func getBuiltinTools() []Tool {
 						err = story.ReviseSpecificChapterAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.ProgressPath, chNum, feedback, ctx.Settings, ctx.Logger)
 					}
 					if err != nil {
-						ctx.logger().Error(fmt.Sprintf("章节修订失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("chaptersection: %v", err))
 					}
 					return err
 				})
@@ -1865,7 +1747,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_chapter",
-			Description: "【危险·不可逆】清除写作前沿章节的正文（保留大纲）。前沿=CurrentChapterIndex 处 review 章，或下一章 pending 时前一 accepted 章，或全书已确认时的最后一章。仅删这一章；删更早章节须用 delete_chapters_from。须先向用户确认。",
+			Description: "[RISK · irreversible] Delete the writing-frontier chapter (keeps the rest). Frontier = CurrentChapterIndex (a reviewed chapter), or the one accepted chapter before a pending chapter, or the latest accepted chapter. Deletes only this one chapter; for multiple chapters use delete_chapters_from. Confirm before use. ",
 			Parameters:  `{"confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if len(ctx.State.Chapters) == 0 {
@@ -1883,7 +1765,7 @@ func getBuiltinTools() []Tool {
 					}
 				}
 				targetNum := ctx.State.Chapters[idx].Num
-				if msg := requireConfirm(ctx, args, fmt.Sprintf("清除第 %d 章正文（写作前沿）", targetNum)); msg != "" {
+				if msg := requireConfirm(ctx, args, fmt.Sprintf("Delete frontier chapter #%d", targetNum)); msg != "" {
 					return msg, nil
 				}
 				num, err := story.DeleteFrontierChapter(ctx.State, ctx.ProjectDir)
@@ -1906,7 +1788,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_chapters_from",
-			Description: "【危险·不可逆】从指定章节到末尾清除正文内容（保留大纲条目，**不减少章节总数**）。仅当用户明确要求批量删除已写正文时使用。不能用于缩章、不能用于重新生成大纲——缩章/重生请用 generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true)。修改某章请用 revise_chapter。",
+			Description: "[risk·not canreverse]fromfingerchaptersectiontotailclearexceptinside(insurestaybigstrip, **not fewchaptersectionnumber**). onlywhenusebrightwant tobatchmeasureexceptalreadywritehourmakeuse. not canuseinchapter, not canuseinheavynewlifebig——chapter/heavylifepleaseuse generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true). somechapterpleaseuse revise_chapter. ",
 			Parameters:  `{"num": 6, "confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1960,8 +1842,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_organization",
-			Description: "创建组织",
-			Parameters:  `{"name": "组织名", "type": "类型", "description": "描述", "members": ["成员ID"]}`,
+			Description: "organization",
+			Parameters:  `{"name": "organization", "type": "class", "description": "", "members": ["ID"]}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var o story.Organization
 				if err := json.Unmarshal(args, &o); err != nil {
@@ -1983,8 +1865,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_organization",
-			Description: "更新组织信息",
-			Parameters:  `{"id": "组织ID", "name": "", "type": "", "description": "", "members": []}`,
+			Description: "update organization",
+			Parameters:  `{"id": "organizationID", "name": "", "type": "", "description": "", "members": []}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID          string   `json:"id"`
@@ -2024,8 +1906,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_organization",
-			Description: "删除组织",
-			Parameters:  `{"id": "组织ID"}`,
+			Description: "delete organization",
+			Parameters:  `{"id": "organizationID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -2048,8 +1930,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_relation",
-			Description: "创建关系",
-			Parameters:  `{"source_id": "源ID", "source_type": "源类型", "target_id": "目标ID", "target_type": "目标类型", "label": "关系标签"}`,
+			Description: "relationship",
+			Parameters:  `{"source_id": "ID", "source_type": "class", "target_id": "metricID", "target_type": "metricclass", "label": "closeismetric"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var rel story.Relation
 				if err := json.Unmarshal(args, &rel); err != nil {
@@ -2071,8 +1953,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_relation",
-			Description: "更新关系",
-			Parameters:  `{"id": "关系ID", "source_id": "", "source_type": "", "target_id": "", "target_type": "", "label": ""}`,
+			Description: "morenewcloseis",
+			Parameters:  `{"id": "closeisID", "source_id": "", "source_type": "", "target_id": "", "target_type": "", "label": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID         string `json:"id"`
@@ -2116,8 +1998,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_relation",
-			Description: "删除关系",
-			Parameters:  `{"id": "关系ID"}`,
+			Description: "exceptcloseis",
+			Parameters:  `{"id": "closeisID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -2140,7 +2022,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "suggest_foreshadows",
-			Description: "AI 建议伏笔方案（异步）",
+			Description: "AI square()",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if len(ctx.State.Chapters) == 0 {
@@ -2152,10 +2034,10 @@ func getBuiltinTools() []Tool {
 				ctx.StartAsync("foreshadow_suggest", func(goCtx context.Context) error {
 					suggestions, err := story.SuggestForeshadows(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.Logger)
 					if err != nil {
-						ctx.logger().Error(fmt.Sprintf("伏笔建议生成失败: %v", err))
+						ctx.logger().Error(fmt.Sprintf("life: %v", err))
 						return err
 					}
-					ctx.logger().Success(fmt.Sprintf("伏笔建议生成完成，共 %d 条", len(suggestions)))
+					ctx.logger().Success(fmt.Sprintf("life, %d strip", len(suggestions)))
 					ctx.logger().ForeshadowSuggestions(suggestions)
 					return nil
 				})
@@ -2164,8 +2046,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_foreshadow",
-			Description: "创建伏笔",
-			Parameters:  `{"name": "伏笔名", "description": "描述", "plant_chapter": 1, "target_chapter": 5}`,
+			Description: "",
+			Parameters:  `{"name": "", "description": "", "plant_chapter": 1, "target_chapter": 5}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var req struct {
 					Name          string `json:"name"`
@@ -2198,7 +2080,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_foreshadow",
-			Description: "更新伏笔",
+			Description: "morenew",
 			Parameters:  `{"id": 1, "name": "", "description": "", "plant_chapter": 0, "target_chapter": 0, "status": "", "resolution": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var req struct {
@@ -2251,7 +2133,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_foreshadow",
-			Description: "删除伏笔",
+			Description: "except",
 			Parameters:  `{"id": 1}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -2273,7 +2155,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_skills",
-			Description: "获取所有技能及启用状态",
+			Description: "Get all skills and their enabled state",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var result strings.Builder
@@ -2293,8 +2175,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "toggle_skill",
-			Description: "启用或禁用技能",
-			Parameters:  `{"id": "技能ID", "enabled": true}`,
+			Description: "enableuseorusecan",
+			Parameters:  `{"id": "canID", "enabled": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID      string `json:"id"`
@@ -2324,27 +2206,27 @@ func getBuiltinTools() []Tool {
 				if err := config.SaveConfig(ctx.CfgPath, cfg); err != nil {
 					return "", agentErr(ctx, "save_config_failed", err)
 				}
-				status := "禁用"
+				status := "use"
 				if params.Enabled {
-					status = "启用"
+					status = "enableuse"
 				}
 				return agentMsg(ctx, "agent.skill_toggled", params.ID, status), nil
 			},
 		},
 		{
 			Name:        "reset_progress",
-			Description: "【危险·不可逆】重置所有进度，清除全部章节、大纲和伏笔。仅当用户明确要求重置/清空整个项目进度时使用，且必须先向用户确认。",
+			Description: "[DANGER - irreversible] Reset all progress, clearing every chapter, outline and foreshadowing. Use only when the user explicitly asks to reset/clear the whole project progress, and always confirm with the user first.",
 			Parameters:  `{"confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
-				if msg := requireConfirm(ctx, args, fmt.Sprintf("重置全部进度（共 %d 章及所有伏笔）", len(ctx.State.Chapters))); msg != "" {
+				if msg := requireConfirm(ctx, args, fmt.Sprintf("heavyplacepartadvancedegree( %d chapterandhas)", len(ctx.State.Chapters))); msg != "" {
 					return msg, nil
 				}
 				if err := story.ResetProgressFiles(ctx.ProgressPath); err != nil {
 					return "", agentErr(ctx, "delete_progress_failed", err)
 				}
-				// 原地清空，保证 Handlers 持有的同一指针也被重置
+				// plain clearempty, insurecertificate Handlers has onefinger-tooquiltheavyplace
 				*ctx.State = story.Progress{Phase: "outline"}
-				ctx.logger().Success("进度已重置。")
+				ctx.logger().Success("advancedegreealreadyheavyplace. ")
 				return agentMsg(ctx, "agent.progress_reset"), nil
 			},
 		},
@@ -2405,7 +2287,7 @@ func (ctx *AgentContext) safeCfg() *config.Config {
 func projectLang(ctx *AgentContext) string {
 	c := ctx.cfg()
 	if c == nil {
-		return i18n.LangZH
+		return i18n.LangEN
 	}
 	return i18n.NormalizeLanguage(c.Language)
 }

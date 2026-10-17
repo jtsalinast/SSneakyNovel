@@ -50,17 +50,6 @@ func (h *Handlers) GetOutlineExport(w http.ResponseWriter, r *http.Request) {
 		for _, ch := range h.state.Chapters {
 			fmt.Fprintf(w, "## Chapter %d: %s\n\n%s\n\n", ch.Num, ch.Title, ch.Outline)
 		}
-	} else {
-		fmt.Fprintf(w, "# %s — 章节大纲\n\n", title)
-		if strings.TrimSpace(h.state.LongTermDirection) != "" {
-			fmt.Fprintf(w, "## 全书长期走向\n\n%s\n\n", h.state.LongTermDirection)
-		}
-		for _, batch := range h.state.OutlineBatches {
-			fmt.Fprintf(w, "## 第 %d–%d 章批次梗概\n\n%s\n\n", batch.StartCh, batch.EndCh, batch.Synopsis)
-		}
-		for _, ch := range h.state.Chapters {
-			fmt.Fprintf(w, "## 第 %d 章 %s\n\n%s\n\n", ch.Num, ch.Title, ch.Outline)
-		}
 	}
 }
 

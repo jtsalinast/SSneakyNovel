@@ -1,4 +1,4 @@
-[English](README.md) · [简体中文](README.zh.md)
+[English](README.md)
 
 <p align="center">
   <img src="docs/show-me-the-story.webp" alt="Show Me The Story" width="240">

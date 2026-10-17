@@ -48,13 +48,13 @@
   let charName = '', charAge = '', charAppearance = '', charPersonality = '', charBackground = '', charMotivation = '', charAbilities = '', charNotes = '';
   let wvName = '', wvCategory = 'other', wvDescription = '', wvTags = '';
 
-  // 组织管理
+  // Organization management
   let showOrgForm = false;
   let orgName = '', orgType = '', orgDescription = '';
   let orgMembers = [];
   let editingOrgID = null;
 
-  // 关系管理
+  // Relation management
   let showRelForm = false;
   let relSource = '', relTarget = '', relLabel = '';
   let editingRelID = null;
@@ -171,44 +171,44 @@ western: ['frontier_setting', 'lawlessness', 'honor_code', 'survival_focus', 'ho
 drama: ['interiority_over_plot', 'multi_generational_timeline', 'quiet_realism', 'moral_ambiguity_no_cartoon_villains', 'time_nonlinear_or_elided', 'open_or_bittersweet_endings_ok', 'found_family_or_bloodline', 'institution_as_stage', 'letters_or_messages_format', 'everyday_life_texture'],
 };
 const GENRE_KEYWORDS = [
-['fantasy', ['fantasy', '奇幻', '玄幻', '魔幻']],
-['scifi', ['sci-fi', 'scifi', 'science fiction', '科幻']],
-['mystery', ['mystery', 'detective', '悬疑', '推理', '侦探']],
-['romance', ['romance', '言情', '爱情']],
-['thriller', ['thriller', 'spy', '惊悚', '谍战']],
-['horror', ['horror', '恐怖', '灵异']],
-['historical', ['historical', 'history', '历史']],
-['western', ['western', '西部']],
+['fantasy', ['fantasy']],
+['scifi', ['sci-fi', 'scifi', 'science fiction']],
+['mystery', ['mystery', 'detective']],
+['romance', ['romance']],
+['thriller', ['thriller', 'spy']],
+['horror', ['horror']],
+['historical', ['historical', 'history']],
+['western', ['western']],
 // round 3 — keep in sync with backend config.MatchGenreKey (specific keys first)
-['xianxia', ['xianxia', '仙侠', '修仙']],
-['wuxia', ['wuxia', '武侠', '江湖']],
-['litrpg', ['litrpg', 'lit rpg', 'game novel', 'system flow', '游戏文', '系统流', '无限流']],
-['cyberpunk', ['cyberpunk', 'cyber-punk', '赛博朋克', '赛博']],
-['solarpunk', ['solarpunk', 'solar punk', '太阳朋克']],
-['space_opera', ['space opera', '星际歌剧', '太空歌剧']],
-['romantasy', ['romantasy', 'romantic fantasy', 'epic romance', '浪漫奇幻']],
-['dystopian', ['dystopia', 'dystopian', '反乌托邦']],
-['postapo', ['post-apocalyp', 'post apocalyp', 'postapoc', 'zombie', '末日', '废土', '丧尸']],
-['military', ['military', 'war novel', '军旅', '战争', '军事']],
-['heist', ['heist', 'caper', 'robbery', '劫案', '千门']],
-['cozy', ['cozy', 'comfort read', '治愈系', '温馨推理', '田园']],
-['urban', ['urban', 'contemporary fantasy', 'city', '都市', '现代异能']],
-['middle_grade', ['middle grade', 'middle-grade', 'mg novel', '儿童文学', '少儿']],
-['ya', ['young adult', 'ya fantasy', 'ya romance', '青春', 'teen']],
-['steampunk', ['steampunk', 'steam punk', '蒸汽朋克']],
-['superhero', ['superhero', 'super hero', 'supervillain', '超级英雄', '超人']],
-['dark_academia', ['dark academia', '暗黑学院', '校园秘密社团']],
-['swashbuckler', ['swashbuckl', 'pirate', 'corsair', '海盗', '大航海']],
-['nautical', ['nautical', 'seafaring', 'voyage at sea', '航海', '海难']],
-['picaresque', ['picaresque', 'rogue tale', '流浪汉', '骗子冒险']],
-['gothic', ['gothic', '哥特']],
-['time_travel', ['time travel', 'time-travel', '穿越时空', '时间旅行']],
-['cli_fi', ['cli-fi', 'clifi', 'climate fiction', '气候小说']],
-['afrofuturism', ['afrofuturism', 'afro-futurism', '非洲未来主义']],
-['hard_scifi', ['hard scifi', 'hard sci-fi', 'hard science fiction', '硬科幻']],
-['graphic_novel', ['graphic novel', 'comic', 'manga script', '图像小说', '漫画']],
-['mystery_police', ['police procedural', 'detective squad', 'cold case', '警匪剧', '刑侦', '罪案小组']],
-['adventure', ['adventure', 'survival', 'expedition', 'quest', '冒险', '求生', '探险']],
+['xianxia', ['xianxia']],
+['wuxia', ['wuxia']],
+['litrpg', ['litrpg', 'lit rpg', 'game novel', 'system flow']],
+['cyberpunk', ['cyberpunk', 'cyber-punk']],
+['solarpunk', ['solarpunk', 'solar punk']],
+['space_opera', ['space opera']],
+['romantasy', ['romantasy', 'romantic fantasy', 'epic romance']],
+['dystopian', ['dystopia', 'dystopian']],
+['postapo', ['post-apocalyp', 'post apocalyp', 'postapoc', 'zombie']],
+['military', ['military', 'war novel']],
+['heist', ['heist', 'caper', 'robbery']],
+['cozy', ['cozy', 'comfort read']],
+['urban', ['urban', 'contemporary fantasy', 'city']],
+['middle_grade', ['middle grade', 'middle-grade', 'mg novel']],
+['ya', ['young adult', 'ya fantasy', 'ya romance', 'teen']],
+['steampunk', ['steampunk', 'steam punk']],
+['superhero', ['superhero', 'super hero', 'supervillain']],
+['dark_academia', ['dark academia']],
+['swashbuckler', ['swashbuckl', 'pirate', 'corsair']],
+['nautical', ['nautical', 'seafaring', 'voyage at sea']],
+['picaresque', ['picaresque', 'rogue tale']],
+['gothic', ['gothic']],
+['time_travel', ['time travel', 'time-travel']],
+['cli_fi', ['cli-fi', 'clifi', 'climate fiction']],
+['afrofuturism', ['afrofuturism', 'afro-futurism']],
+['hard_scifi', ['hard scifi', 'hard sci-fi', 'hard science fiction']],
+['graphic_novel', ['graphic novel', 'comic', 'manga script']],
+['mystery_police', ['police procedural', 'detective squad', 'cold case']],
+['adventure', ['adventure', 'survival', 'expedition', 'quest']],
 ];
 function matchGenreKey(t) {
 const s = (t || '').toLowerCase().trim();
@@ -633,18 +633,9 @@ const LENGTH_BLURBS = {
     novel: 'Standard novel (~60k–90k words): full multi-chapter arc; ~4,000-word chapters balance pace and depth.',
     epic: 'Epic novel (100k+ words): multiple POVs/subplots and world-scale stakes; longer ~5,000-word chapters.',
   },
-  zh: {
-    flash: '微型小说：一篇连续完成（约1500字内），聚焦一个瞬间与一次反转。',
-    short: '短篇小说（约1500–7500词）：单一线索、少量角色、迅速收束。',
-    novelette: '中短篇（约7500–17500词）：主线之外可容纳一条副线与更多成长。',
-    novella: '中篇（约17500–40000词）：情节集中、人物精简，具备长篇质感。',
-    light_novel: '轻小说：日式连载文体——短章节（约3500词）、对白密集、以篇章推进。',
-    anthology: '短篇集：多篇独立故事以主题或世界观串联，各自成篇。',
-    novel: '标准长篇（约6–9万词）：完整多章结构，单章约4000词平衡节奏与深度。',
-    epic: '史诗长篇（10万词以上）：多视角多支线、世界级冲突，单章约5000词。',
-  },
+
 };
-$: lengthDescFor = (k) => ((LENGTH_BLURBS[get(uiLocale) === 'zh' ? 'zh' : 'en'] || LENGTH_BLURBS.en)[k]) || '';
+$: lengthDescFor = (k) => (LENGTH_BLURBS.en[k]) || '';
 $: lengthComboOpts = (() => {
   void novelParamsTick;
   return LENGTH_KEYS.map((k) => ({ value: k, label: $t('config.story.length.' + k), desc: lengthDescFor(k) }));
@@ -741,7 +732,7 @@ function protagFamKey(text) {
   return '';
 }
 function itemDesc(text, fams, keyFn) {
-  const lang = get(uiLocale) === 'zh' ? 'es' : 'en'; // UI catalog ships EN + ES
+  const lang = 'en'; // UI catalog ships English only
   const k = keyFn(text);
   return k ? (fams[lang] || fams.en)[k] || '' : '';
 }
@@ -774,22 +765,10 @@ const GENRE_BLURBS = {
     drama: 'Character-first literary fiction: family sagas, coming-of-age, psychorealism, metafiction, existentialist and philosophical stories.',
     adventure: 'Movement-driven fiction: quests, exploration, survival and treasure hunts where the journey and its dangers are the plot — includes martial-arts, superhero and battle-royale action.',
   },
-  zh: {
-    fantasy: '幻想世界：魔法、神话生物或超自然规则——从史诗第二世界到都市隐秘社会。',
-    scifi: '以科技、科学或未来社会为根基的推想小说：太空歌剧、赛博朋克、反乌托邦、初次接触……',
-    mystery: '以罪案与谜团为核心：调查推动情节，从乡村安乐椅推理到硬汉黑色电影式侦探与劫案故事。',
-    romance: '爱情故事即主线情节——情感弧线、关系障碍与令读者满意的结局是这类作品的承诺。',
-    thriller: '节奏、危险与悬念：追逐、阴谋与高风险，无论是谍战、律政、家庭还是动作向。',
-    horror: '以制造恐惧与不安为目的：超自然惊悚、宇宙性渺小、肉体恐怖或身边的怪物。',
-    historical: '扎根于真实历史时期的小说，时代风物、习俗与事件塑造人物命运。',
-    western: '边疆故事：无法无天、荣誉准则与旷野——经典、意大利面式、怪异或移植到太空的西部片。',
-    drama: '以人物为先的文学小说：家族史诗、成长、心理写实、元小说、存在主义与哲思故事。',
-    adventure: '以行动驱动的虚构：冒险、探索、求生与寻宝——旅程与危险即情节，含武术、超级英雄与大逃杀等动作向子类。',
-  },
+
 };
 function genreBlurb(key) {
-  const lang = get(uiLocale) === 'zh' ? 'zh' : 'en';
-  return (GENRE_BLURBS[lang] || GENRE_BLURBS.en)[key] || '';
+  return (GENRE_BLURBS.en)[key] || '';
 }
 
 // Info-box lines: one blurb per selected parent genre (multi-select aware).
@@ -1415,7 +1394,7 @@ function randomizeStoryParams() {
 
   const entityIcons = { character: '', organization: '', worldview: '' };
 
-  // 关系双方可选实体（角色 / 组织 / 世界观条目）
+  // Selectable entities for both relation endpoints (characters / organizations / worldview entries)
   $: entityOptions = [
     ...chars.map(c => ({ key: 'character:' + c.id, label: '' + c.name })),
     ...orgs.map(o => ({ key: 'organization:' + o.id, label: '' + o.name })),
@@ -1487,7 +1466,7 @@ function randomizeStoryParams() {
     } catch (e) { addToast(e.message, 'error'); }
   }
 
-  // 影响连接测试的字段签名；配置改动后据此自动清除持久化的测试结果
+  // Field signature affecting the connection test; clears persisted test results after config changes
   const apiTestSig = c => JSON.stringify([c.base_url, !!c.url_strict, c.model, c.api_key, c.http_timeout_seconds, c.max_tokens]);
   $: if ($apiTestResult && apiTestSig(localApiCfg) !== $apiTestResult.sig) apiTestResult.set(null);
 
@@ -1506,7 +1485,7 @@ function randomizeStoryParams() {
     }
   }
 
-  // 直接保存故事配置（不经过 AI），存在已确认章节且关键设定有变化时提示协调
+  // Save story config directly (no AI); when confirmed chapters exist and key settings changed, prompt to reconcile
   async function saveStoryConfig() {
     const prev = $config?.story || {};
     const story = {
@@ -1712,7 +1691,7 @@ function randomizeStoryParams() {
     } catch (e) { addToast(e?.message || String(e), 'error'); }
   }
 
-  // —— 组织 CRUD ——
+  // -- Organization CRUD --
   let orgFormSnapshot = '';
   function orgFormSnapshotNow() {
     return JSON.stringify({ name: orgName, type: orgType, description: orgDescription, members: orgMembers });
@@ -1834,7 +1813,7 @@ function randomizeStoryParams() {
     });
   }
 
-  // —— 关系 CRUD ——
+  // -- Relation CRUD --
   function parseEntityKey(key) {
     const i = key.indexOf(':');
     return { type: key.slice(0, i), id: key.slice(i + 1) };

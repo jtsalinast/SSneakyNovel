@@ -19,7 +19,7 @@ func factChapter(num int, text string) ChapterState {
 }
 
 func TestMemoryIdentityRetry(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		for _, invalid := range []string{
 			`{"new_memories":[{"id":99,"content":"Alice has a scar","category":"character","block_ids":[1]}]}`,
 			`{"new_memories":[{"id":7,"content":"Alice has no scar","category":"character","block_ids":[1]}]}`,
@@ -35,9 +35,6 @@ func TestMemoryIdentityRetry(t *testing.T) {
 						calls++
 						if calls == 2 {
 							feedback := "The previous response failed validation:"
-							if lang == "zh" {
-								feedback = "上次输出校验失败："
-							}
 							if !strings.Contains(prompt, feedback) {
 								t.Error("retry lacks correction feedback")
 							}
@@ -76,7 +73,7 @@ func TestMemoryIdentityRetry(t *testing.T) {
 	}
 }
 func TestEndingControls(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		state := &Progress{OutlineBatches: []OutlineBatch{{ID: 1, StartCh: 1, EndCh: 2, EndingIntent: "final", PlannedFinal: true}}}
 		req := OutlineBatchRequest{ChapterCount: 1, Synopsis: "plot", EndingIntent: "sequel", EndingStyle: "open"}
 		if ValidateOutlineBatch(state, req, lang) == nil {

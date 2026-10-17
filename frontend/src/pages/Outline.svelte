@@ -40,7 +40,7 @@
   let reviseFeedback = '';
   let showRevise = false;
 
-  // 内联编辑
+  // Inline editing
   let editingNum = -1;
   let editTitle = '';
   let editOutline = '';
@@ -85,11 +85,11 @@
     return out;
   }
 
-  // 导入续写
+  // Import continuation
   let showImport = false;
   let importContent = '';
   let importPreview = null; // [{num,title,word_count,preview}]
-  let importStatus = null;  // {active,total,cursor} 断点状态
+  let importStatus = null;  // {active,total,cursor} resume state
   let continuationCount = 5;
   let planningRequirements = "";
   let longTermDirection = "";
@@ -501,7 +501,7 @@
     </div>
   </div>
   {#if !hasOutline}
-    <!-- 空状态 -->
+    <!-- Empty state -->
     <div class="text-center py-14 text-base-content/65">
       <div class="text-5xl mb-3"></div>
       <p class="text-base mb-1">{$t('outline.empty.title')}</p>
@@ -580,7 +580,7 @@
       </div>
     {/if}
 
-    <!-- 操作栏 -->
+    <!-- Action bar -->
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-2">
         <div class="flex items-center gap-2 flex-wrap">
@@ -622,7 +622,7 @@
       </div>
     </div>
 
-    <!-- 章节大纲列表 -->
+    <!-- Chapter outline list -->
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-2">
         <div class="flex items-center justify-between">

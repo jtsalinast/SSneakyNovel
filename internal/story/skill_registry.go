@@ -200,7 +200,7 @@ func normalizeSkillFiles(files map[string][]byte) (SkillManifest, map[string][]b
 	}
 	for i, l := range manifest.Languages {
 		manifest.Languages[i] = strings.ToLower(strings.TrimSpace(l))
-		if manifest.Languages[i] != "zh" && manifest.Languages[i] != "en" {
+		if manifest.Languages[i] != "en" {
 			return manifest, nil, fmt.Errorf("unsupported language %q", l)
 		}
 	}

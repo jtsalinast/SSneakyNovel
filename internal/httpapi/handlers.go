@@ -56,10 +56,10 @@ type Handlers struct {
 	knowledgeAtStart   string
 	forceKnowledgeSync bool
 	skipKnowledgeSync  bool
-	autoConfirm        bool // 自动确认模式：章节生成完成后自动确认并继续生成下一章
+	autoConfirm        bool // move: chaptersectionlifelatermoveandlifeloweronechapter
 
-	lastChatMessage   string             // 缓存最后发送的聊天消息，用于重试
-	lastReconcileBody config.StoryConfig // 缓存最后的设定协调请求
+	lastChatMessage   string             // depositmostlaterhairsend off chatday, useinheavy
+	lastReconcileBody config.StoryConfig // depositmostlater please
 }
 
 func NewHandlers(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.LogBroadcaster, progDir string, version string) *Handlers {
@@ -100,7 +100,7 @@ func (h *Handlers) switchProject(name string) error {
 
 	projectDir := filepath.Join(h.progDir, "storys", name)
 	if info, err := os.Stat(projectDir); err != nil || !info.IsDir() {
-		return fmt.Errorf("项目目录不存在: %s", name)
+		return fmt.Errorf("itemnot depositin: %s", name)
 	}
 	if err := ensureProjectCompatible(projectDir); err != nil {
 		return err
@@ -114,12 +114,12 @@ func (h *Handlers) switchProject(name string) error {
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("加载项目配置失败: %w", err)
+		return fmt.Errorf("itemplace: %w", err)
 	}
 
 	state, err := story.LoadProgress(progressPath)
 	if err != nil {
-		return fmt.Errorf("加载项目进度失败: %w", err)
+		return fmt.Errorf("itemadvancedegree: %w", err)
 	}
 	if state == nil {
 		state = &story.Progress{Phase: "writing", BookStatus: story.BookStatusActive}
@@ -127,7 +127,7 @@ func (h *Handlers) switchProject(name string) error {
 
 	settings, err := story.LoadProjectSettings(settingsPath)
 	if err != nil {
-		return fmt.Errorf("加载项目设定失败: %w", err)
+		return fmt.Errorf("item: %w", err)
 	}
 
 	skills := story.LoadAllSkills(cfg, h.progDir)
@@ -135,7 +135,7 @@ func (h *Handlers) switchProject(name string) error {
 	postprocessPath := filepath.Join(projectDir, "postprocess.json")
 	postprocess, err := story.LoadPostProcess(postprocessPath)
 	if err != nil {
-		return fmt.Errorf("加载完稿校订状态失败: %w", err)
+		return fmt.Errorf("posture: %w", err)
 	}
 
 	h.projectName = name
@@ -150,7 +150,7 @@ func (h *Handlers) switchProject(name string) error {
 	h.postprocessPath = postprocessPath
 	h.postprocess = postprocess
 
-	fmt.Printf(" [系统] 已切换到项目: %s (%s)\n", name, projectDir)
+	fmt.Printf(" [system] Switched to project: %s (%s)\n", name, projectDir)
 	return nil
 }
 
@@ -218,7 +218,7 @@ func (h *Handlers) tryStartTask() bool {
 // generationID identifies the current task run. endTask bumps it so any
 // background goroutine that captured an older id knows its context was
 // cancelled by task teardown (normal completion or stop) rather than by a
-// real error — used to suppress spurious "API 调用失败: context canceled"
+// real error — used to suppress spurious "API use: context canceled"
 // logs when a chat turn's lock is released while child work finished first.
 
 func (h *Handlers) endTask() {
@@ -251,7 +251,7 @@ func (h *Handlers) endTask() {
 	devlog.Log("endTask activeWork=%d running=%v cancelled=%v", aw, running, cancelled)
 }
 
-// startChildWork 增加活跃工作计数（用于 Agent 子任务），不创建新 context
+// startChildWork alivemakecountnumber(usein Agent ), not new context
 func (h *Handlers) startChildWork() bool {
 	h.taskMu.Lock()
 	defer h.taskMu.Unlock()
@@ -276,8 +276,8 @@ func (h *Handlers) activeWorkCount() int {
 	return h.activeWork
 }
 
-// rejectIfTaskRunning 在 AI 任务运行期间拒绝编辑类请求，防止意外提交修改。
-// 返回 true 表示已写入 409 响应，调用方应直接 return。
+// rejectIfTaskRunning in AI travelexpectcompileclassplease, defendintentoutsideinteract.
+// return true tablealreadywriteenter 409 noiseshould, usesquareshouldconnect return.
 func (h *Handlers) rejectIfTaskRunning(w http.ResponseWriter, r *http.Request) bool {
 	if h.isTaskRunning() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_locked")
@@ -307,7 +307,7 @@ func (h *Handlers) GetAutoConfirm(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]bool{"enabled": h.isAutoConfirmOn()})
 }
 
-// PutAutoConfirm 切换自动确认模式，任务运行期间也可随时开关。
+// PutAutoConfirm cutmove, travelexpect-toocanalong withhouropenclose.
 func (h *Handlers) PutAutoConfirm(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
@@ -408,7 +408,7 @@ func (h *Handlers) PostAPITest(w http.ResponseWriter, r *http.Request) {
 
 	result := map[string]interface{}{
 		"success": true,
-		"message": "连接成功",
+		"message": "connectconnect",
 		"model":   testCfg.Model,
 	}
 	if len(resp) > 100 {
@@ -561,7 +561,7 @@ func (h *Handlers) GetChapterContent(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, ch)
 }
 
-// —— story.Block 编辑 ——
+// —— story.Block compile ——
 
 // parseChapterBlockIDs extracts {num} and {id} path values.
 func parseChapterBlockIDs(r *http.Request) (num, id int, err error) {
@@ -745,10 +745,6 @@ func (h *Handlers) PostChapterBlockRevise(w http.ResponseWriter, r *http.Request
 
 // GetBookExport streams the whole book as plain text.
 func (h *Handlers) GetBookExport(w http.ResponseWriter, r *http.Request) {
-	lang := i18n.LangZH
-	if h.cfg != nil {
-		lang = i18n.NormalizeLanguage(h.cfg.Language)
-	}
 	title := h.state.Title
 	if h.cfg != nil && h.cfg.Story.Title != "" {
 		title = h.cfg.Story.Title
@@ -759,11 +755,7 @@ func (h *Handlers) GetBookExport(w http.ResponseWriter, r *http.Request) {
 		if ch.Content == "" {
 			continue
 		}
-		if lang == i18n.LangEN {
-			fmt.Fprintf(w, "\n\n## Chapter %d: %s\n\n%s", ch.Num, ch.Title, ch.Content)
-		} else {
-			fmt.Fprintf(w, "\n\n## 第 %d 章 %s\n\n%s", ch.Num, ch.Title, ch.Content)
-		}
+		fmt.Fprintf(w, "\n\n## Chapter %d: %s\n\n%s", ch.Num, ch.Title, ch.Content)
 	}
 }
 
@@ -882,7 +874,7 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 		notes := strings.TrimSpace(item.Description)
 		if role := strings.TrimSpace(item.Role); role != "" {
 			if notes != "" {
-				notes += "；"
+				notes += "; "
 			}
 			notes += role
 		}
@@ -890,7 +882,7 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 			ID:         h.settings.NextCharacterID(),
 			Name:       name,
 			Background: notes,
-			Notes:      fmt.Sprintf("首次登场：第%d章", item.ChapterNum),
+			Notes:      fmt.Sprintf("times: #%dchapter", item.ChapterNum),
 		})
 		existing[name] = true
 	}
@@ -903,7 +895,7 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 	if h.state.LastOutlineCharacterReport != nil {
 		h.state.LastOutlineCharacterReport.HasSuggestions = false
 		h.state.LastOutlineCharacterReport.Suggestions = nil
-		h.state.LastOutlineCharacterReport.Summary = "已采纳建议并登记角色"
+		h.state.LastOutlineCharacterReport.Summary = "alreadyandhorn"
 		_ = story.SaveProgress(h.progressPath, h.state)
 	}
 
@@ -952,7 +944,7 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 			h.logger.SuccessKey("log.chapter_write_done", chIdx+1, chTitle)
 			h.broadcastProgress()
 
-			// 自动确认模式：自动确认本章并继续生成下一章；关闭开关后在本章结束时停止
+			// move: movethischapterandlifeloweronechapter; closeopencloselaterinthischapterhourstop
 			if !h.isAutoConfirmOn() {
 				break
 			}
@@ -1195,8 +1187,8 @@ func (h *Handlers) PostChapterRevise(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostChapterReviseSpecific 对指定编号章节做定向最小化修订（含已确认章节），
-// 仅修改该章正文与摘要，不影响其他章节和大纲。
+// PostChapterReviseSpecific tofingercompileNo.chaptersectiondodirectionmostsmall(alreadychaptersection),
+// onlythechapterandwant to, not shadownoiseitshechaptersectionandbig.
 func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Request) {
 	numStr := r.PathValue("num")
 	var num int
@@ -1246,8 +1238,8 @@ func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Requ
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostChaptersSmoothTransitions 批量优化已确认章节之间的衔接。
-// 逐章检查上一章结尾与本章开头的衔接，仅在生硬时最小化重写本章开头片段。
+// PostChaptersSmoothTransitions batchmeasurealreadychaptersectionof connect.
+// chapterupperonechaptertailandthischapteropenhead connect, onlyinlifehardhourmostsmallheavywritethischapteropenheadpieceparagraph.
 func (h *Handlers) PostChaptersSmoothTransitions(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1535,7 +1527,7 @@ func (h *Handlers) GetVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) GetStatus(w http.ResponseWriter, r *http.Request) {
-	lang := i18n.LangZH
+	lang := i18n.LangEN
 	if h.cfg != nil {
 		lang = i18n.NormalizeLanguage(h.cfg.Language)
 	}
@@ -1824,9 +1816,9 @@ func (h *Handlers) PostForeshadowsConfirm(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// —— 导入流水线 handlers ——
+// —— enterwaterthread handlers ——
 
-// PostImportSplit 本地切章预览（同步，无 AI）。不持久化任何内容。
+// PostImportSplit this cutchapterbrowse(, no AI). not howinside.
 func (h *Handlers) PostImportSplit(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1842,7 +1834,7 @@ func (h *Handlers) PostImportSplit(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]any{"chapters": story.BuildImportPreview(chapters)})
 }
 
-// PostImportStart 开始导入流水线（异步）：切章落盘 → 元信息分析 → 逐章大纲/摘要（断点续跑）→ 分卷汇总。
+// PostImportStart openenterwaterthread(): cutchapterpassageplate → yuandivide → chapterbig/want to(disconnectdotrun)→ dividevolumeremit.
 func (h *Handlers) PostImportStart(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1872,7 +1864,7 @@ func (h *Handlers) PostImportStart(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostImportResume 从断点恢复导入流水线（异步）。
+// PostImportResume fromdisconnectdotenterwaterthread().
 func (h *Handlers) PostImportResume(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1910,7 +1902,7 @@ func (h *Handlers) finishImportTask(ctx context.Context, err error) {
 	h.broadcastProgress()
 }
 
-// GetImportStatus 查询导入断点状态（同步）。
+// GetImportStatus enterdisconnectdotposture().
 func (h *Handlers) GetImportStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -2556,7 +2548,7 @@ func (h *Handlers) GetChatSessions(w http.ResponseWriter, r *http.Request) {
 		idx = &story.ChatSessionIndex{}
 	}
 
-	// 清理空会话：删除 msg_count == 0 且不在当前会话中的条目
+	// clearemptyassociation: except msg_count == 0 andnot inwhenfrontassociationmiddle strip
 	var cleaned []story.ChatSessionMeta
 	for _, m := range idx.Sessions {
 		if m.MsgCount == 0 {
@@ -2575,14 +2567,14 @@ func (h *Handlers) PostChatSession(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Format(time.RFC3339)
 	session := &story.ChatSession{
 		ID:        story.GenerateSessionID(),
-		Title:     "新会话",
+		Title:     "newassociation",
 		Messages:  []story.ChatMessage{},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	// 保存会话文件但不加入索引，等首次发消息时 story.SaveChatSession 才入索引，
-	// 避免产生 0 条记录的空会话。
+	// insuredepositassociationitembutnot entercord, etctimeshairhour story.SaveChatSession only thenentercord,
+	// life 0 strip emptyassociation.
 	dir := story.ChatSessionsDir(h.sessionsDir)
 	os.MkdirAll(dir, 0755)
 	path := filepath.Join(dir, session.ID+".json")
@@ -2660,18 +2652,18 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 缓存消息用于重试
+	// deposituseinheavy
 	h.lastChatMessage = req.Content
 
 	go func() {
-		// defer 确保任何错误路径都会释放任务锁，否则后续所有任务将永久 409
+		// defer insurehowroadallassociationputpadlock, thenlaterhasBA 409
 		defer h.endTask()
 		h.logger.TaskStart("chat_message")
 		// Snapshot the task context: endTask() cancels h.taskCancel when the last
 		// unit of work finishes. If the agent's generate_section tool starts a
 		// child generation that completes *before* this chat turn does, endTask
 		// would cancel the context underneath the still-running agent loop,
-		// producing "步骤 N: API 调用失败: context canceled". Capturing h.taskCtx
+		// producing " N: API use: context canceled". Capturing h.taskCtx
 		// here (while the lock is definitely held) keeps this turn alive until it
 		// really ends; later tryStartTask() creates a fresh context anyway.
 		chatCtx := h.taskCtx
@@ -2806,8 +2798,8 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 				return h.StartDetachedPrePlanGenerate()
 			},
 			StartAsync: func(taskName string, fn func(goCtx context.Context) error) {
-				// 子任务必须计入 activeWork，否则 Agent 主循环结束后锁被释放，
-				// 子任务仍在运行时新任务可并发进入，造成数据竞争。
+				// whiskercountenter activeWork, then Agent ringlaterpadlockquiltput,
+				// stillintravelhournewcanandhairadvanceenter, buildnumberreceipt.
 				if !h.startChildWork() {
 					h.logger.WarnKey("log.child_task_start_failed", taskName)
 					return
@@ -2825,7 +2817,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 
 		reply, newHistory, err := agent.RunAgentLoop(ctx, agentCtx, req.Content, history, 30)
 		if err != nil {
-			// 即使失败也保存已产生的对话步骤，避免上下文丢失
+			// i.e.make-tooinsuredepositalreadylife to, upperlower
 			saveAgentSteps(session, newHistory[len(history):])
 			session.UpdatedAt = time.Now().Format(time.RFC3339)
 			if saveErr := story.SaveChatSession(h.sessionsDir, session); saveErr != nil {
@@ -2874,7 +2866,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// saveAgentSteps 将 Agent 步骤追加为会话消息。
+// saveAgentSteps BA Agent chaseforassociation.
 func saveAgentSteps(session *story.ChatSession, steps []agent.AgentStep) {
 	for _, step := range steps {
 		if step.Role == "assistant" {

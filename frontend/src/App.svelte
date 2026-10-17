@@ -4,7 +4,7 @@
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
   import { onMount, onDestroy } from 'svelte';
-  import { t, uiLocale, setLocale } from './lib/i18n/index.js';
+  import { t, uiLocale } from './lib/i18n/index.js';
   import TaskTokenBadge from './components/TaskTokenBadge.svelte';
   import Projects from './pages/Projects.svelte';
   import Config from './pages/Config.svelte';
@@ -49,7 +49,6 @@
         initializing = false;
         if (cur.language) {
           projectLanguage.set(cur.language);
-          setLocale(cur.language);
         }
         if ($taskRunning) navigate('writing');
         await Promise.allSettled([
@@ -168,10 +167,6 @@
     config.set(null);
   }
 
-  function toggleLocale() {
-    setLocale($uiLocale === 'en' ? 'zh' : 'en');
-  }
-
   function openNavigation() {
     navigationOpen = true;
     requestAnimationFrame(() => document.querySelector('#workspace-navigation button')?.focus());
@@ -226,7 +221,7 @@
     {/if}
     {#if $currentProject}
       <span class="app-project-title min-w-0 text-sm font-medium leading-snug">{$config?.story?.title?.trim() || $t('app.untitled')}</span>
-      <span class="badge badge-sm badge-outline uppercase max-sm:hidden" title={$projectLanguage === 'en' ? 'English' : '中文'}>
+      <span class="badge badge-sm badge-outline uppercase max-sm:hidden" title="English">
         {$projectLanguage === 'en' ? 'EN' : 'ZH'}
       </span>
       <button
@@ -250,13 +245,6 @@
       {/if}
     {/if}
     <span class="flex-1"></span>
-    <button
-      class="btn btn-ghost btn-xs gap-1"
-      on:click={toggleLocale}
-      title={$t('app.uiLang.label')}
-    >
-      {$uiLocale === 'en' ? $t('app.uiLang.en') : $t('app.uiLang.zh')}
-    </button>
     {#if $currentProject}
       <button bind:this={assistantButton} class="btn btn-outline btn-sm xl:hidden" on:click={openAssistant} aria-expanded={assistantOpen} aria-controls="writing-assistant">{$t('app.assistant')}</button>
     {/if}

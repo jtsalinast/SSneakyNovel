@@ -7,33 +7,36 @@ import (
 )
 
 func TestSplitImportContentHeadings(t *testing.T) {
-	content := "作品简介：一个平凡少年的故事。\n\n第一章 觉醒\n\n林凡睁开眼睛。\n\n第二章 出发\n\n他收拾行囊。\n\nChapter 3 The Road\n\nHe walked on."
+	content := "Synopsis: the story of an ordinary boy.\n\nChapter 1 Awakening\n\nLin Fan opened his eyes.\n\n## Chapter 2 Setting Off\n\nHe packed his bag.\n\nPrologue of the old edition\n\nOnce upon a time.\n\nChapter 3 The Road\n\nHe walked on."
 	chs, preamble := SplitImportContent(content)
-	if len(chs) != 3 {
-		t.Fatalf("expected 3 chapters, got %d", len(chs))
+	if len(chs) != 4 {
+		t.Fatalf("expected 4 chapters, got %d", len(chs))
 	}
-	if !strings.Contains(preamble, "作品简介") {
+	if !strings.Contains(preamble, "Synopsis") {
 		t.Fatalf("preamble missing: %q", preamble)
 	}
-	if chs[0].Title != "第一章 觉醒" {
+	if chs[0].Title != "Chapter 1 Awakening" {
 		t.Fatalf("title wrong: %q", chs[0].Title)
 	}
-	if !strings.Contains(chs[1].Content, "行囊") {
+	if !strings.Contains(chs[1].Content, "packed his bag") {
 		t.Fatalf("content assigned to wrong chapter: %q", chs[1].Content)
 	}
-	if chs[2].Title != "Chapter 3 The Road" {
-		t.Fatalf("english title wrong: %q", chs[2].Title)
+	if !strings.Contains(chs[2].Title, "Prologue") {
+		t.Fatalf("prologue heading should split a section, got %q", chs[2].Title)
+	}
+	if chs[3].Title != "Chapter 3 The Road" {
+		t.Fatalf("markdown-stripped title wrong: %q", chs[3].Title)
 	}
 }
 func TestSplitImportContentNoHeadings(t *testing.T) {
 	// Heading-less text falls back to size-based chunks.
-	para := strings.Repeat("这是一个没有章节标题的段落。", 30) // ~390 runes
-	content := strings.Repeat(para+"\n\n", 40)   // well over one chunk
+	para := strings.Repeat("This paragraph carries no chapter heading at all. ", 12) // ~540 runes
+	content := strings.Repeat(para+"\n\n", 40)                                       // well over one chunk
 	chs, _ := SplitImportContent(content)
 	if len(chs) < 2 {
 		t.Fatalf("expected multiple chunks, got %d", len(chs))
 	}
-	if chs[0].Title != "第1章" {
+	if chs[0].Title != "Chapter 1" {
 		t.Fatalf("placeholder title wrong: %q", chs[0].Title)
 	}
 	if splitEmpty, _ := SplitImportContent("   "); splitEmpty != nil {
@@ -41,7 +44,7 @@ func TestSplitImportContentNoHeadings(t *testing.T) {
 	}
 }
 func TestBuildImportPreview(t *testing.T) {
-	chs := []importedChapter{{Title: "第一章 觉醒", Content: "第一章 觉醒\n林凡睁开眼睛，" + strings.Repeat("很长的内容。", 30)}}
+	chs := []importedChapter{{Title: "Chapter 1 Awakening", Content: "Chapter 1 Awakening\nLin Fan opened his eyes, " + strings.Repeat("very long body content. ", 30)}}
 	pv := BuildImportPreview(chs)
 	if pv[0].Num != 1 || pv[0].WordCount == 0 {
 		t.Fatalf("preview meta wrong: %+v", pv[0])
@@ -49,7 +52,7 @@ func TestBuildImportPreview(t *testing.T) {
 	if !strings.HasSuffix(pv[0].Preview, "…") {
 		t.Fatalf("long preview should be truncated: %q", pv[0].Preview)
 	}
-	if strings.Contains(pv[0].Preview, "第一章 觉醒") {
+	if strings.Contains(pv[0].Preview, "Chapter 1 Awakening") {
 		t.Fatalf("preview should skip the heading line: %q", pv[0].Preview)
 	}
 }

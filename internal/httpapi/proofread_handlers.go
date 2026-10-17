@@ -303,19 +303,19 @@ func (h *Handlers) GetProofreadExport(w http.ResponseWriter, r *http.Request) {
 	if english {
 		fmt.Fprintf(w, "# %s — Final Proofreading Report\n\n", title)
 	} else {
-		fmt.Fprintf(w, "# %s — 完稿校订报告\n\n", title)
+		fmt.Fprintf(w, "# %s — tell\n\n", title)
 	}
 	for _, issue := range h.postprocess.Issues {
 		if english {
 			fmt.Fprintf(w, "## [%s/%s/%s] %s\n\n%s\n\nSuggestion: %s\n\n", issue.Status, issue.Severity, issue.Category, issue.Title, issue.Detail, issue.Suggestion)
 		} else {
-			fmt.Fprintf(w, "## [%s/%s/%s] %s\n\n%s\n\n建议：%s\n\n", issue.Status, issue.Severity, issue.Category, issue.Title, issue.Detail, issue.Suggestion)
+			fmt.Fprintf(w, "## [%s/%s/%s] %s\n\n%s\n\n: %s\n\n", issue.Status, issue.Severity, issue.Category, issue.Title, issue.Detail, issue.Suggestion)
 		}
 		for _, a := range issue.Anchors {
 			if english {
 				fmt.Fprintf(w, "- Chapter %d · block %d: %s\n", a.ChapterNum, a.BlockID, a.Excerpt)
 			} else {
-				fmt.Fprintf(w, "- 第 %d 章 · 段落 %d：%s\n", a.ChapterNum, a.BlockID, a.Excerpt)
+				fmt.Fprintf(w, "- # %d chapter · paragraphpassage %d: %s\n", a.ChapterNum, a.BlockID, a.Excerpt)
 			}
 		}
 		fmt.Fprintln(w)

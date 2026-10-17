@@ -62,7 +62,7 @@ func TestSelectedSettingsRevision(t *testing.T) {
 		{"unconfirmed", "en", "current", "w_1", false, false},
 		{"unknown", "en", "current", "missing", true, false},
 		{"English", "en", "current", "w_1", true, true},
-		{"Chinese", "zh", "current", "w_1", true, true},
+		{"Spanish", "es", "current", "w_1", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := factHandlers(t)

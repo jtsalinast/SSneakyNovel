@@ -30,7 +30,7 @@
     return true;
   });
 
-  // 原文片段由后端在 /api/progress 中直接解析（正文不随 progress 下发）
+  // source snippets are parsed by the backend in /api/progress directly (prose is not delivered with progress progress)
   function extractSnippet(entry) {
     return entry?.snippet || '';
   }
@@ -38,7 +38,7 @@
   function formatEntryLine(e) {
     const snippet = extractSnippet(e);
     if (snippet) {
-      return `${e.content}（原文：「${snippet}」）`;
+      return `${e.content} (source: “${snippet}”)`;
     }
     return e.content;
   }
@@ -139,7 +139,7 @@
                   <tr>
                     <td class="font-mono text-xs">{e.id}</td>
                     <td class="whitespace-nowrap">
-                      <!-- DaisyUI 5 badge 固定高度且无 nowrap；窄列里中文会逐字换行成竖排 -->
+                      <!-- DaisyUI 5 badge fixed height with no nowrap；in narrow columns CJK text wraps per character into vertical stacks -->
                       <span class="badge badge-sm {categoryBadge[e.category] || 'badge-ghost'} whitespace-nowrap">
                         {$t('memory.category.' + (e.category || 'other'))}
                       </span>

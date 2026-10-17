@@ -24,11 +24,11 @@ func preferUserValue(userVal, fallback string) string {
 }
 
 var (
-	chapterMetaStartZH = regexp.MustCompile(`^[（(]?第\s*\d+\s*章`)
-	chapterMetaStartEN = regexp.MustCompile(`(?i)^(?:chapter\s+\d+|part\s+\d+)`)
-	// 匹配 AI 常见的元信息前缀行
-	chapterMetaPreambleZH = regexp.MustCompile(`(?i)^(以下是|下面是|以上是|这是)?(以下为|以下是)?(修订后|修改后|润色后|重写后)?(的)?(完整)?(全文)?(第\s*\d+\s*章)?(正文|全文|完整正文|修订后正文)?[：:。.]?\s*$`)
-	chapterMetaPreambleEN = regexp.MustCompile(`(?i)^(here\s+(?:is|are)|below\s+is|the\s+following\s+is|revised|full)\b.*(?:chapter|text|prose|content|version)`)
+	chapterMetaStartEN     = regexp.MustCompile(`(?i)^(?:chapter\s+\d+|part\s+\d+)`)
+	chapterMetaPreambleEN  = regexp.MustCompile(`(?i)^(here\s+(?:is|are)|below\s+is|the\s+following\s+is|revised|full)\b.*(?:chapter|text|prose|content|version)`)
+	chapterMetaParenNumRE  = regexp.MustCompile(`(?i)^\(\s*(?:chapter|part)\s+\d+[^)]*\)$`)
+	chapterMetaRevisionRE  = regexp.MustCompile(`(?i)^.{0,10}(revised|modified|polished|rewritten).{0,5}(chapter|part)\s*\d+`)
+	chapterMetaAsFollowsRE = regexp.MustCompile(`(?i)^.{0,10}(complete|full)?\s*(text|content|body).{0,5}(as follows|below)[:.:.\s]*$`)
 )
 
 // stripChapterMetaProse trims common AI-emitted chapter framing lines from prose boundaries.
@@ -53,40 +53,26 @@ func isChapterMetaLine(line string, lang string) bool {
 		return false
 	}
 	exact := []string{
-		"本章完", "本章终", "待续", "未完待续", "（完）", "(完)", "完", "——", "—", "***", "---", "***",
-		"End of chapter", "To be continued", "The End",
+		"End of chapter", "To be continued", "The End", "(完)", "(End)", "(Fin)",
 	}
 	for _, s := range exact {
-		if line == s || strings.HasPrefix(line, s+".") || strings.HasPrefix(line, s+"。") {
+		if line == s || strings.HasPrefix(line, s+".") {
 			return true
 		}
 	}
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		if chapterMetaStartEN.MatchString(line) {
-			return true
-		}
-		if matched, _ := regexp.MatchString(`(?i)^\(chapter\s+\d+.*\)$`, line); matched {
-			return true
-		}
-		if chapterMetaPreambleEN.MatchString(line) {
-			return true
-		}
-		return false
-	}
-	if chapterMetaStartZH.MatchString(line) {
+	if chapterMetaStartEN.MatchString(line) {
 		return true
 	}
-	if matched, _ := regexp.MatchString(`^[（(]第\s*\d+\s*章[^）)]*[）)]$`, line); matched {
+	if chapterMetaParenNumRE.MatchString(line) {
 		return true
 	}
-	if chapterMetaPreambleZH.MatchString(line) {
+	if chapterMetaPreambleEN.MatchString(line) {
 		return true
 	}
-	// 匹配 "以下为修订后的第X章完整正文" 等含章节号的元信息行
-	if matched, _ := regexp.MatchString(`^.{0,10}(修订|修改|润色|重写).{0,5}第\s*\d+\s*章`, line); matched {
+	if chapterMetaRevisionRE.MatchString(line) {
 		return true
 	}
-	if matched, _ := regexp.MatchString(`^.{0,10}(完整|全部)?(正文|全文|内容).{0,5}(如下|如下方|如下所示)[：:。.]?\s*$`, line); matched {
+	if chapterMetaAsFollowsRE.MatchString(line) {
 		return true
 	}
 	return false
@@ -97,10 +83,7 @@ func formatWritingPOVBlock(pov, lang string) string {
 	if pov == "" {
 		return ""
 	}
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return "[Narrative POV] " + pov
-	}
-	return "【叙述视角】" + pov
+	return "[Narrative POV] " + pov
 }
 
 func formatExtraWritingConstraintsBlock(constraints, lang string) string {
@@ -108,10 +91,7 @@ func formatExtraWritingConstraintsBlock(constraints, lang string) string {
 	if constraints == "" {
 		return ""
 	}
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return "[Extra writing constraints (fact-check reconciliation)]\n" + constraints
-	}
-	return "【补充写作约束（事实核查冲突调和）】\n" + constraints
+	return "[Extra writing constraints (fact-check reconciliation)]\n" + constraints
 }
 
 func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, settings *ProjectSettings, skills []Skill, logger *sse.LogBroadcaster) error {
@@ -122,11 +102,11 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 		return err
 	}
 	if state.Phase != "writing" {
-		return fmt.Errorf("当前不在写作阶段")
+		return fmt.Errorf("not currently in the writing stage")
 	}
 
 	if state.CurrentChapterIndex >= len(state.Chapters) {
-		return fmt.Errorf("所有章节已完成")
+		return fmt.Errorf("haschaptersectionalready")
 	}
 
 	i := state.CurrentChapterIndex
@@ -136,7 +116,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	ch := &state.Chapters[i]
 
 	if ch.Status == StatusAccepted {
-		return fmt.Errorf("第 %d 章已确认，请确认当前章节或重置进度", ch.Num)
+		return fmt.Errorf("# %d chapteralready, pleasewhenfrontchaptersectionorheavyplaceadvancedegree", ch.Num)
 	}
 
 	ch.Status = StatusWriting
@@ -146,10 +126,10 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 
 	logger.InfoKey("log.chapter_start", ch.Num, ch.Title)
 
-	// 写前检查：本章大纲若已与实际写出的剧情冲突（如大纲安排初遇但前文已认识），
-	// 先最小化修订大纲再动笔，避免按过时大纲写出矛盾内容。
+	// writefront: thischapterbigifalreadyandwrite out (such asbigarrangemeetbutfrontalreadyrecognize),
+	// firstmostsmallbigagainmove, by passhourbigwrite outshieldinside.
 	if i > 0 {
-		logger.StepInfo(1, 6, "正在检查本章大纲与当前剧情的一致性...")
+		logger.StepInfo(1, 6, "checking this chapter's outline against the current story state...")
 		revised, err := checkOutlineConsistency(ctx, apiCfg, cfg, state, i, logger)
 		if err != nil {
 			logger.WarnKey("log.outline_check_failed", err)
@@ -182,28 +162,28 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 
 	for attempt := 0; attempt <= maxFactCheckRetries; attempt++ {
 		if ctx.Err() != nil {
-			return fmt.Errorf("任务已取消")
+			return fmt.Errorf("alreadywithdraw")
 		}
-		logger.StepInfo(2, 6, "正在构思并撰写正文...")
+		logger.StepInfo(2, 6, "inthoughtandwrite...")
 		content, err := generateChapterContentWithLengthControl(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
 		if err != nil {
 			return err
 		}
 		if content == "" {
-			return fmt.Errorf("正文生成失败或被取消")
+			return fmt.Errorf("lifeorquiltwithdraw")
 		}
 		ch.Content = content
 		logger.InfoKey("log.prose_done", prose.CountProseUnits(content))
 
-		logger.StepInfo(3, 6, "正在提炼本章摘要...")
+		logger.StepInfo(3, 6, "inthischapterwant to...")
 		summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
 		if summary == "" {
-			return fmt.Errorf("摘要提炼失败或被取消")
+			return fmt.Errorf("summary generation failed or was canceled")
 		}
 		ch.Summary = summary
 		logger.InfoKey("log.summary_done")
 
-		logger.StepInfo(4, 6, "正在对本章进行事实核查...")
+		logger.StepInfo(4, 6, "intothischapteradvancetravel...")
 		historySummary := buildHistorySummary(state, i)
 		factCheckResult := generateChapterFactCheckWithRetryLog(factCtx, apiCfg, cfg, state, i, content, historySummary, logger)
 
@@ -231,12 +211,12 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 					return err
 				}
 				if content == "" {
-					return fmt.Errorf("正文生成失败或被取消")
+					return fmt.Errorf("lifeorquiltwithdraw")
 				}
 				ch.Content = content
 				summary = generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
 				if summary == "" {
-					return fmt.Errorf("摘要提炼失败或被取消")
+					return fmt.Errorf("summary generation failed or was canceled")
 				}
 				ch.Summary = summary
 				factCheckResult = generateChapterFactCheckWithRetryLog(factCtx, apiCfg, cfg, state, i, content, historySummary, logger)
@@ -266,11 +246,11 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	state.PendingWritingConflict = nil
 
 	if len(state.Foreshadows) > 0 {
-		logger.StepInfo(5, 6, "正在更新伏笔状态...")
+		logger.StepInfo(5, 6, "inmorenewposture...")
 		syncForeshadowsAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
 	}
 
-	logger.StepInfo(6, 6, "正在维护叙事记忆...")
+	logger.StepInfo(6, 6, "inprotectmemory...")
 	syncMemoryAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
 	// Memory sync commits a copied chapter slice, so refresh the chapter reference.
 	ch = &state.Chapters[i]
@@ -287,8 +267,8 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	return nil
 }
 
-// parseFactCheckResult 解析事实核查结果。
-// 优先解析 JSON 中的 result 字段，解析失败时退化为字符串匹配。
+// parseFactCheckResult untiefruit.
+// firstuntie JSON middle result character-countparagraph, untiehourretreatforcharacter-count.
 func parseFactCheckResult(raw string) (failed bool, issues string) {
 	cleaned := cleanJSONResponse(raw)
 	var resp struct {
@@ -297,16 +277,16 @@ func parseFactCheckResult(raw string) (failed bool, issues string) {
 	}
 	if jsonStr := llm.ExtractJSON(cleaned); jsonStr != "" {
 		if err := json.Unmarshal([]byte(jsonStr), &resp); err == nil && resp.Result != "" {
-			return strings.EqualFold(strings.TrimSpace(resp.Result), "FAIL"), strings.Join(resp.Issues, "；")
+			return strings.EqualFold(strings.TrimSpace(resp.Result), "FAIL"), strings.Join(resp.Issues, "; ")
 		}
 	}
-	// fallback：无法解析 JSON 时按字符串匹配
+	// fallback: nountie JSON hourby character-count
 	return strings.Contains(raw, "FAIL"), Truncate(raw, 300)
 }
 
-// checkOutlineConsistency 写前大纲一致性检查：对照前情提要与上一章结尾，
-// 检查本章大纲是否已与实际剧情冲突（如安排初遇但前文已认识）。
-// 冲突时用 AI 给出的最小化修订替换本章大纲（仅当前章），返回是否发生了修订。
+// checkOutlineConsistency writefrontbigone: toperfrontwant toandupperonechaptertail,
+// thischapterbigisalreadyand(such asarrangemeetbutfrontalreadyrecognize).
+// houruse AI give mostsmallthischapterbig(onlywhenfrontchapter), returnishairlife.
 func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, logger *sse.LogBroadcaster) (bool, error) {
 	ch := &state.Chapters[idx]
 	if strings.TrimSpace(ch.Outline) == "" {
@@ -320,7 +300,7 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg 
 			if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 				prevEnding = "[Previous chapter ending]\n" + tail + "\n\n"
 			} else {
-				prevEnding = "【上一章结尾原文】\n" + tail + "\n\n"
+				prevEnding = "[upperonechaptertailplain]\n" + tail + "\n\n"
 			}
 		}
 	}
@@ -336,7 +316,7 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg 
 
 	rawResp := llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
 	if rawResp == "" {
-		return false, fmt.Errorf("API 调用失败或被取消")
+		return false, fmt.Errorf("API call failed or was canceled")
 	}
 
 	var resp struct {
@@ -346,55 +326,55 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg 
 	}
 	jsonStr := llm.ExtractJSON(cleanJSONResponse(rawResp))
 	if jsonStr == "" {
-		return false, fmt.Errorf("无法解析检查结果")
+		return false, fmt.Errorf("unable to parse check result")
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
-		return false, fmt.Errorf("解析检查结果JSON失败: %w", err)
+		return false, fmt.Errorf("failed to parse check result JSON: %w", err)
 	}
 
 	if !resp.Conflict || strings.TrimSpace(resp.RevisedOutline) == "" {
 		return false, nil
 	}
 
-	logger.WarnKey("log.outline_conflict", ch.Num, strings.Join(resp.Issues, "；"))
+	logger.WarnKey("log.outline_conflict", ch.Num, strings.Join(resp.Issues, "; "))
 	ch.Outline = strings.TrimSpace(resp.RevisedOutline)
 	return true, nil
 }
 
-// ReviseChapterAction 修订"当前章节"（写作流程中处于 review/writing 状态的章节）。
-// 使用最小化修订提示词（提供原文），并在必要时同步修订后续 pending 章节大纲。
+// ReviseChapterAction targets the "frontier chapter" (a chapter in review/writing state).
+// makeusemostsmallword(plain), andinwant tohourlater pending chaptersectionbig.
 func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath, feedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
 	if err := llm.ValidateConfig(apiCfg); err != nil {
 		return err
 	}
 	if state.Phase != "writing" {
-		return fmt.Errorf("当前不在写作阶段")
+		return fmt.Errorf("not currently in the writing stage")
 	}
 
 	chapterIdx := state.CurrentChapterIndex
 	if chapterIdx < 0 || chapterIdx >= len(state.Chapters) {
-		return fmt.Errorf("章节索引越界")
+		return fmt.Errorf("chaptersectioncordcross")
 	}
 
 	ch := &state.Chapters[chapterIdx]
 	if ch.Status != StatusReview && ch.Status != StatusWriting {
-		return fmt.Errorf("当前章节不在审核/写作状态")
+		return fmt.Errorf("frontier chapter is not in review/writing state")
 	}
 
 	logger.InfoKey("log.chapter_modifying", ch.Num, ch.Title)
 
-	logger.StepInfo(1, 3, "正在根据意见修订正文...")
+	logger.StepInfo(1, 3, "applying feedback revision...")
 	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, settings, logger)
 	if err != nil {
-		return fmt.Errorf("修改章节失败: %w", err)
+		return fmt.Errorf("chapter revision: %w", err)
 	}
 	ch.Content = revisedContent
 	logger.InfoKey("log.prose_revised", prose.CountProseUnits(revisedContent))
 
-	logger.StepInfo(2, 3, "重新提炼摘要...")
+	logger.StepInfo(2, 3, "regenerating summary...")
 	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
 	if summary == "" {
-		return fmt.Errorf("摘要提炼失败或被取消")
+		return fmt.Errorf("summary generation failed or was canceled")
 	}
 	ch.Summary = summary
 	logger.InfoKey("log.summary_done")
@@ -402,7 +382,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 
 	if chapterIdx+1 < len(state.Chapters) {
-		logger.StepInfo(3, 3, "正在修订后续章节大纲...")
+		logger.StepInfo(3, 3, "revising subsequent chapter outlines...")
 		if err := reviseSubsequentOutlines(ctx, apiCfg, cfg, state, chapterIdx, feedback); err != nil {
 			logger.WarnKey("log.subsequent_outline_failed", err)
 		} else {
@@ -428,14 +408,14 @@ func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	return nil
 }
 
-// ReviseSpecificChapterAction 对指定编号的章节做最小化修订（包括已确认章节）。
-// 仅修改该章正文与摘要，绝不触碰其他章节、大纲或进度指针。
+// ReviseSpecificChapterAction tofingercompileNo. chaptersectiondomostsmall(includingalreadychaptersection).
+// onlythechapterandwant to, not tentacleitshechaptersection, bigoradvancedegreefinger.
 func ReviseSpecificChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, chapterNum int, feedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
 	if err := llm.ValidateConfig(apiCfg); err != nil {
 		return err
 	}
 	if strings.TrimSpace(feedback) == "" {
-		return fmt.Errorf("缺少修改意见")
+		return fmt.Errorf("fewintentsee")
 	}
 
 	chapterIdx := -1
@@ -446,31 +426,31 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *config.APIConfig, 
 		}
 	}
 	if chapterIdx == -1 {
-		return fmt.Errorf("第 %d 章不存在", chapterNum)
+		return fmt.Errorf("chapter %d does not exist", chapterNum)
 	}
 
 	ch := &state.Chapters[chapterIdx]
 	if ch.Content == "" {
-		return fmt.Errorf("第 %d 章尚未生成内容，无法修订（请先生成该章）", chapterNum)
+		return fmt.Errorf("chapter %d has no generated content yet and cannot be revised (generate it first)", chapterNum)
 	}
 	if ch.Status == StatusWriting {
-		return fmt.Errorf("第 %d 章正在写作中，无法修订", chapterNum)
+		return fmt.Errorf("chapter #%d is being written, please wait", chapterNum)
 	}
 
 	logger.InfoKey("log.chapter_specific_revising_long", ch.Num, ch.Title)
 
-	logger.StepInfo(1, 2, "正在根据意见修订正文...")
+	logger.StepInfo(1, 2, "applying feedback revision...")
 	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, settings, logger)
 	if err != nil {
-		return fmt.Errorf("修订章节失败: %w", err)
+		return fmt.Errorf("chapter revision: %w", err)
 	}
 	ch.Content = revisedContent
 	logger.InfoKey("log.prose_specific_revised", prose.CountProseUnits(revisedContent))
 
-	logger.StepInfo(2, 2, "重新提炼摘要...")
+	logger.StepInfo(2, 2, "regenerating summary...")
 	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
 	if summary == "" {
-		return fmt.Errorf("摘要提炼失败或被取消")
+		return fmt.Errorf("summary generation failed or was canceled")
 	}
 	ch.Summary = summary
 
@@ -500,17 +480,17 @@ func ConfirmChapterAction(state *Progress, progressPath string) error {
 	next.NarrativeCheckpoints = append([]NarrativeCheckpoint(nil), state.NarrativeCheckpoints...)
 	state = &next
 	if state.Phase != "writing" {
-		return fmt.Errorf("当前不在写作阶段")
+		return fmt.Errorf("not currently in the writing stage")
 	}
 
 	chapterIdx := state.CurrentChapterIndex
 	if chapterIdx < 0 || chapterIdx >= len(state.Chapters) {
-		return fmt.Errorf("章节索引越界")
+		return fmt.Errorf("chaptersectioncordcross")
 	}
 
 	ch := &state.Chapters[chapterIdx]
 	if ch.Status != StatusReview {
-		return fmt.Errorf("当前章节不在审核状态，无法确认")
+		return fmt.Errorf("whenfrontchaptersectionnot inposture, no")
 	}
 
 	ch.Status = StatusAccepted
@@ -580,7 +560,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 		logger.ContentChunk(idx, chunk)
 	}
 
-	// 通知前端清空流式缓冲（事实核查重试/自动连写时避免内容叠加）
+	// knowfrontclearempty(heavy/moveconnectwritehourinside)
 	logger.StreamStart(idx)
 	content, err := llm.CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 	if err != nil {
@@ -694,17 +674,17 @@ func generateChapterFactCheckWithRetryLog(ctx context.Context, apiCfg *config.AP
 	}
 }
 
-// quoteLineRegexp 匹配修改意见中的引用行：以 '> ' 开头（markdown 引用块语法）。
-// 用户在前端框选原文后点击「引用」按钮，前端自动把选中文字以 '> ' 前缀插入修改意见输入框。
+// quoteLineRegexp intentseemiddle usetravel: by '> ' openhead(markdown useblock).
+// useinfrontplainlaterdotstrike"use"by , frontmoveBAmiddlecharacter-countby '> ' frontenterintentseeloseenter.
 var quoteLineRegexp = regexp.MustCompile(`(?m)^[ \t]*>[ \t]?(.+?)\s*$`)
 
-// errSegmentFallback 表示局部修订无法完成（如引用句在原文找不到、AI 输出段落数不匹配），
-// 调用方应回退到整章修订流程。
+// errSegmentFallback fallback parsing (e.g. template usage failed, AI output paragraph numbering inconsistent),
+// usesquareshouldreturnretreattochapter.
 var errSegmentFallback = errors.New("segment revision unavailable, fallback to full chapter revision")
 
-// extractQuotedSentences 从修改意见中提取以 '> ' 开头的引用行。
-// 返回去重保持顺序的引用句列表，以及去掉引用行后的"纯修改意见"。
-// 若没有引用行，返回 nil 和原 feedback。
+// extractQuotedSentences fromintentseemiddlewithdrawby '> ' openhead usetravel.
+// returngoheavyinsurefollowingorder usesentencerowtable, byandgooffusetravellater "intentsee".
+// ifhasusetravel, return nil andplain feedback.
 func extractQuotedSentences(feedback string) (quotes []string, cleanFeedback string) {
 	matches := quoteLineRegexp.FindAllStringSubmatch(feedback, -1)
 	if len(matches) == 0 {
@@ -726,9 +706,9 @@ func extractQuotedSentences(feedback string) (quotes []string, cleanFeedback str
 	return quotes, cleanFeedback
 }
 
-// findParagraphsContaining 在章节正文中找到包含任一引用句的自然段。
-// 段落优先按双换行切分；若原文不含空行则按单换行切分。sep 为实际使用的分隔符，
-// 重组时必须用同一分隔符，否则会改写整章的换行格式。
+// findParagraphsContaining inchaptersectionmiddletobagoneusesentence paragraph.
+// paragraphpassagefirstby doubletravelcutdivide; ifplainnot emptytravelthenby billtravelcutdivide. sep formakeuse divide,
+// heavygrouphourwhiskeruseonedivide, thenassociationwritechapter travelgrid.
 // ponytail: substring match on naive paragraph split; first hit per quote; miss → errSegmentFallback / full-chapter revise.
 func findParagraphsContaining(content string, quotes []string) (matchedIdx []int, paragraphs []string, sep string, ok bool) {
 	sep = "\n\n"
@@ -759,7 +739,7 @@ func findParagraphsContaining(content string, quotes []string) (matchedIdx []int
 	return matchedIdx, paragraphs, sep, true
 }
 
-// trimEmptyEnds 去除切片首尾的空白段（仅含空白字符的元素）。
+// trimEmptyEnds goexceptcutpiecetail emptywhiteparagraph(onlyemptywhitecharacter-count yuanplain).
 func trimEmptyEnds(paras []string) []string {
 	start, end := 0, len(paras)
 	for start < end && strings.TrimSpace(paras[start]) == "" {
@@ -771,9 +751,9 @@ func trimEmptyEnds(paras []string) []string {
 	return paras[start:end]
 }
 
-// reviseChapterSegment 对章节中包含引用句的自然段做局部最小化修订。
-// 仅重写匹配段，其余正文原样保留。返回新的整章正文。
-// 若引用句在原文找不到、或 AI 输出段落数与匹配段数不一致，返回 errSegmentFallback。
+// reviseChapterSegment tochaptersectionmiddlebagusesentence paragraphdopartmostsmall.
+// onlyheavywriteparagraph, itsplaininsurestay. returnnew chapter.
+// if template usage fails, or the AI output paragraph numbers are inconsistent with the expected count, return errSegmentFallback.
 func reviseChapterSegment(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, quotes []string, cleanFeedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) (string, error) {
 	ch := state.Chapters[chapterIdx]
 	lang := cfg.Language
@@ -823,7 +803,7 @@ func reviseChapterSegment(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 
 	rawResp := llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
 	if rawResp == "" {
-		return "", fmt.Errorf("局部修订 API 调用失败或被取消")
+		return "", fmt.Errorf("partial revision API call failed or was canceled")
 	}
 	newSegment := stripChapterMetaProse(rawResp, lang)
 
@@ -839,10 +819,10 @@ func reviseChapterSegment(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 	return strings.Join(out, sep), nil
 }
 
-// reviseChapterContentStream 基于原文做最小化修订（流式）。
+// reviseChapterContentStream inplaindomostsmall().
 func reviseChapterContentStream(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, userFeedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) (string, error) {
-	// 局部修订分支：用户在修改意见中用 '> ' 引用了原文片段时，
-	// 只重写引用句所在自然段，其余正文原样保留；失败则回退到整章修订。
+	// partdividepay: useinintentseemiddleuse '> ' useplainpieceparagraphhour,
+	// onlyheavywriteusesentenceinparagraph, itsplaininsurestay; thenreturnretreattochapter.
 	if quotes, cleanFeedback := extractQuotedSentences(userFeedback); len(quotes) > 0 {
 		logger.InfoKey("log.chapter_segment_revising", len(quotes))
 		newContent, err := reviseChapterSegment(ctx, apiCfg, cfg, state, chapterIdx, quotes, cleanFeedback, settings, logger)
@@ -917,7 +897,7 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *config.APIConfig, cfg
 		if en {
 			lockedChapters += fmt.Sprintf("Chapter %d \"%s\" (summary): %s\n", ch.Num, ch.Title, ch.Summary)
 		} else {
-			lockedChapters += fmt.Sprintf("第%d章《%s》（摘要）: %s\n", ch.Num, ch.Title, ch.Summary)
+			lockedChapters += fmt.Sprintf("#%dchapter<%s>(want to): %s\n", ch.Num, ch.Title, ch.Summary)
 		}
 	}
 
@@ -925,7 +905,7 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *config.APIConfig, cfg
 	if en {
 		feedbackWrap = fmt.Sprintf("The user gave revision feedback on chapter %d: %s\nOnly adjust later chapter outlines if this feedback affects downstream plot. If it is just wording detail, return the outlines verbatim.", state.Chapters[currentIdx].Num, userFeedback)
 	} else {
-		feedbackWrap = fmt.Sprintf("用户对第%d章提出了修改意见：%s\n请仅在该意见影响后续剧情时调整后续章节大纲；若意见只是文字细节修改，请原样返回大纲。", state.Chapters[currentIdx].Num, userFeedback)
+		feedbackWrap = fmt.Sprintf("The user gave feedback on chapter #%d: %s\nOnly adjust the subsequent chapter outlines if this feedback affects later plot developments; if it is a wording-level tweak, return the outlines unchanged.", state.Chapters[currentIdx].Num, userFeedback)
 	}
 
 	userPrompt := config.RenderPrompt(cfg.Prompts.OutlineRevision, map[string]string{
@@ -938,13 +918,13 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *config.APIConfig, cfg
 
 	rawResp := llm.CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
 	if rawResp == "" {
-		return fmt.Errorf("API 调用失败或被取消")
+		return fmt.Errorf("API call failed or was canceled")
 	}
 	rawResp = cleanJSONResponse(rawResp)
 
 	var resp OutlineResponse
 	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return fmt.Errorf("解析修订大纲JSON失败: %w", err)
+		return fmt.Errorf("untiebigJSON: %w", err)
 	}
 
 	for _, newCh := range resp.Chapters {
@@ -959,7 +939,7 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *config.APIConfig, cfg
 	return nil
 }
 
-// futureOutlineWindow 注入后续章节大纲的窗口大小（章数）
+// futureOutlineWindow enterlaterchaptersectionbig windowmouthbigsmall(chapternumber)
 const futureOutlineWindow = 10
 
 // that omit a supported placeholder.
@@ -971,15 +951,15 @@ func appendIfMissingPlaceholder(template, rendered, placeholder, block string) s
 }
 
 func buildHistorySummary(state *Progress, idx int) string {
-	return buildHistorySummaryForLang(state, idx, i18n.LangZH)
+	return buildHistorySummaryForLang(state, idx, i18n.LangEN)
 }
 
 const (
-	prevTailMaxRunes = 800  // 注入上一章尾部原文的最大字数
-	openingMaxRunes  = 1000 // 衔接优化时提取本章开头片段的最大字数
+	prevTailMaxRunes = 800  // enterupperonechaptertailpartplain mostbigcharacter-countnumber
+	openingMaxRunes  = 1000 // connecthourwithdrawthischapteropenheadpieceparagraph mostbigcharacter-countnumber
 )
 
-// tailAtParagraph 取 content 末尾约 maxRunes 字，向后对齐到段落边界，避免从半句开始。
+// tailAtParagraph withdraw content tailapprox maxRunes character-count, directionlatertotoparagraphpassageedge, fromsentenceopen.
 func tailAtParagraph(content string, maxRunes int) string {
 	trimmed := strings.TrimSpace(content)
 	runes := []rune(trimmed)
@@ -993,8 +973,8 @@ func tailAtParagraph(content string, maxRunes int) string {
 	return strings.TrimSpace(tail)
 }
 
-// splitChapterOpening 把章节正文切分为开头片段与剩余部分，切点向前对齐到段落边界。
-// rest 为空表示整章都算开头（章节较短）。
+// splitChapterOpening BAchaptersectioncutdivideforopenheadpieceparagraphandpartdivide, cutdotdirectionfronttotoparagraphpassageedge.
+// rest foremptytablechapterallcalculateopenhead(chaptersectionshort).
 func splitChapterOpening(content string, maxRunes int) (opening, rest string) {
 	runes := []rune(content)
 	if len(runes) <= maxRunes {
@@ -1010,9 +990,9 @@ func splitChapterOpening(content string, maxRunes int) (opening, rest string) {
 	return string(runes[:cut]), string(runes[cut:])
 }
 
-// SmoothTransitionsAction 批量优化已确认章节之间的衔接：
-// 逐章把上一章尾部与本章开头交给 AI 判断，仅在衔接生硬时最小化重写本章开头片段。
-// 每处理完一章立即落盘，任务可随时取消且不丢已完成部分。
+// SmoothTransitionsAction batchmeasurealreadychaptersectionof connect:
+// chapterBAupperonechaptertailpartandthischapteropenheadinteractgive AI disconnect, onlyinconnectlifehardhourmostsmallheavywritethischapteropenheadpieceparagraph.
+// eachonechapteri.e.passageplate, canalong withhourwithdrawandnot alreadypartdivide.
 func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, logger *sse.LogBroadcaster) error {
 	if err := llm.ValidateConfig(apiCfg); err != nil {
 		return err
@@ -1026,17 +1006,17 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		}
 	}
 	if len(targets) == 0 {
-		return fmt.Errorf("没有可优化的章节（需要至少两个相邻的已确认章节）")
+		return fmt.Errorf("hascan chaptersection(want totofew alreadychaptersection)")
 	}
 
 	logger.InfoKey("log.smooth_start", len(targets))
 	optimized := 0
 	for n, idx := range targets {
 		if ctx.Err() != nil {
-			return fmt.Errorf("任务已取消")
+			return fmt.Errorf("alreadywithdraw")
 		}
 		ch := &state.Chapters[idx]
-		logger.StepInfo(n+1, len(targets), fmt.Sprintf("正在检查第 %d 章《%s》的衔接...", ch.Num, ch.Title))
+		logger.StepInfo(n+1, len(targets), fmt.Sprintf("in# %d chapter<%s> connect...", ch.Num, ch.Title))
 
 		prevTail := tailAtParagraph(state.Chapters[idx-1].Content, prevTailMaxRunes)
 		opening, rest := splitChapterOpening(ch.Content, openingMaxRunes)
@@ -1053,7 +1033,7 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 
 		resp := llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
 		if resp == "" {
-			return fmt.Errorf("第 %d 章衔接检查调用失败或被取消", ch.Num)
+			return fmt.Errorf("continuity check call for chapter %d failed or was canceled", ch.Num)
 		}
 		revised := strings.TrimSpace(resp)
 
@@ -1086,17 +1066,17 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 
 func PolishChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, skills []Skill, progressPath string, logger *sse.LogBroadcaster) error {
 	if chapterIdx < 0 || chapterIdx >= len(state.Chapters) {
-		return fmt.Errorf("章节索引越界")
+		return fmt.Errorf("chaptersectioncordcross")
 	}
 
 	ch := &state.Chapters[chapterIdx]
 	if ch.Content == "" {
-		return fmt.Errorf("章节内容为空，无法润色")
+		return fmt.Errorf("chaptersectioninsideforempty, no")
 	}
 
 	skillsContent := FormatSkillsContent(skills)
 	if skillsContent == "" {
-		return fmt.Errorf("没有启用的润色技能，请先在技能管理页启用")
+		return fmt.Errorf("hasenableuse can, pleasefirstincanpageenableuse")
 	}
 
 	var userPrompt string
@@ -1111,13 +1091,13 @@ func PolishChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 
 %s`, skillsContent, ch.Content)
 	} else {
-		userPrompt = fmt.Sprintf(`请根据以下规则对下面的章节正文进行去AI味处理，输出修改后的完整正文。不要添加章节标题、章节号、「本章完」等任何元信息或说明性文字。
+		userPrompt = fmt.Sprintf(`Please remove the following AI-flavored phrasing from the chapter text below, then output only the revised text. Do not include the chapter title, chapter number, "this chapter" meta-references or any explanations. 
 
-## 润色规则
+## then
 
 %s
 
-## 待处理正文
+## wait
 
 %s`, skillsContent, ch.Content)
 	}
@@ -1132,7 +1112,7 @@ func PolishChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	logger.StreamStart(chapterIdx)
 	result, err := llm.CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 	if err != nil {
-		return fmt.Errorf("润色失败: %w", err)
+		return fmt.Errorf(": %w", err)
 	}
 
 	ch.Content = stripChapterMetaProse(result, cfg.Language)
@@ -1142,7 +1122,7 @@ func PolishChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("保存进度失败: %w", err)
+		return fmt.Errorf("insuredepositadvancedegree: %w", err)
 	}
 
 	return nil

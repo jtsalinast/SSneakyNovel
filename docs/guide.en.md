@@ -1,6 +1,6 @@
 # User guide
 
-[Back to README](../README.md) · [中文指南](guide.zh.md)
+[Back to README](../README.md) ·
 
 This guide follows the writing process. For your first project, complete a small batch manually before enabling auto-confirm or combining several skills.
 

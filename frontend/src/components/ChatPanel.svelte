@@ -45,7 +45,7 @@
     } catch { return ''; }
   }
 
-  // 重试 API 端点映射
+  // Retry API endpoint mapping
   const retryEndpoints = {
     'outline_revision': { method: 'POST', url: '/api/outline/revise' },
     'chapter_generation': { method: 'POST', url: '/api/chapter/generate' },
@@ -60,7 +60,7 @@
     if (msg.role !== 'assistant' || !msg.content) return false;
     if (msg.tool_calls?.length > 0) return false;
     // ponytail: heuristic on both zh and en wait-phrases; false positives are acceptable.
-    const waitPattern = /请(耐心)?等待|请稍等|正在生成|等待完成|please wait|generating|in progress|hold on|one moment/i;
+    const waitPattern = /please wait|generating|in progress|hold on|one moment/i;
     if (!waitPattern.test(msg.content)) return false;
     for (let i = idx - 1; i >= 0; i--) {
       if (allMsgs[i].role === 'user') break;
@@ -84,7 +84,7 @@
         const tc = JSON.parse(jsonStr);
         segments.push({ type: 'tool_call', name: tc.name || tc.tool || $t('chat.tool.unknown'), args: tc.arguments || tc.args || {} });
       } catch {
-        // 未闭合/不完整的 tool_call（流式中途），按工具调用占位显示
+        // Unclosed/incomplete tool_call (mid-stream): show as a tool-call placeholder
         segments.push({ type: 'tool_call', name: $t('chat.tool.preparing'), args: '' });
       }
       lastIdx = match.index + match[0].length;
@@ -125,9 +125,9 @@
     autoScroll = nearBottom;
   }
 
-  // 滚动守卫：afterUpdate 在任何 store 变化（如 token 计数、
-  // 日志追加）后都会触发，无条件写 scrollTop 会造成高频强制重排。
-  // 仅在消息区内容实际变化时才滚动。
+  // Scroll guard: afterUpdate fires on any store change (e.g. token count,
+  // log append) and unconditionally writing scrollTop causes high-frequency forced reflow.
+  // Only scroll whenthe message content actually changes。
   let lastScrollKey = '';
   afterUpdate(() => {
     const key = msgs.length + ':' + streamingText.length + ':' + pendingTools.map(t => t.status).join(',');
@@ -317,7 +317,7 @@
 </script>
 
 <div class="flex flex-col h-full">
-  <!-- 会话栏 -->
+  <!-- Session list -->
   <div class="border-b border-base-content/10 px-3 py-2 flex items-center gap-2 shrink-0">
     <button
       class="btn btn-sm gap-1 border border-base-content/20 hover:border-primary/50 hover:bg-base-300 transition-colors"
@@ -361,7 +361,7 @@
     </div>
   {/if}
 
-  <!-- 任务状态 -->
+  <!-- Task status -->
   {#if $taskRunning || taskLogs.length > 0}
     <div class="border-b border-base-content/10 shrink-0">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -393,7 +393,7 @@
     </div>
   {/if}
 
-  <!-- 消息区 -->
+  <!-- Messages -->
   <div bind:this={messagesContainer} on:scroll={handleScroll} class="flex-1 overflow-y-auto p-3 space-y-2">
     {#if !$currentChatSession}
       <div class="text-center text-base-content/65 py-8 text-base">{$t('chat.notSelected')}</div>
@@ -506,7 +506,7 @@
     {/if}
   </div>
 
-  <!-- 失败重试 -->
+  <!-- Failed-task retry -->
   {#if $lastFailedTask && !$taskRunning}
     <div class="border-t border-error/30 bg-error/10 px-3 py-2 flex items-center gap-2 shrink-0">
       <span class="text-sm text-error">{$lastFailedTask.taskName}{$t('chat.failed.suffix')}</span>
@@ -516,7 +516,7 @@
     </div>
   {/if}
 
-  <!-- 输入区 -->
+  <!-- Input area -->
   {#if $currentChatSession}
     <div class="border-t border-base-content/10 p-2 flex gap-2 items-end shrink-0">
       <textarea

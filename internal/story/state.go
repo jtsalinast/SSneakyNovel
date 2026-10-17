@@ -189,12 +189,12 @@ func LoadProgress(path string) (*Progress, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("读取进度文件失败: %w", err)
+		return nil, fmt.Errorf("readwithdrawadvancedegreeitem: %w", err)
 	}
 
 	var p Progress
 	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("解析进度文件失败: %w", err)
+		return nil, fmt.Errorf("untieadvancedegreeitem: %w", err)
 	}
 
 	if err := loadChapterContents(path, &p); err != nil {
@@ -231,11 +231,11 @@ func SaveProgress(path string, p *Progress) error {
 	}
 	data, err := json.MarshalIndent(&meta, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化进度失败: %w", err)
+		return fmt.Errorf("orderrowadvancedegree: %w", err)
 	}
 	files = append(files, progressFile{Num: 0, Data: data})
 	if err := commitProgressFiles(path, files, fsutil.WriteFileAtomic); err != nil {
-		return fmt.Errorf("保存进度文件失败: %w", err)
+		return fmt.Errorf("insuredepositadvancedegreeitem: %w", err)
 	}
 	cache := cacheFor(path)
 	contentHashCache.Lock()
@@ -253,7 +253,7 @@ func ChapterMarkdownPath(projectDir string, num int) string {
 }
 
 func SaveChapterMarkdown(projectDir string, ch ChapterState, title string) {
-	content := fmt.Sprintf("# 第 %d 章: %s\n\n> **本章摘要**：%s\n\n---\n\n%s", ch.Num, ch.Title, ch.Summary, ch.Content)
+	content := fmt.Sprintf("# # %d chapter: %s\n\n> **thischapterwant to**: %s\n\n---\n\n%s", ch.Num, ch.Title, ch.Summary, ch.Content)
 	_ = os.WriteFile(ChapterMarkdownPath(projectDir, ch.Num), []byte(content), 0644)
 }
 

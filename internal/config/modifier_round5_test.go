@@ -20,7 +20,7 @@ func TestAnimeModifierPresets(t *testing.T) {
 		{"ecchi", "ecchi"},
 		{"revenge drama", "revenge"},
 		{"battle shonen tournament", "battle_shonen"},
-		{"異世界転生", "isekai"},
+		{"other world transmigration", "isekai"},
 	}
 	for _, c := range cases {
 		if got := MatchAnimeModifierKey(c.text); got != c.want {

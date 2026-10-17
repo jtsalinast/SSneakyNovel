@@ -2,6 +2,8 @@ package story
 
 import (
 	"fmt"
+
+	"showmethestory/internal/i18n"
 	"strings"
 )
 
@@ -39,10 +41,10 @@ func EditChapterContent(state *Progress, req EditChapterContentRequest) (int, er
 		}
 	}
 	if ch == nil {
-		return 0, fmt.Errorf("第 %d 章不存在", req.ChapterNum)
+		return 0, fmt.Errorf("# %d chapternot depositin", req.ChapterNum)
 	}
 	if ch.Content == "" {
-		return 0, fmt.Errorf("第 %d 章正文为空，无法编辑", req.ChapterNum)
+		return 0, fmt.Errorf("# %d chapterforempty, nocompile", req.ChapterNum)
 	}
 	original := ch
 	copyChapter := *ch
@@ -55,10 +57,10 @@ func EditChapterContent(state *Progress, req EditChapterContentRequest) (int, er
 	switch req.Operation {
 	case EditOpReplaceLines:
 		if req.StartLine < 1 || req.StartLine > totalLines {
-			return 0, fmt.Errorf("起始行 %d 超出范围（共 %d 行）", req.StartLine, totalLines)
+			return 0, fmt.Errorf("travel %d exit( %d travel)", req.StartLine, totalLines)
 		}
 		if req.EndLine < req.StartLine || req.EndLine > totalLines {
-			return 0, fmt.Errorf("结束行 %d 超出范围（起始行 %d，共 %d 行）", req.EndLine, req.StartLine, totalLines)
+			return 0, fmt.Errorf("travel %d exit(travel %d, %d travel)", req.EndLine, req.StartLine, totalLines)
 		}
 		newLines := strings.Split(req.NewText, "\n")
 		result := make([]string, 0, len(lines)-(req.EndLine-req.StartLine+1)+len(newLines))
@@ -69,17 +71,17 @@ func EditChapterContent(state *Progress, req EditChapterContentRequest) (int, er
 
 	case EditOpReplaceText:
 		if req.OldText == "" {
-			return 0, fmt.Errorf("old_text 不能为空")
+			return 0, fmt.Errorf("old_text not canforempty")
 		}
 		idx := strings.Index(ch.Content, req.OldText)
 		if idx < 0 {
-			return 0, fmt.Errorf("未找到匹配文本（长度 %d 字符）", len(req.OldText))
+			return 0, fmt.Errorf("not yettothis(longdegree %d character-count)", len(req.OldText))
 		}
 		ch.Content = ch.Content[:idx] + req.NewText + ch.Content[idx+len(req.OldText):]
 
 	case EditOpInsertAfterLine:
 		if req.Line < 0 || req.Line > totalLines {
-			return 0, fmt.Errorf("行号 %d 超出范围（共 %d 行，0 表示文件开头）", req.Line, totalLines)
+			return 0, fmt.Errorf("travelNo. %d exit( %d travel, 0 tableitemopenhead)", req.Line, totalLines)
 		}
 		newLines := strings.Split(req.NewText, "\n")
 		result := make([]string, 0, len(lines)+len(newLines))
@@ -95,11 +97,11 @@ func EditChapterContent(state *Progress, req EditChapterContentRequest) (int, er
 		ch.Content += req.NewText
 
 	default:
-		return 0, fmt.Errorf("未知编辑操作: %s", req.Operation)
+		return 0, fmt.Errorf("not yetknowcompilemake: %s", req.Operation)
 	}
 
 	SyncChapterBlocks(ch)
-	if err := ValidateFactEdit(state, *original, *ch, req.FactEditOptions, "zh"); err != nil {
+	if err := ValidateFactEdit(state, *original, *ch, req.FactEditOptions, i18n.LangEN); err != nil {
 		return 0, err
 	}
 	ch.KnowledgeTracked = true
