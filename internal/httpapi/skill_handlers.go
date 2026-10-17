@@ -339,7 +339,7 @@ Text references:
 	if lang == "en" {
 		out.Name += " (Optimized)"
 	} else {
-		out.Name += "（优化版）"
+		out.Name += "()"
 	}
 	m := story.SkillManifest{SchemaVersion: 1, ID: newID, Name: out.Name, Description: out.Description, Category: out.Category, Languages: out.Languages, AppliesTo: out.AppliesTo, EntryPoint: "SKILL.md"}
 	mb, _ := json.MarshalIndent(m, "", "  ")

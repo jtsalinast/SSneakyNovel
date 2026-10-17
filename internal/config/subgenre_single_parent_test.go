@@ -20,6 +20,10 @@ func TestSubgenreLabelParents_ParentIsKnownGenreKey(t *testing.T) {
 		"fantasy": true, "scifi": true, "mystery_thriller": true, "romance": true,
 		"adventure": true, "horror": true, "historical": true, "western": true,
 		"drama": true, "comedy": true,
+		// Backend-only preset buckets that are legitimate parents: the legacy
+		// "mystery" key for Mystery & Thriller and the war bucket "military".
+		// buildCanonicalSubgenreParents normalizes both to frontend GENRES keys.
+		"mystery": true, "military": true,
 	}
 	for label, parents := range subgenreLabelParents {
 		if len(parents) == 1 && !known[parents[0]] {

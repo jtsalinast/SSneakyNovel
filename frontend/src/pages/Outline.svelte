@@ -40,7 +40,7 @@
   let reviseFeedback = '';
   let showRevise = false;
 
-  // 内联编辑
+  // Inline editing
   let editingNum = -1;
   let editTitle = '';
   let editOutline = '';
@@ -85,11 +85,11 @@
     return out;
   }
 
-  // 导入续写
+  // Import continuation
   let showImport = false;
   let importContent = '';
   let importPreview = null; // [{num,title,word_count,preview}]
-  let importStatus = null;  // {active,total,cursor} 断点状态
+  let importStatus = null;  // {active,total,cursor} resume state
   let continuationCount = 5;
   let planningRequirements = "";
   let longTermDirection = "";
@@ -119,7 +119,7 @@
   function replan(b) {
     endingIntent = b.ending_intent || 'serial'; endingStyle = b.ending_style || 'closed'; endingRequirements = b.ending_requirements || '';
     replacingBatch = b; planningRequirements = b.synopsis; continuationCount = b.end_ch - b.start_ch + 1;
-    document.getElementById('batch-planning')?.scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('CardSection_BatchPlanning')?.scrollIntoView({ behavior: 'smooth' });
   }
 
 
@@ -379,12 +379,12 @@
       longTermDirection = prePlan.long_term_direction;
     }
     replacingBatch = null;
-    document.getElementById('batch-planning')?.scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('CardSection_BatchPlanning')?.scrollIntoView({ behavior: 'smooth' });
   }
 </script>
 
 <div class="space-y-3">
-  <div id="pre-planning" class="card bg-base-200">
+  <div id="CardSection_StoryPrePlan" class="card bg-base-200">
     <div class="card-body p-4 gap-3">
       <div class="flex items-center justify-between gap-2 flex-wrap">
         <h3 class="card-title text-base">{$t('outline.preplan.title')}</h3>
@@ -439,7 +439,7 @@
     </div>
   </div>
 
-  <div id="batch-planning" class="card bg-base-200">
+  <div id="CardSection_BatchPlanning" class="card bg-base-200">
     <div class="card-body p-4 gap-3">
       <h3 class="card-title text-base">{$t(batchActionKey)}</h3>
       <label class="block text-sm" for="batch-count">{$t('outline.batch.count')}</label>
@@ -501,8 +501,8 @@
     </div>
   </div>
   {#if !hasOutline}
-    <!-- 空状态 -->
-    <div class="text-center py-14 text-base-content/65">
+    <!-- Empty state -->
+    <div id="OutlineEmptyState" class="text-center py-14 text-base-content/65">
       <div class="text-5xl mb-3"></div>
       <p class="text-base mb-1">{$t('outline.empty.title')}</p>
       <p class="text-sm text-base-content/65 mb-6">{$t('outline.empty.hint')}</p>
@@ -510,7 +510,7 @@
     </div>
 
     {#if showImport}
-      <div class="card bg-base-200">
+      <div id="CardSection_ImportExistingText" class="card bg-base-200">
         <div class="card-body p-4 gap-2">
           <h3 class="card-title text-base">{$t('outline.import.title')}</h3>
           <p class="text-xs text-base-content/65">{$t('outline.import.hint')}</p>
@@ -544,7 +544,7 @@
     {/if}
   {:else}
     {#if importStatus}
-      <div class="alert alert-warning py-2 text-sm flex items-center justify-between">
+      <div id="OutlineImportResumeBanner" class="alert alert-warning py-2 text-sm flex items-center justify-between">
         <span>{$t('outline.import.resumeBanner', { done: importStatus.cursor, total: importStatus.total })}</span>
         <button class="btn btn-primary btn-xs" on:click={resumeImport} disabled={$taskRunning}>{$t('outline.import.resume')}</button>
       </div>
@@ -552,7 +552,7 @@
     <ConfigChangePanel />
 
     {#if $outlineCharacterShowSuggestions && $outlineCharacterSuggestions.length > 0}
-      <div class="card bg-base-200 border border-primary/30 ">
+      <div id="CardSection_CharacterSuggestions" class="card bg-base-200 border border-primary/30 ">
         <div class="card-body py-4 gap-3">
           <h3 class="font-semibold">{$t('outline.charSuggestions.title', { n: $outlineCharacterSuggestions.length })}</h3>
           <p class="text-sm text-base-content/60">{$t('outline.charSuggestions.hint')}</p>
@@ -580,8 +580,8 @@
       </div>
     {/if}
 
-    <!-- 操作栏 -->
-    <div class="card bg-base-200">
+    <!-- Action bar -->
+    <div id="OutlineActionsBar" class="card bg-base-200">
       <div class="card-body p-4 gap-2">
         <div class="flex items-center gap-2 flex-wrap">
           <h3 class="text-base font-semibold flex-1 min-w-0 truncate">{displayTitle || $t('common.untitled')}</h3>
@@ -622,8 +622,8 @@
       </div>
     </div>
 
-    <!-- 章节大纲列表 -->
-    <div class="card bg-base-200">
+    <!-- Chapter outline list -->
+    <div id="ChapterOutlineList" class="card bg-base-200">
       <div class="card-body p-4 gap-2">
         <div class="flex items-center justify-between">
           <h4 class="text-sm font-semibold text-base-content/60">{$t('outline.chapterList')} <span class="font-normal text-base-content/65">{$t('outline.chapterList.summary', { total: projectChapterCount, suffix: pendingCount ? $t('outline.chapterList.pendingSuffix', { n: pendingCount }) : '' })}</span></h4>
@@ -631,7 +631,7 @@
         </div>
         <div class="space-y-1.5">
           {#each groups as group (group.id)}
-            <section class="border border-base-content/10 rounded-lg p-3 space-y-2">
+            <section id="OutlineBatchGroup" class="border border-base-content/10 rounded-lg p-3 space-y-2">
               <div class="flex items-center justify-between gap-2">
                 <h4 class="font-semibold text-sm">{group.id ? $t('outline.batch.range', { start: group.start_ch, end: group.end_ch }) : $t('outline.batch.imported')}</h4>
                 {#if group.planned_final}<span class="badge badge-info">{$t('ending.marker', {num: group.end_ch})}</span>{/if}
@@ -640,7 +640,7 @@
               {#if group.synopsis}<p class="whitespace-pre-wrap text-sm text-base-content/70 mb-3">{group.synopsis}</p>{/if}
           {#each group.chapters as ch (ch.num)}
             {#if editingNum === ch.num}
-              <div data-outline-chapter={ch.num} class="bg-base-300 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
+              <div data-outline-chapter={ch.num} id="ChapterCard_Edit" class="bg-base-300 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-bold text-base-content/65 shrink-0">{$t('outline.chapter.chapterLabel', { num: ch.num })}</span>
                   <input type="text" class="input input-sm flex-1" bind:value={editTitle} placeholder={$t('outline.chapter.titlePlaceholder')} disabled={$taskRunning} />
@@ -661,6 +661,7 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <div
                 data-outline-chapter={ch.num}
+                id="ChapterCard_Summary"
                 class="bg-base-300 rounded-lg p-2.5 group {isOutlineEditable(ch.status) && !$taskRunning ? 'cursor-pointer hover:ring-1 hover:ring-primary/40' : ''}"
                 on:click={() => isOutlineEditable(ch.status) && !$taskRunning && startEdit(ch)}
               >

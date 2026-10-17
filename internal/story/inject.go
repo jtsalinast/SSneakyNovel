@@ -15,7 +15,7 @@ import (
 // (those live in prompts.go / prompts_en.go) — these are the runtime
 // context blocks built from project state.
 
-// buildOutlineConstraintsForLang returns the "全书章节脉络" reverse-constraint block
+// buildOutlineConstraintsForLang returns the "chaptersection" reverse-constraint block
 // in the requested language.
 func buildOutlineConstraintsForLang(state *Progress, idx int, lang string) string {
 	var past, future strings.Builder
@@ -67,13 +67,13 @@ func buildOutlineConstraintsForLang(state *Progress, idx int, lang string) strin
 			sb.WriteString(past.String())
 		}
 	} else {
-		sb.WriteString("【全书章节脉络（反向约束，必须严格遵守）】\n")
+		sb.WriteString("[chaptersection(directionapprox, whiskergridguard)]\n")
 		if future.Len() > 0 {
-			sb.WriteString("◆ 后续章节安排——以下人物登场、初遇、身份揭示等事件已安排在对应章节，本章严禁提前发生，也不得以任何形式暗示或剧透：\n")
+			sb.WriteString("◆ laterchaptersectionarrange——bylower, meet, bodycopyetcitemalreadyarrangeintoshouldchaptersection, thischapterfronthairlife, -toonot byhowshapedarkor: \n")
 			sb.WriteString(future.String())
 		}
 		if past.Len() > 0 {
-			sb.WriteString("◆ 前文已发生——以下事件已经发生，本章不得将其作为新事件重复发生（尤其是初次见面、身份揭示等一次性事件，只能作为既成事实延续）：\n")
+			sb.WriteString("◆ frontalreadyhairlife——byloweritemalreadyhairlife, thischapternot BAitsmakefornewitemheavyhairlife(itsistimesseenoodles, bodycopyetconetimesitem, onlycanmakeforboth): \n")
 			sb.WriteString(past.String())
 		}
 	}
@@ -85,7 +85,7 @@ func formatChapterLine(num int, title, outline, lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("Chapter %d \"%s\": %s\n", num, title, outline)
 	}
-	return fmt.Sprintf("第%d章《%s》：%s\n", num, title, outline)
+	return fmt.Sprintf("#%dchapter<%s>: %s\n", num, title, outline)
 }
 
 func buildPreviousChapterTailForLang(state *Progress, idx int, lang string) string {
@@ -103,7 +103,7 @@ func buildPreviousChapterTailForLang(state *Progress, idx int, lang string) stri
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("[Previous chapter ending (for seamless scene/mood continuation only — do NOT recap or rewrite)]\n%s\n\n", tail)
 	}
-	return fmt.Sprintf("【上一章结尾原文（仅供无缝承接场景与情绪，禁止复述或改写）】\n%s\n\n", tail)
+	return fmt.Sprintf("[upperonechaptertailplain(onlynosewconnectand, orwrite)]\n%s\n\n", tail)
 }
 
 func buildHistorySummaryForLang(state *Progress, idx int, lang string) string {
@@ -117,7 +117,7 @@ func buildHistorySummaryForLang(state *Progress, idx int, lang string) string {
 			if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 				parts = append(parts, fmt.Sprintf("[Chapter %d summary]: %s", state.Chapters[i].Num, state.Chapters[i].Summary))
 			} else {
-				parts = append(parts, fmt.Sprintf("[第%d章摘要]: %s", state.Chapters[i].Num, state.Chapters[i].Summary))
+				parts = append(parts, fmt.Sprintf("[#%dchapterwant to]: %s", state.Chapters[i].Num, state.Chapters[i].Summary))
 			}
 		}
 	}
@@ -126,7 +126,7 @@ func buildHistorySummaryForLang(state *Progress, idx int, lang string) string {
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			history = "This is the opening of the story; no prior context."
 		} else {
-			history = "当前为故事开端，无历史前情。"
+			history = "whenfrontforopen, nofront. "
 		}
 	}
 	return history
@@ -178,7 +178,7 @@ func knowledgeSelectionNotice(lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return "\n[Retrieved original records; this is a budgeted subset, not the complete registry. Missing records do not imply absence of a fact/entity. Do not infer new identities or overwrite unseen fields. Evidence snippets may be excerpts. Worldview knowledge entries are rules of this novel, including fictional rules; do not replace them with real-world assumptions.]\n"
 	}
-	return "\n【检索到的原始条目：这是预算内的相关子集，并非完整资料库。未命中不代表事实或实体不存在，不得据此猜测新身份或覆盖未提供的字段；来源片段可能是节选。世界观中的知识设定是本小说规则，可以虚构，不得用现实常识替换。】\n"
+	return "\n[cordto plainstrip: thisiscalculateinside close, andingredientlibrary. not yetlife-fatemiddlenot tableorbodynot depositin, not receiptthisnewbodycopyorcovernot yet character-countparagraph; comepieceparagraphcancanissection. observemiddle knowrecognizeisthissmallsaythen, canbyvoid, not userecognize. ]\n"
 }
 
 // The optional query includes freshly generated prose during fact checking.
@@ -210,7 +210,7 @@ func formatMemoryForUpdatePrompt(entries []MemoryEntry, lang string) string {
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			return "(empty — no memories yet)"
 		}
-		return "（空——尚无记忆）"
+		return "(empty——nomemory)"
 	}
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	var sb strings.Builder
@@ -255,7 +255,7 @@ func formatActiveForeshadowsForChapterLang(foreshadows []Foreshadow, chapterNum 
 	if en {
 		sb.WriteString("[Active foreshadows (you must advance or pay them off when writing)]\n")
 	} else {
-		sb.WriteString("【活跃伏笔（写作时必须注意推进或回收）】\n")
+		sb.WriteString("[active (during writing these must be advanced or resolved)]\n")
 	}
 
 	for _, fs := range active {
@@ -267,12 +267,12 @@ func formatActiveForeshadowsForChapterLang(foreshadows []Foreshadow, chapterNum 
 			sb.WriteString("]\n")
 			sb.WriteString(fmt.Sprintf("   Description: %s\n", fs.Description))
 		} else {
-			sb.WriteString(fmt.Sprintf("#%d \"%s\" [第%d章埋设", fs.ID, fs.Name, fs.PlantChapter))
+			sb.WriteString(fmt.Sprintf("#%d \"%s\" [#%dchapter", fs.ID, fs.Name, fs.PlantChapter))
 			if fs.TargetChapter > 0 {
-				sb.WriteString(fmt.Sprintf("，预计第%d章回收", fs.TargetChapter))
+				sb.WriteString(fmt.Sprintf(", count#%dchapterreturncollect", fs.TargetChapter))
 			}
 			sb.WriteString("]\n")
-			sb.WriteString(fmt.Sprintf("   描述: %s\n", fs.Description))
+			sb.WriteString(fmt.Sprintf(" : %s\n", fs.Description))
 		}
 
 		if len(fs.Events) > 0 {
@@ -283,9 +283,9 @@ func formatActiveForeshadowsForChapterLang(foreshadows []Foreshadow, chapterNum 
 					sb.WriteString(fmt.Sprintf("   - Chapter %d: %s\n", ev.Chapter, ev.Note))
 				}
 			} else {
-				sb.WriteString("   已有进展:\n")
+				sb.WriteString(" alreadyhasadvance:\n")
 				for _, ev := range events {
-					sb.WriteString(fmt.Sprintf("   - 第%d章: %s\n", ev.Chapter, ev.Note))
+					sb.WriteString(fmt.Sprintf(" - #%dchapter: %s\n", ev.Chapter, ev.Note))
 				}
 			}
 		}
@@ -302,13 +302,13 @@ func formatActiveForeshadowsForChapterLang(foreshadows []Foreshadow, chapterNum 
 			if en {
 				sb.WriteString(fmt.Sprintf("   ⚠️ This foreshadow is past its expected payoff chapter (%d); this chapter should prioritise paying it off.\n", fs.TargetChapter))
 			} else {
-				sb.WriteString(fmt.Sprintf("   ⚠️ 该伏笔已超过预计回收章节（第%d章），本章应优先考虑回收\n", fs.TargetChapter))
+				sb.WriteString(fmt.Sprintf(" ⚠️ thealreadypasscountreturncollectchaptersection(#%dchapter), thischaptershouldfirstreturncollect\n", fs.TargetChapter))
 			}
 		} else if fs.TargetChapter > 0 && chapterNum >= fs.TargetChapter-2 {
 			if en {
 				sb.WriteString(fmt.Sprintf("   → Approaching the expected payoff (chapter %d); start closing it.\n", fs.TargetChapter))
 			} else {
-				sb.WriteString(fmt.Sprintf("   → 接近预计回收节点（第%d章），可开始收束\n", fs.TargetChapter))
+				sb.WriteString(fmt.Sprintf(" → connectnearcountreturncollectsectiondot(#%dchapter), canopencollect\n", fs.TargetChapter))
 			}
 		}
 
@@ -324,7 +324,7 @@ func formatForeshadowsForPromptLang(foreshadows []Foreshadow, lang string) strin
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			return "(none)"
 		}
-		return "无"
+		return "no"
 	}
 
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
@@ -341,10 +341,10 @@ func formatForeshadowsForPromptLang(foreshadows []Foreshadow, lang string) strin
 				sb.WriteString(fmt.Sprintf(", expected payoff: chapter %d", fs.TargetChapter))
 			}
 		} else {
-			sb.WriteString(fmt.Sprintf("   描述: %s\n", fs.Description))
-			sb.WriteString(fmt.Sprintf("   埋设于: 第%d章", fs.PlantChapter))
+			sb.WriteString(fmt.Sprintf(" : %s\n", fs.Description))
+			sb.WriteString(fmt.Sprintf(" in: #%dchapter", fs.PlantChapter))
 			if fs.TargetChapter > 0 {
-				sb.WriteString(fmt.Sprintf("，预计回收: 第%d章", fs.TargetChapter))
+				sb.WriteString(fmt.Sprintf(", countreturncollect: #%dchapter", fs.TargetChapter))
 			}
 		}
 		sb.WriteString("\n")
@@ -357,9 +357,9 @@ func formatForeshadowsForPromptLang(foreshadows []Foreshadow, lang string) strin
 					sb.WriteString(fmt.Sprintf("   - Chapter %d: %s\n", ev.Chapter, ev.Note))
 				}
 			} else {
-				sb.WriteString("   已有进展:\n")
+				sb.WriteString(" alreadyhasadvance:\n")
 				for _, ev := range events {
-					sb.WriteString(fmt.Sprintf("   - 第%d章: %s\n", ev.Chapter, ev.Note))
+					sb.WriteString(fmt.Sprintf(" - #%dchapter: %s\n", ev.Chapter, ev.Note))
 				}
 			}
 		}
@@ -368,7 +368,7 @@ func formatForeshadowsForPromptLang(foreshadows []Foreshadow, lang string) strin
 			if en {
 				sb.WriteString(fmt.Sprintf("   Resolution: %s\n", fs.Resolution))
 			} else {
-				sb.WriteString(fmt.Sprintf("   回收方式: %s\n", fs.Resolution))
+				sb.WriteString(fmt.Sprintf(" returncollectsquare: %s\n", fs.Resolution))
 			}
 		}
 
@@ -379,7 +379,7 @@ func formatForeshadowsForPromptLang(foreshadows []Foreshadow, lang string) strin
 		if en {
 			return "(none)"
 		}
-		return "无"
+		return "no"
 	}
 	return truncateRunesExact(sb.String(), 6000)
 }
@@ -391,7 +391,7 @@ func BatchSynopses(state *Progress, lang string) string {
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			fmt.Fprintf(&out, "[Batch %d, chapters %d–%d]\n%s\n\n", b.ID, b.StartCh, b.EndCh, b.Synopsis)
 		} else {
-			fmt.Fprintf(&out, "【批次 %d，第 %d–%d 章大纲梗概】\n%s\n\n", b.ID, b.StartCh, b.EndCh, b.Synopsis)
+			fmt.Fprintf(&out, "[batchtimes %d, # %d–%d chapterbigprobability]\n%s\n\n", b.ID, b.StartCh, b.EndCh, b.Synopsis)
 		}
 	}
 	return out.String()
@@ -401,14 +401,14 @@ func memoryLinkPrompt(lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return "\nRequired output override: return JSON {\"new_memories\":[{\"id\":0,\"content\":\"fact\",\"category\":\"character|location|item|event|promise|other\",\"block_ids\":[1]}]}. Extract all consistency-critical facts, including those in the outline. Link each fact to ALL relevant blocks of THIS chapter using the supplied block IDs, not paragraph positions. For an existing fact reuse its exact ID and content; use id=0 only for a new fact. Include existing facts mentioned again. Do not delete, merge or alter existing facts to meet a token budget. Return an empty array only when no facts apply. Block evidence:\n"
 	}
-	return "\n输出格式覆盖：返回 JSON {\"new_memories\":[{\"id\":0,\"content\":\"事实\",\"category\":\"character|location|item|event|promise|other\",\"block_ids\":[1]}]}。提取所有影响一致性的关键事实，包括大纲中已有的事实。每个事实关联本章所有相关段落，使用下方真实 Block ID，不是段落序号。复用已有事实时保持其 ID 和 content 原文；只有新事实才用 id=0。本章再次提到的已有事实也要返回。不得为了 token 预算删除、合并或改变既有事实。只有确实没有事实时返回空数组。段落证据：\n"
+	return "\nOutput format: return JSON {\"new_memories\":[{\"id\":0,\"content\":\"\",\"category\":\"character|location|item|event|promise|other\",\"block_ids\":[1]}]}. Extract every key fact, including those already present. Attach to each memory the block IDs of the passages in this chapter that evidence it (real Block IDs from below, not passage ordinals). For existing memories keep their ID and content verbatim; use id=0 only for genuinely new ones. Do not repeat what this chapter already has too much. Never fabricate for token savings; merge duplicates rather than both keeping them. Return an empty array only when nothing qualifies. Evidence passages: \n"
 }
 
 func memoryRetryPrompt(lang string, err error) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return "\nThe previous response failed validation: " + err.Error() + ". Return the complete corrected JSON. Only reuse IDs from the supplied existing memories and copy their content exactly. For new or changed facts use id=0. Do not invent IDs or merge existing facts.\n"
 	}
-	return "\n上次输出校验失败：" + err.Error() + "。请返回完整的修正后 JSON。只能复用所提供已有记忆的 ID，并逐字复制其 content；新事实或发生变化的事实用 id=0。不得编造 ID 或合并已有事实。\n"
+	return "\nPrevious attempt failed: " + err.Error() + ". Please return valid JSON. Only reference existing memory IDs, copying their content word for word; use id=0 for anything new. Never invent IDs or merge with existing entries. \n"
 }
 
 func settingUpdatePrompt(lang string) string {
@@ -416,12 +416,12 @@ func settingUpdatePrompt(lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		schema += "Keep fields concise: describe enduring attributes and current state, not a chapter-by-chapter plot log. Preserve existing independent constraints when updating a field. Do not append paraphrases of known facts. Event history and original evidence are stored separately.\n"
 	} else {
-		schema += "字段保持精简：只描述稳定属性与当前状态，不写逐章剧情流水账。更新字段必须保留原有独立约束，不追加已有事实的同义复述。事件历史和原文证据由系统另行保存。\n"
+		schema += "character-countparagraphinsurerefined: onlybelongs toandwhenfrontposture, not writechapterwateraccount. morenewcharacter-countparagraphwhiskerinsurestayplainhasapprox, not chasealreadyhas . itemandplaincertificatereceiptisanothertravelinsuredeposit. \n"
 	}
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return "Extract setting changes evidenced in the accepted chapter blocks. Reuse existing entity IDs; never guess identities. Supply only changed fields for existing entities, complete required fields for new entities. Mark contradictions, uncertain identities or inferences conflict=true. evolution=true only for explicit chronological developments (e.g. allies becoming enemies), never for factual contradictions. No deletions. New characters: name; worldview: name/category/description; organizations: name/type/description/members; relations: source_id/source_type/target_id/target_type/label (types character/worldview/organization). For new entities use local IDs starting with $ (e.g. $alice); list new characters/worldview first, organizations next, relations last. References may use existing IDs or earlier unambiguous new $IDs. Never link uncertain new entities. The server allocates permanent IDs. Use exact block IDs as evidence. Return changes:[] when nothing changes. Below: existing entities, then chapter blocks." + schema
 	}
-	return "从已确认正文段落中提取有证据的设定变化。已有实体复用 ID，只提交变化字段；新实体提供必填字段。禁止猜测身份。矛盾、身份含糊或推断必须 conflict=true。只有正文明确发生的时间演变（如盟友变敌人）才设 evolution=true，事实矛盾不算演变。禁止删除。新人物：name；世界观：name/category/description；组织：name/type/description/members；关系：source_id/source_type/target_id/target_type/label（类型 character/worldview/organization）。新实体使用 $ 开头的临时 ID，如 $alice，先输出人物和世界观，再组织，再关系；引用可用已有 ID 或之前输出的无歧义新实体 $ID，禁止关联尚有歧义的新实体。服务端分配正式 ID。block_id 必须使用真实段落证据。没有变化返回 changes:[]。下方依次为已有设定和本章段落。" + schema
+	return "Extract setting changes evidenced in the accepted chapter blocks. Reuse existing entity IDs, supplying only changed fields; provide required fields for new entities. Copy names verbatim. Mark contradictions, ambiguous identities or inference as conflict=true. Set evolution=true only for explicit chronological developments (e.g. allies becoming enemies), never for factual contradictions. No deletions. New characters: name; worldview: name/category/description; organizations: name/type/description/members; relations: source_id/source_type/target_id/target_type/label (types character/worldview/organization). For new entities use local IDs starting with $ (e.g. $alice); list characters and worldview first, then organizations, then relations; references may use existing IDs or earlier unambiguous new $IDs; never link entities that are still ambiguous. The server allocates permanent IDs. Use real evidence block IDs in block_id. Return changes:[] when there are none. Below: existing settings, then this chapter's blocks. " + schema
 }
 
 func BookSynopsis(cfg *config.Config, state *Progress) string {
@@ -434,7 +434,7 @@ func ChapterSynopsis(cfg *config.Config, state *Progress, num int) string {
 			if i18n.NormalizeLanguage(cfg.Language) == i18n.LangEN {
 				return fmt.Sprintf("[Batch synopsis, chapters %d–%d; follow this chapter's outline without advancing later events]\n%s", b.StartCh, b.EndCh, b.Synopsis)
 			}
-			return fmt.Sprintf("【第 %d–%d 章大纲梗概；仅按本章章纲推进，不得提前展开后续情节】\n%s", b.StartCh, b.EndCh, b.Synopsis)
+			return fmt.Sprintf("[# %d–%d chapterbigprobability; onlyby thischapterchapteradvance, not frontopenlatersection]\n%s", b.StartCh, b.EndCh, b.Synopsis)
 		}
 	}
 	return ""
@@ -444,7 +444,7 @@ func batchScopeTemplate(lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return "\n[Required batch synopsis: chapters {{.StartNum}}–{{.EndNum}}]\n{{.OutlineSynopsis}}\n[Long-term direction, optional]\n{{.LongTermDirection}}\nGenerate exactly {{.NewChapterCount}} consecutive chapters in this range, constrained by this batch synopsis. Start the story when there are no existing chapters; otherwise continue the existing plot. Do not treat this batch as the whole book. When the supplied novel title is blank, include an inferred non-empty top-level JSON field named title."
 	} else {
-		return "\n【本批大纲梗概：第 {{.StartNum}}–{{.EndNum}} 章，必须遵循】\n{{.OutlineSynopsis}}\n【长期方向（可选）】\n{{.LongTermDirection}}\n严格生成上述范围内连续的 {{.NewChapterCount}} 章，由本批梗概约束。没有已有章节时从故事开篇开始，否则承接已有剧情。不得把本批梗概当成全书计划。传入的小说标题为空时，须推断标题并在顶层 JSON 的 title 字段返回非空标题。"
+		return "\n[thisbatchbigprobability: # {{.StartNum}}–{{.EndNum}} chapter, whiskerfollow]\n{{.OutlineSynopsis}}\n[longexpectsquaredirection(can)]\n{{.LongTermDirection}}\ngridlifeupperinsideconnect {{.NewChapterCount}} chapter, thisbatchprobabilityapprox. hasalreadyhaschaptersectionhourfromopenpieceopen, thenconnectalreadyhas. not BAthisbatchprobabilitywhencount. enter smallsaymetricforemptyhour, whiskerpushdisconnectmetricandinlayer JSON title character-countparagraphreturnemptymetric. "
 	}
 }
 
@@ -468,16 +468,16 @@ func endingPrompt(b OutlineBatch, num int, lang string) string {
 		return s + b.EndingRequirements + "\n"
 	}
 	if !b.PlannedFinal {
-		return "\n【结尾控制】继续连载：完成局部情节并留下自然的下一步，不要写成全书完结。\n"
+		return "\n[tailmanufacture]connect: partsectionandstaylower lowerone, not want towrite. \n"
 	}
-	s := fmt.Sprintf("\n【结尾控制】本批向第 %d 章全书收尾逐步推进。当前章：%d（0 表示批次规划）。不得提前完结；末章结尾要求优先于通用章末钩子规则，须交代主线结果。\n", b.EndCh, num)
+	s := fmt.Sprintf("\n[tailmanufacture]thisbatchdirection# %d chaptercollecttailadvance. whenfrontchapter: %d(0 tablebatchtimes). not front; chaptertailwant tofirstinusechapterhookthen, whiskerinteractthreadfruit. \n", b.EndCh, num)
 	if b.EndingIntent == "sequel" {
-		s += "完成本书主线，同时保留明确的续作入口。\n"
+		s += "thisthread, hourinsurestaybright makeentermouth. \n"
 	}
 	if b.EndingStyle == "open" {
-		s += "开放式结局：交代主线结果，人物未来或主题解释可以留白。\n"
+		s += "openput: interactthreadfruit, not yetcomeoruntiecanbystaywhite. \n"
 	} else if b.EndingStyle != "custom" {
-		s += "闭合式结局：收束主线冲突及主要人物弧线。\n"
+		s += "join: collectthreadandwant tothread. \n"
 	}
 	return s + b.EndingRequirements + "\n"
 }

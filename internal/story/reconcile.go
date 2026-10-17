@@ -20,7 +20,7 @@ type ReconciliationResult struct {
 func ReconcileSettingsAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress,
 	newSettings config.StoryConfig, settings *ProjectSettings, progressPath string, cfgPath string, logger *sse.LogBroadcaster) error {
 
-	logger.StepInfo(1, 3, "正在分析已有章节与新设定的兼容性...")
+	logger.StepInfo(1, 3, "individealreadyhaschaptersectionandnew ...")
 	lang := cfg.Language
 	if err := EnsureNarrativeCheckpoints(ctx, apiCfg, cfg, state, progressPath, logger); err != nil {
 		return err
@@ -38,16 +38,16 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 
 	rawResp := llm.CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
 	if rawResp == "" {
-		return fmt.Errorf("API 调用失败或被取消")
+		return fmt.Errorf("API call failed or was canceled")
 	}
 	rawResp = cleanJSONResponse(rawResp)
 
 	var result ReconciliationResult
 	if err := json.Unmarshal([]byte(rawResp), &result); err != nil {
-		return fmt.Errorf("解析协调结果JSON失败: %w\n原始响应: %s", err, rawResp)
+		return fmt.Errorf("failed to parse reconciliation result JSON: %w\nraw response: %s", err, rawResp)
 	}
 
-	logger.StepInfo(2, 3, "正在更新设定...")
+	logger.StepInfo(2, 3, "inmorenew...")
 
 	adjustedStory := storyConfigFromReconciliation(result, newSettings)
 	conflicts := CollectStoryConfigConflicts(newSettings, adjustedStory, "reconcile", result.Explanation)
@@ -67,18 +67,18 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 	}
 
 	if hasPending {
-		logger.StepInfo(3, 3, "正在基于新设定重新生成待定章节大纲...")
+		logger.StepInfo(3, 3, "regenerating pending chapter outlines from the new settings...")
 		if err := regeneratePendingOutlines(ctx, apiCfg, cfg, state, progressPath, cfgPath, logger); err != nil {
 			logger.WarnKey("log.reconcile_pending_outline_failed", err)
 		}
 	}
 
 	if err := config.SaveConfig(cfgPath, cfg); err != nil {
-		return fmt.Errorf("保存配置失败: %w", err)
+		return fmt.Errorf("insuredepositplace: %w", err)
 	}
 
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("保存进度失败: %w", err)
+		return fmt.Errorf("insuredepositadvancedegree: %w", err)
 	}
 
 	if err := appendPendingChanges(pendingPath, conflicts, logger); err != nil {
@@ -120,7 +120,7 @@ func regeneratePendingOutlines(ctx context.Context, apiCfg *config.APIConfig, cf
 		feedback = fmt.Sprintf("Story settings updated to: type=%s, writing_style=%s, writing_pov=%s. Adjust the pending chapter outlines so they stay consistent with the new settings and the existing chapters.",
 			cfg.Story.Type, cfg.Story.WritingStyle, cfg.Story.WritingPOV)
 	} else {
-		feedback = fmt.Sprintf("故事设定已更新为：类型=%s，写作风格=%s，叙述视角=%s。请根据新设定调整待定章节大纲，使其与新设定和已有章节保持一致。",
+		feedback = fmt.Sprintf("Updated: genre=%s, writing_style=%s, pov=%s. Please adjust the new outline accordingly so it stays consistent with the existing chapters. ",
 			cfg.Story.Type, cfg.Story.WritingStyle, cfg.Story.WritingPOV)
 	}
 
@@ -134,13 +134,13 @@ func regeneratePendingOutlines(ctx context.Context, apiCfg *config.APIConfig, cf
 
 	rawResp := llm.CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
 	if rawResp == "" {
-		return fmt.Errorf("API 调用失败或被取消")
+		return fmt.Errorf("API call failed or was canceled")
 	}
 	rawResp = cleanJSONResponse(rawResp)
 
 	var resp OutlineResponse
 	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return fmt.Errorf("解析修订大纲JSON失败: %w", err)
+		return fmt.Errorf("untiebigJSON: %w", err)
 	}
 
 	return applyOutlineRevision(cfg, state, resp, "outline_revision", PendingConfigChangesPath(progressPath), cfgPath, logger)

@@ -143,166 +143,52 @@ var genreCharacterExtraFields = map[string][]string{
 	"romance:romcom":            {"meet_cute_story", "embarrassment_superpower", "blind_spot_about_themselves"},
 }
 
-var genreCharacterExtraDesc = map[string][2]string{
-	"fantasy": {
-		"可补充 magic_school（学派的魔法体系/流派）与 affiliation（所属组织或阵营）。",
-		"Optionally add magic_school (their magical discipline/school) and affiliation (organization or faction).",
-	},
-	"scifi": {
-		"可补充 ship_id（隶属舰船/基地）、rank（军衔或职级）与 implants（义体/植入物）。",
-		"Optionally add ship_id (assigned ship/base), rank (military or corporate rank) and implants (cybernetics).",
-	},
-	"mystery": {
-		"可补充 alibi（典型不在场证明/日常行踪）与 secret_knowledge（其掌握的隐藏信息）。",
-		"Optionally add alibi (their usual whereabouts/alibi) and secret_knowledge (hidden information they hold).",
-	},
-	"romance": {
-		"可补充 love_history（情感史）与 attachment_style（依恋类型，如安全型/焦虑型）。",
-		"Optionally add love_history (past relationships) and attachment_style (secure/anxious/avoidant...).",
-	},
-	"thriller": {
-		"可补充 handler_role（情报职务，如线人/行动官）与 cover_identity（对外伪装身份）。",
-		"Optionally add handler_role (intelligence function, e.g. case officer/informant) and cover_identity.",
-	},
-	"horror": {
-		"可补充 haunting_ties（与恐怖源头的关联）与 survival_odds（其求生的优势/弱点简述）。",
-		"Optionally add haunting_ties (link to the horror's origin) and survival_odds (what keeps them alive).",
-	},
-	"historical": {
-		"可补充 social_class（社会阶层）与 faction（所属家族/派系）。",
-		"Optionally add social_class (period social standing) and faction (family/party allegiance).",
-	},
-	"western": {
-		"可补充 trade（职业营生）与 reputation（在边境的名声/传闻）。",
-		"Optionally add trade (occupation) and reputation (how they are known on the frontier).",
-	},
-	"litrpg": {
-		"可补充 class_build（职业/构筑）与 level_progression（当前等级与成长路线）。",
-		"Optionally add class_build (class/build) and level_progression (current level & growth path).",
-	},
-	"urban": {
-		"可补充 cover_life（表面身份/日常生活）与 hidden_society_ties（与隐秘社会的联系）。",
-		"Optionally add cover_life (daytime ordinary identity) and hidden_society_ties (links to the masquerade world).",
-	},
-	"military": {
-		"可补充 unit_assignment（所属部队）与 mos_specialty（专业兵种/技能）。",
-		"Optionally add unit_assignment (unit/platoon) and mos_specialty (job specialty).",
-	},
-	"postapo": {
-		"可补充 scavenger_skill（拾荒/生存专长）与 settlement（所属聚居地）。",
-		"Optionally add scavenger_skill (salvage/survival trade) and settlement (home camp).",
-	},
-	"adventure": {
-		"可补充 expedition_role（探险队职责）与 specialty_skill（关键专业技能）。",
-		"Optionally add expedition_role (role in the party/expedition) and specialty_skill.",
-	},
-	"wuxia": {
-		"可补充 sect（门派）、cultivation_stage（内功境界）与 signature_technique（成名绝技）。",
-		"Optionally add sect, cultivation_stage (internal-energy realm) and signature_technique.",
-	},
-	"xianxia": {
-		"可补充 sect（宗门）、cultivation_stage（修行境界）与 dantian_element（灵根属性）。",
-		"Optionally add sect, cultivation_stage (realm) and dantian_element (spirit root).",
-	},
-	"cozy": {
-		"可补充 small_town_role（小镇中的角色/声望）与 hobby_or_trade（爱好或营生）。",
-		"Optionally add small_town_role and hobby_or_trade (baking, gardening...).",
-	},
-	"heist": {
-		"可补充 crew_role（团队分工，如撬锁/车手）与 cover_identity（作案伪装身份）。",
-		"Optionally add crew_role (lockpicker, driver...) and cover_identity.",
-	},
-	"cyberpunk": {
-		"可补充 implants（义体改造）、corp_affiliation（效忠企业）与 street_name（街头代号）。",
-		"Optionally add implants, corp_affiliation and street_name (handle).",
-	},
-	"solarpunk": {
-		"可补充 coop_role（合作社职务）与 rewilding_project（参与的生态修复项目）。",
-		"Optionally add coop_role (cooperative job) and rewilding_project.",
-	},
-	"romantasy": {
-		"可补充 bond_or_curse（羁绊或诅咒）与 court_role（宫廷身份）。",
-		"Optionally add bond_or_curse and court_role (fae/god court position).",
-	},
-	"dystopian": {
-		"可补充 caste_record（种姓/档案等级）与 resistance_ties（与抵抗组织的联系）。",
-		"Optionally add caste_record (assigned caste/file status) and resistance_ties.",
-	},
-	"space_opera": {
-		"可补充 ship_id（任职舰船）、rank（军衔/商阶）与 faction（星际派系）。",
-		"Optionally add ship_id, rank and faction (interstellar house/empire).",
-	},
+var genreCharacterExtraDesc = map[string]string{
+	"fantasy": "Optionally add magic_school (their magical discipline/school) and affiliation (organization or faction).",
+	"scifi": "Optionally add ship_id (assigned ship/base), rank (military or corporate rank) and implants (cybernetics).",
+	"mystery": "Optionally add alibi (their usual whereabouts/alibi) and secret_knowledge (hidden information they hold).",
+	"romance": "Optionally add love_history (past relationships) and attachment_style (secure/anxious/avoidant...).",
+	"thriller": "Optionally add handler_role (intelligence function, e.g. case officer/informant) and cover_identity.",
+	"horror": "Optionally add haunting_ties (link to the horror's origin) and survival_odds (what keeps them alive).",
+	"historical": "Optionally add social_class (period social standing) and faction (family/party allegiance).",
+	"western": "Optionally add trade (occupation) and reputation (how they are known on the frontier).",
+	"litrpg": "Optionally add class_build (class/build) and level_progression (current level & growth path).",
+	"urban": "Optionally add cover_life (daytime ordinary identity) and hidden_society_ties (links to the masquerade world).",
+	"military": "Optionally add unit_assignment (unit/platoon) and mos_specialty (job specialty).",
+	"postapo": "Optionally add scavenger_skill (salvage/survival trade) and settlement (home camp).",
+	"adventure": "Optionally add expedition_role (role in the party/expedition) and specialty_skill.",
+	"wuxia": "Optionally add sect, cultivation_stage (internal-energy realm) and signature_technique.",
+	"xianxia": "Optionally add sect, cultivation_stage (realm) and dantian_element (spirit root).",
+	"cozy": "Optionally add small_town_role and hobby_or_trade (baking, gardening...).",
+	"heist": "Optionally add crew_role (lockpicker, driver...) and cover_identity.",
+	"cyberpunk": "Optionally add implants, corp_affiliation and street_name (handle).",
+	"solarpunk": "Optionally add coop_role (cooperative job) and rewilding_project.",
+	"romantasy": "Optionally add bond_or_curse and court_role (fae/god court position).",
+	"dystopian": "Optionally add caste_record (assigned caste/file status) and resistance_ties.",
+	"space_opera": "Optionally add ship_id, rank and faction (interstellar house/empire).",
 	// new parent genres (round 3) — descriptions for the extra-field hints
-	"graphic_novel": {
-		"可补充 visual_motif（视觉母题/象征色）、panel_voice_note（旁白语气）与 signature_prop（标志性道具）。",
-		"Optionally add visual_motif (recurring symbol/color), panel_voice_note (narration voice) and signature_prop.",
-	},
-	"superhero": {
-		"可补充 power_limitation（能力代价/弱点）、public_identity_layer（公开身份伪装）与 rogues_gallery_ties（宿敌渊源）。",
-		"Optionally add power_limitation (cost/weakness), public_identity_layer and rogues_gallery_ties (archenemy history).",
-	},
-	"scifi:superhero": {
-		"可补充 power_cost_or_limitation（代价/弱点）、collateral_damage_debt（附带损害债务）与 public_opinion_metronome（舆论压力）。",
-		"Optionally add power_cost_or_limitation, collateral_damage_debt and public_opinion_metronome.",
-	},
-	"scifi:steampunk": {
-		"可补充 gearwork_gadget（蒸汽机关装置）、guild_apprenticeship（行会师承）与 airship_or_factory_tie（飞艇/工厂关联）。",
-		"Optionally add gearwork_gadget, guild_apprenticeship and airship_or_factory_tie.",
-	},
-	"horror:dark_academia": {
-		"可补充 secret_society_membership（秘密社团席位）、advisor_dependence（导师依附关系）与 transcript_scandal（学籍丑闻）。",
-		"Optionally add secret_society_membership, advisor_dependence and transcript_scandal.",
-	},
-	"adventure:swashbuckler": {
-		"可补充 dueling_record（决斗战绩）、corsair_letter_or_brand（私掠状或海盗烙印）与 crew_loyalty（对船员的忠诚）。",
-		"Optionally add dueling_record, corsair_letter_or_brand and crew_loyalty.",
-	},
-	"adventure:nautical": {
-		"可补充 ship_station_duty（船上值守职责）、seasickness_or_scars（晕船/旧伤）与 mutiny_stance（对哗变的态度）。",
-		"Optionally add ship_station_duty, seasickness_or_scars and mutiny_stance.",
-	},
-	"adventure:picaresque": {
-		"可补充 grift_of_the_week（本周骗局）、patron_or_pursuer（靠山或追兵）与 disguise_alias（伪装化名）。",
-		"Optionally add grift_of_the_week (current con), patron_or_pursuer and disguise_alias.",
-	},
-	"horror:gothic": {
-		"可补充 estate_curse（宅邸诅咒）、family_sin（家族罪孽）与 madness_marker（理智崩解的征兆）。",
-		"Optionally add estate_curse, family_sin and madness_marker (signs of unraveling sanity).",
-	},
-	"scifi:time_travel": {
-		"可补充 temporal_anchor_device（时间锚定装置）、paradox_exposure（已触发的悖论）与 fixed_point_obsession（执念中的固定时间点）。",
-		"Optionally add temporal_anchor_device, paradox_exposure and fixed_point_obsession.",
-	},
-	"scifi:cli_fi": {
-		"可补充 water_rights_portfolio（水权资产）、drought_year_count（经历的旱灾年数）与 dam_or_aquifer_tie（与水坝/含水层的关联）。",
-		"Optionally add water_rights_portfolio, drought_year_count and dam_or_aquifer_tie.",
-	},
-	"scifi:afrofuturism": {
-		"可补充 ancestral_technique（祖传技术/技艺）、nation_or_clan（所属民族或氏族）与 diaspora_connection（与流散故土的联系）。",
-		"Optionally add ancestral_technique, nation_or_clan and diaspora_connection.",
-	},
-	"scifi:hard": {
-		"可补充 physics_constraint_role（受物理约束的职能）、life_support_dependency（生命维持依赖度）与 experiment_stakes（实验赌注）。",
-		"Optionally add physics_constraint_role, life_support_dependency and experiment_stakes.",
-	},
-	"mystery:police_procedural": {
-		"可补充 case_file_role（案件分工）、partner_history（搭档渊源）与 chain_of_command_friction（与上级的摩擦）。",
-		"Optionally add case_file_role, partner_history and chain_of_command_friction.",
-	},
-	"literary": {
-		"可补充 wound_or_obsession（旧伤或执念）、self_deception（自我欺骗）与 what_they_wont_say（绝不肯说出口的事）。",
-		"Optionally add wound_or_obsession, self_deception and what_they_wont_say.",
-	},
-	"romance:romcom": {
-		"可补充 meet_cute_story（相遇糗事）、embarrassment_superpower（社死体质）与 blind_spot_about_themselves（对自己感情的盲区）。",
-		"Optionally add meet_cute_story, embarrassment_superpower and blind_spot_about_themselves.",
-	},
+	"graphic_novel": "Optionally add visual_motif (recurring symbol/color), panel_voice_note (narration voice) and signature_prop.",
+	"superhero": "Optionally add power_limitation (cost/weakness), public_identity_layer and rogues_gallery_ties (archenemy history).",
+	"scifi:superhero": "Optionally add power_cost_or_limitation, collateral_damage_debt and public_opinion_metronome.",
+	"scifi:steampunk": "Optionally add gearwork_gadget, guild_apprenticeship and airship_or_factory_tie.",
+	"horror:dark_academia": "Optionally add secret_society_membership, advisor_dependence and transcript_scandal.",
+	"adventure:swashbuckler": "Optionally add dueling_record, corsair_letter_or_brand and crew_loyalty.",
+	"adventure:nautical": "Optionally add ship_station_duty, seasickness_or_scars and mutiny_stance.",
+	"adventure:picaresque": "Optionally add grift_of_the_week (current con), patron_or_pursuer and disguise_alias.",
+	"horror:gothic": "Optionally add estate_curse, family_sin and madness_marker (signs of unraveling sanity).",
+	"scifi:time_travel": "Optionally add temporal_anchor_device, paradox_exposure and fixed_point_obsession.",
+	"scifi:cli_fi": "Optionally add water_rights_portfolio, drought_year_count and dam_or_aquifer_tie.",
+	"scifi:afrofuturism": "Optionally add ancestral_technique, nation_or_clan and diaspora_connection.",
+	"scifi:hard": "Optionally add physics_constraint_role, life_support_dependency and experiment_stakes.",
+	"mystery:police_procedural": "Optionally add case_file_role, partner_history and chain_of_command_friction.",
+	"literary": "Optionally add wound_or_obsession, self_deception and what_they_wont_say.",
+	"romance:romcom": "Optionally add meet_cute_story, embarrassment_superpower and blind_spot_about_themselves.",
 }
 
-// GenreCharacterExtraFields returns the extra JSON keys and a bilingual
-// description ("zh", "en") for the given genre key. Empty genreKey (no match)
+// GenreCharacterExtraFields returns the extra JSON keys and an English
+// description for the given genre key. Empty genreKey (no match)
 // yields no extras — behavior identical to before this feature existed.
-func GenreCharacterExtraFields(genreKey string, zh bool) (keys []string, desc string) {
+func GenreCharacterExtraFields(genreKey string) (keys []string, desc string) {
 	keys = genreCharacterExtraFields[genreKey]
 	descKey := genreKey
 	if len(keys) == 0 {
@@ -317,11 +203,7 @@ func GenreCharacterExtraFields(genreKey string, zh bool) (keys []string, desc st
 			return nil, ""
 		}
 	}
-	pair := genreCharacterExtraDesc[descKey]
-	if zh {
-		return keys, pair[0]
-	}
-	return keys, pair[1]
+	return keys, genreCharacterExtraDesc[descKey]
 }
 
 // SubgenreCharacterExtraFields returns character extra fields suggested by the
@@ -520,8 +402,20 @@ func buildAnimeModifierPresets() {
 		}
 		GenreConflictScales[key] = conflicts
 		GenreProtagonistTypes[key] = protags
-		GenreSpecificSettings[key] = settings
+		GenreSpecificSettings[key] = ensureTrailingOther(settings)
 	}
+}
+
+// ensureTrailingOther guarantees the round-5 invariant that every preset list
+// ends with the "other" escape hatch. The raw preset tables already place
+// "other" last, but later passes (buildSubgenreLabelPresets,
+// enforceSingleParentSettingTokens) can drop it when the sentinel token is
+// treated as a duplicate owned by another genre key — this restores it.
+func ensureTrailingOther(list []string) []string {
+	if len(list) == 0 || list[len(list)-1] != "other" {
+		list = append(list, "other")
+	}
+	return list
 }
 
 // dramaSubgenreKeys lists the Drama parent-genre subgenres that need dedicated
@@ -659,7 +553,7 @@ func buildDramaSubgenrePresets() {
 		}
 		GenreConflictScales[key] = conflicts
 		GenreProtagonistTypes[key] = protags
-		GenreSpecificSettings[key] = settings
+		GenreSpecificSettings[key] = ensureTrailingOther(settings)
 	}
 }
 
@@ -715,7 +609,7 @@ var subgenreLabelParents = map[string][]string{
 	"Nautical":               {"adventure"},
 	"Picaresque":             {"adventure"},
 	"Rom-Com":                {"romance"},
-	"Cozy":                   {"mystery"},
+	"Cozy":                   {"mystery_thriller"},
 	"Urban Fantasy":          {"fantasy"},
 	"Magical Realism":        {"fantasy"},
 	"Progression Fantasy":    {"fantasy"},
@@ -788,7 +682,7 @@ var subgenreLabelParents = map[string][]string{
 	"Survival":               {"adventure"},
 	"Exploration":            {"adventure"},
 	"Disaster":               {"adventure"},
-	"War Epic":               {"war"},
+	"War Epic":               {"military"},
 	"Sea Adventure":          {"adventure"},
 	"Treasure Hunt":          {"adventure"},
 	"Jungle Expedition":      {"adventure"},
@@ -841,7 +735,15 @@ func buildSubgenreLabelPresets() {
 				}
 			}
 			if !found {
-				GenreSpecificSettings[parent] = append(list, token)
+				// Keep the trailing "other" escape hatch last (round-5 invariant).
+				if len(list) > 0 && list[len(list)-1] == "other" {
+					merged := make([]string, 0, len(list)+1)
+					merged = append(merged, list[:len(list)-1]...)
+					merged = append(merged, token, "other")
+					GenreSpecificSettings[parent] = merged
+				} else {
+					GenreSpecificSettings[parent] = append(list, token)
+				}
 			}
 		}
 	}
@@ -952,6 +854,12 @@ func buildCanonicalSubgenreParents() {
 		if p == "mystery" || p == "thriller" {
 			return "mystery_thriller"
 		}
+		// The backend preset bucket "military" (war stories) is not one of the
+		// frontend GENRES parent keys; its canonical parent is Drama, which owns
+		// "War Drama" and the other conflict-driven war subgenres.
+		if p == "military" || p == "war" {
+			return "drama"
+		}
 		return p
 	}
 	for label, parents := range subgenreLabelParents {
@@ -1005,12 +913,12 @@ func CanonicalParentForSubgenre(s string) string {
 // parent-genre map (lowercase display labels and their snake_case variants).
 // Shipped to the frontend via /api/novel-params -> subgenre_parents.
 func CanonicalSubgenreParents() map[string]string {
-out := make(map[string]string, len(canonicalSubgenreParents)*2)
-for lc, parent := range canonicalSubgenreParents {
-out[lc] = parent
-out[normalizeGenreKeyString(lc)] = parent
-}
-return out
+	out := make(map[string]string, len(canonicalSubgenreParents)*2)
+	for lc, parent := range canonicalSubgenreParents {
+		out[lc] = parent
+		out[normalizeGenreKeyString(lc)] = parent
+	}
+	return out
 }
 
 func normalizeGenreKeyString(s string) string {
@@ -1076,7 +984,7 @@ func enforceSingleParentSettingTokens() {
 			}
 			// else: foreign duplicate of a token owned by another genre — drop it.
 		}
-		GenreSpecificSettings[k] = cleaned
+		GenreSpecificSettings[k] = ensureTrailingOther(cleaned)
 	}
 }
 
@@ -1093,27 +1001,27 @@ func containsString(list []string, s string) bool {
 // keywords matched against Type+Subgenre text (any language). Order matters
 // only within a key; keys are checked longest-first by MatchAnimeModifierKey.
 var AnimeModifierMatchWords = map[string][]string{
-	"shounen_generic":    {"shonen", "shounen", "少年", "소년"},
-	"isekai:villainess":  {"villainess", "恶毒女配", "悪役令嬢", "빌런"},
-	"isekai:otome":       {"otome", "乙女", "オトメ", "레디메이드"},
+	"shounen_generic":    {"shonen", "shounen", "소년"},
+	"isekai:villainess":  {"villainess", "빌런"},
+	"isekai:otome":       {"otome", "オトメ", "레디메이드"},
 	"manhwa_system":      {"solo leveling", "hunter", "헌터", "시스템", "system flow manhwa"},
-	"regression_rebirth": {"regression", "rebirth flow", "환생", "重生流", "回档"},
-	"mahou_shoujo":       {"magical girl", "mahou shoujo", "magic girl", "魔法少女", "마법소녀"},
-	"mahou_shonen":       {"mahou shounen", "magic boy", "魔法少年"},
-	"battle_shonen":      {"battle shonen", "battle shounen", "战斗少年", "热血格斗"},
-	"slice_of_life":      {"slice of life", "slice-of-life", "日常系", "일상물"},
-	"iyashikei":          {"iyashikei", "healing story", "治愈系动漫", "힐링물"},
-	"school_life":        {"school life", "校园恋爱", "学園", "학교생활"},
-	"tower_climbing":     {"tower climb", "tower of god", "登塔", "타워"},
-	"battle_royale":      {"battle royale", "大逃杀", "배틀로얄"},
-	"dungeon":            {"dungeon", "던전", "地牢", "副本"},
+	"regression_rebirth": {"regression", "rebirth flow", "환생"},
+	"mahou_shoujo":       {"magical girl", "mahou shoujo", "magic girl", "마법소녀"},
+	"mahou_shonen":       {"mahou shounen", "magic boy"},
+	"battle_shonen":      {"battle shonen", "battle shounen"},
+	"slice_of_life":      {"slice of life", "slice-of-life", "일상물"},
+	"iyashikei":          {"iyashikei", "healing story", "힐링물"},
+	"school_life":        {"school life", "학교생활"},
+	"tower_climbing":     {"tower climb", "tower of god", "타워"},
+	"battle_royale":      {"battle royale", "배틀로얄"},
+	"dungeon":            {"dungeon", "던전"},
 	"litrpg_dedupe":      {}, // placeholder never used
-	"mecha":              {"mecha", "gundam", "evangelion", "机甲", "robot anime", "MS"},
-	"harem":              {"harem", "后宫", "ハーレム", "하렘"},
+	"mecha":              {"mecha", "gundam", "evangelion", "robot anime", "MS"},
+	"harem":              {"harem", "ハーレム", "하렘"},
 	"ecchi":              {"ecchi", "service", "エッチ"},
-	"spokon":             {"spokon", "sports anime", "运动番", "スポ根", "体育会"},
-	"revenge":            {"revenge", "复仇", "復讐", "복수"},
-	"isekai":             {"isekai", "異世界", "transmigration", "other world", "穿越异世", "이세계"},
+	"spokon":             {"spokon", "sports anime"},
+	"revenge":            {"revenge", "복수"},
+	"isekai":             {"isekai", "transmigration", "other world", "이세계"},
 }
 
 // MatchAnimeModifierKey returns the modifier preset key whose keywords appear

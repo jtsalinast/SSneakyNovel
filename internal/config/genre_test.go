@@ -4,24 +4,24 @@ import "testing"
 
 func TestMatchGenreKeyNewGens(t *testing.T) {
 	cases := map[string]string{
-		"LitRPG":            "litrpg",
-		"系统流网文":             "litrpg",
-		"都市异能":              "urban",
-		"军旅文":               "military",
-		"末世废土":              "postapo",
-		"盗墓探险":              "adventure",
-		"武侠":                "wuxia",
-		"仙侠修真":              "xianxia",
-		"cozy mystery":      "cozy",
-		"Heist thriller":    "heist",
-		"Cyberpunk 2077":    "cyberpunk",
-		"solarpunk garden":  "solarpunk",
-		"Romantasy fae":     "romantasy",
-		"Dystopian regime":  "dystopian",
-		"Space opera fleet": "space_opera",
-		"克苏鲁恐怖":             "horror",
-		"fantasy dragons":   "fantasy",
-		"科幻":                "scifi",
+		"LitRPG":               "litrpg",
+		"system flow webnovel": "litrpg",
+		"urban":                "urban",
+		"war novel":            "military",
+		"zombie apocalypse":    "postapo",
+		"tomb raiding":         "adventure",
+		"wuxia":                "wuxia",
+		"xianxia":              "xianxia",
+		"cozy mystery":         "cozy",
+		"Heist thriller":       "heist",
+		"Cyberpunk 2077":       "cyberpunk",
+		"solarpunk garden":     "solarpunk",
+		"Romantasy fae":        "romantasy",
+		"Dystopian regime":     "dystopian",
+		"Space opera fleet":    "space_opera",
+		"cosmic horror":        "horror",
+		"fantasy dragons":      "fantasy",
+		"science fiction":      "scifi",
 		// round 4: demoted subgenres now resolve to composite parent:subgenre keys
 		"steampunk airships":          "scifi:steampunk",
 		"superhero legacy":            "scifi:superhero",
@@ -36,17 +36,17 @@ func TestMatchGenreKeyNewGens(t *testing.T) {
 		"hard sci-fi generation ship": "scifi:hard",
 		"graphic novel memoir":        "graphic_novel",
 		"rom-com office wedding":      "romance:romcom",
-		"爱情喜剧":                        "romance:romcom",
+		"romantic comedy":             "romance:romcom",
 		"literary fiction grief":      "literary",
-		"存在主义小说":                      "literary",
+		"existential novel":           "literary",
 		"police procedural precinct":  "mystery:police_procedural",
-		"刑侦小组":                        "mystery:police_procedural",
+		"detective squad":             "mystery:police_procedural",
 		// audience words no longer map to genre keys (moved to target_audience)
 		"middle grade adventure": "adventure",
 		"young adult romance":    "romance",
-		"青春校园":                   "",
-		"海盗大航海":                  "adventure:swashbuckler",
-		"穿越时空的爱恋":                "scifi:time_travel",
+		"campus youth":           "",
+		"corsair high seas":      "adventure:swashbuckler",
+		"time travel love story": "scifi:time_travel",
 		"random poetry":          "",
 	}
 	for in, want := range cases {
@@ -57,7 +57,9 @@ func TestMatchGenreKeyNewGens(t *testing.T) {
 }
 
 func TestEveryGenreKeyHasPresets(t *testing.T) {
-	keys := []string{"fantasy", "scifi", "mystery", "romance", "thriller", "horror", "historical", "western", "litrpg", "urban", "military", "postapo", "adventure", "wuxia", "xianxia", "cozy", "heist", "cyberpunk", "solarpunk", "romantasy", "dystopian", "space_opera", "graphic_novel",
+	// NOTE: the former standalone "thriller" parent was merged into "mystery"
+	// (round 15), so it no longer needs its own preset lists.
+	keys := []string{"fantasy", "scifi", "mystery", "romance", "horror", "historical", "western", "litrpg", "urban", "military", "postapo", "adventure", "wuxia", "xianxia", "cozy", "heist", "cyberpunk", "solarpunk", "romantasy", "dystopian", "space_opera", "graphic_novel",
 		// demoted subgenres: composite parent:subgenre keys
 		"scifi:steampunk", "scifi:superhero", "scifi:time_travel", "scifi:cli_fi", "scifi:afrofuturism", "scifi:hard",
 		"horror:dark_academia", "horror:gothic",
@@ -100,9 +102,6 @@ func TestSubgenreExtraFieldsKeysHaveDescCoverage(t *testing.T) {
 
 func TestAudienceGuidance(t *testing.T) {
 	for _, k := range AudienceKeys {
-		if AudienceGuidance(k, "zh") == "" {
-			t.Errorf("no zh guidance for %s", k)
-		}
 		if AudienceGuidance(k, "en") == "" {
 			t.Errorf("no en guidance for %s", k)
 		}
@@ -113,11 +112,11 @@ func TestAudienceGuidance(t *testing.T) {
 }
 
 func TestCharacterFieldsFallbackToParent(t *testing.T) {
-	keys, _ := GenreCharacterExtraFields("scifi:cyberpunk", false)
+	keys, _ := GenreCharacterExtraFields("scifi:cyberpunk")
 	if len(keys) == 0 {
 		t.Fatalf("expected fallback to scifi fields for unknown composite key")
 	}
-	if keys2, _ := GenreCharacterExtraFields("scifi:steampunk", false); len(keys2) == 0 {
+	if keys2, _ := GenreCharacterExtraFields("scifi:steampunk"); len(keys2) == 0 {
 		t.Fatalf("expected own entry for scifi:steampunk")
 	}
 }

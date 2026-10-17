@@ -51,7 +51,7 @@ func settingExcerpt(entity map[string]any, query string, budget int) (string, bo
 		}
 		selected := packKnowledge(docs, rankKnowledge(docs, query), fieldBudget)
 		sort.Ints(selected) // Preserve source order inside a field.
-		parts := []string{"[EXCERPT / 节选；省略部分未提供]"}
+		parts := []string{"[EXCERPT / selected sentences only; omitted parts not provided]"}
 		for _, i := range selected {
 			parts = append(parts, docs[i].text)
 		}

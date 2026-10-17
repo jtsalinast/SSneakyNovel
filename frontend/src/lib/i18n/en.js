@@ -1,4 +1,4 @@
-// English UI strings. Mirror of zh.js. Missing keys fall back to zh.
+// English UI strings (single locale; the Chinese catalog was removed).
 export default {
  "task.knowledge_sync": "Syncing facts and settings",
  "task.planning_review": "Planning review",
@@ -170,7 +170,6 @@ export default {
   'common.unknown': 'Unknown',
   'common.yes': 'Yes',
   'common.no': 'No',
-  'common.lang.zh': '中文',
   'common.lang.en': 'English',
   'common.requestFailed': 'Request failed',
   'common.refresh': 'Refresh',
@@ -736,7 +735,7 @@ export default {
   'outline.btn.revise': 'Submit feedback',
   'outline.btn.deleteOutline': 'Delete outline',
   'outline.import.title': 'Import existing content',
-  'outline.import.hint': 'Paste a published novel (common formats like "Chapter N", "第X章", prologue/epilogue supported; heading-less text is chunked by size). The split preview is local and instant; after confirming, AI generates outline + recap per chapter — stop and resume anytime.',
+  'outline.import.hint': 'Paste a published novel (common formats like "Chapter N" ("第X章"-style headings), prologue/epilogue supported; heading-less text is chunked by size). The split preview is local and instant; after confirming, AI generates outline + recap per chapter — stop and resume anytime.',
   'outline.import.placeholder': 'Paste the full novel text here...',
   'outline.import.preview': 'Preview local split',
   'outline.import.previewTitle': 'Split into {n} chapter(s)',

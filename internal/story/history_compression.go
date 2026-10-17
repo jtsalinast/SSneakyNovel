@@ -222,7 +222,7 @@ func formatCheckpointHistory(state *Progress, beforeChapter, limit int, lang str
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			parts = append(parts, fmt.Sprintf("[Compressed history, chapters %d-%d] %s", cp.StartChapter, cp.EndChapter, cp.Summary))
 		} else {
-			parts = append(parts, fmt.Sprintf("【压缩历史：第%d-%d章】%s", cp.StartChapter, cp.EndChapter, cp.Summary))
+			parts = append(parts, fmt.Sprintf("[press: #%d-%dchapter]%s", cp.StartChapter, cp.EndChapter, cp.Summary))
 		}
 	}
 	return boundedHistoryFallback(parts, limit)

@@ -4,7 +4,7 @@
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
   import { onMount, onDestroy } from 'svelte';
-  import { t, uiLocale, setLocale } from './lib/i18n/index.js';
+  import { t, uiLocale } from './lib/i18n/index.js';
   import TaskTokenBadge from './components/TaskTokenBadge.svelte';
   import Projects from './pages/Projects.svelte';
   import Config from './pages/Config.svelte';
@@ -49,7 +49,6 @@
         initializing = false;
         if (cur.language) {
           projectLanguage.set(cur.language);
-          setLocale(cur.language);
         }
         if ($taskRunning) navigate('writing');
         await Promise.allSettled([
@@ -168,17 +167,13 @@
     config.set(null);
   }
 
-  function toggleLocale() {
-    setLocale($uiLocale === 'en' ? 'zh' : 'en');
-  }
-
   function openNavigation() {
     navigationOpen = true;
-    requestAnimationFrame(() => document.querySelector('#workspace-navigation button')?.focus());
+    requestAnimationFrame(() => document.querySelector('#LateralBar button')?.focus());
   }
   function openAssistant() {
     assistantOpen = true;
-    requestAnimationFrame(() => document.querySelector('#writing-assistant button')?.focus());
+    requestAnimationFrame(() => document.querySelector('#AgentChat button')?.focus());
   }
   function closeNavigation() {
     if (!navigationOpen) return;
@@ -197,7 +192,7 @@
   function handleShellKeydown(event) {
     if (event.key === 'Escape') { closeNavigation(); closeAssistant(); return; }
     if (event.key !== 'Tab') return;
-    const panel = document.getElementById(navigationOpen ? 'workspace-navigation' : assistantOpen ? 'writing-assistant' : '');
+    const panel = document.getElementById(navigationOpen ? 'LateralBar' : assistantOpen ? 'AgentChat' : '');
     if (!panel) return;
     const controls = [...panel.querySelectorAll('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')];
     if (!controls.length) return;
@@ -211,9 +206,9 @@
 
 <div class="app-shell flex flex-col bg-base-300 text-base-content overflow-hidden">
   <!-- Header -->
-  <header class="app-header navbar bg-base-200 border-b border-base-content/10 px-3 min-h-14 shrink-0 gap-2">
+  <header id="TopBar" class="app-header navbar bg-base-200 border-b border-base-content/10 px-3 min-h-14 shrink-0 gap-2">
     {#if $currentProject}
-      <button bind:this={navigationButton} class="btn btn-ghost btn-sm lg:hidden" on:click={openNavigation} aria-expanded={navigationOpen} aria-controls="workspace-navigation" aria-label={$t('app.navigation.open')}>{$t('app.navigation')}</button>
+      <button bind:this={navigationButton} class="btn btn-ghost btn-sm lg:hidden" on:click={openNavigation} aria-expanded={navigationOpen} aria-controls="LateralBar" aria-label={$t('app.navigation.open')}>{$t('app.navigation')}</button>
     {/if}
     <span class="app-brand text-base font-semibold whitespace-nowrap">{$t('app.title')}</span>
     {#if appVersion}
@@ -226,7 +221,7 @@
     {/if}
     {#if $currentProject}
       <span class="app-project-title min-w-0 text-sm font-medium leading-snug">{$config?.story?.title?.trim() || $t('app.untitled')}</span>
-      <span class="badge badge-sm badge-outline uppercase max-sm:hidden" title={$projectLanguage === 'en' ? 'English' : '中文'}>
+      <span class="badge badge-sm badge-outline uppercase max-sm:hidden" title="English">
         {$projectLanguage === 'en' ? 'EN' : 'ZH'}
       </span>
       <button
@@ -250,25 +245,18 @@
       {/if}
     {/if}
     <span class="flex-1"></span>
-    <button
-      class="btn btn-ghost btn-xs gap-1"
-      on:click={toggleLocale}
-      title={$t('app.uiLang.label')}
-    >
-      {$uiLocale === 'en' ? $t('app.uiLang.en') : $t('app.uiLang.zh')}
-    </button>
     {#if $currentProject}
-      <button bind:this={assistantButton} class="btn btn-outline btn-sm xl:hidden" on:click={openAssistant} aria-expanded={assistantOpen} aria-controls="writing-assistant">{$t('app.assistant')}</button>
+      <button bind:this={assistantButton} class="btn btn-outline btn-sm xl:hidden" on:click={openAssistant} aria-expanded={assistantOpen} aria-controls="AgentChat">{$t('app.assistant')}</button>
     {/if}
   </header>
 
   {#if initializing || ($taskRunning && !$currentProject)}
-    <main class="flex-1 flex items-center justify-center" aria-busy="true">
+    <main id="AppLoadingScreen" class="flex-1 flex items-center justify-center" aria-busy="true">
       <span class="loading loading-spinner loading-lg"></span>
     </main>
   {:else if !$currentProject}
     <!-- Project selection -->
-    <main class="project-picker flex-1 overflow-y-auto p-4 sm:p-8">
+    <main id="ProjectPickerMain" class="project-picker flex-1 overflow-y-auto p-4 sm:p-8">
       <Projects />
     </main>
   {:else}
@@ -277,7 +265,7 @@
         <button class="workspace-scrim" aria-label={$t('common.close')} on:click={() => { if (navigationOpen) closeNavigation(); if (assistantOpen) closeAssistant(); }}></button>
       {/if}
       <!-- Left: vertical nav -->
-      <nav id="workspace-navigation" class:drawer-open={navigationOpen} class="app-navigation flex flex-col w-48 shrink-0 bg-base-200 border-r border-base-content/10 py-4 px-3 gap-1" aria-label={$t('app.navigation')}>
+      <nav id="LateralBar" class:drawer-open={navigationOpen} class="app-navigation flex flex-col w-48 shrink-0 bg-base-200 border-r border-base-content/10 py-4 px-3 gap-1" aria-label={$t('app.navigation')}>
         <button class="btn btn-ghost btn-sm mb-2 lg:hidden" on:click={closeNavigation}>{$t('common.close')}</button>
         {#each [
           ['config', 'nav.config'],
@@ -303,7 +291,7 @@
       </nav>
 
       <!-- Center: page content -->
-      <main class="workspace-main @container flex-[2] min-w-0 overflow-y-auto p-3 sm:p-5 xl:border-r xl:border-base-content/10">
+      <main id="WorkspaceMain" class="workspace-main @container flex-[2] min-w-0 overflow-y-auto p-3 sm:p-5 xl:border-r xl:border-base-content/10">
         {#if $currentPage === 'config'}
           <Config tab="api" {sendToChat} />
         {:else if $currentPage === 'novel-params'}
@@ -328,7 +316,7 @@
       </main>
 
       <!-- Right: Chat Panel -->
-      <aside id="writing-assistant" class:drawer-open={assistantOpen} class="assistant-panel flex-1 min-w-72 max-w-md bg-base-200 overflow-hidden" aria-label={$t('app.assistant')}>
+      <aside id="AgentChat" class:drawer-open={assistantOpen} class="assistant-panel flex-1 min-w-72 max-w-md bg-base-200 overflow-hidden" aria-label={$t('app.assistant')}>
         <button class="btn btn-ghost btn-sm m-2 mb-0 xl:hidden" on:click={closeAssistant}>{$t('common.close')}</button>
         <ChatPanel bind:this={chatPanel} contextPage={$currentPage} />
       </aside>
@@ -336,7 +324,7 @@
   {/if}
 
   <!-- Toasts -->
-  <div class="fixed top-5 right-5 z-50 flex flex-col gap-2">
+  <div id="ToastNotifications" class="fixed top-5 right-5 z-50 flex flex-col gap-2">
     {#each $toastStore as t (t.id)}
       <div class="alert alert-sm {t.type === 'success' ? 'alert-success' : t.type === 'error' ? 'alert-error' : 'alert-info'} toast-enter  max-w-sm">
         <span>{t.msg}</span>

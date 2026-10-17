@@ -101,12 +101,12 @@
   $: pct = total > 0 ? Math.round(accepted / total * 100) : 0;
   $: currentIdx = p?.current_chapter_index ?? 0;
 
-  // 默认选中当前章节
+  // Select current chapter by default
   $: if (inWriting && ($selectedChapter < 0 || $selectedChapter >= chapters.length)) {
     selectedChapter.set(Math.min(currentIdx, chapters.length - 1));
   }
 
-  // 自动确认模式下，自动跟随正在生成的章节
+  // In auto-confirm mode, follow the chapter being generated
   $: if ($autoConfirm && $streamingChapterIdx >= 0 && $streamingChapterIdx < chapters.length && $streamingChapterIdx !== $selectedChapter) {
     selectedChapter.set($streamingChapterIdx);
   }
@@ -115,7 +115,7 @@
   $: isCurrent = ch && currentIdx === $selectedChapter;
   $: isStreamingThis = $streamingChapterIdx === $selectedChapter && $streamingContent;
 
-  // /api/progress 不携带正文，选中章节的正文按需拉取，content_rev 变化时刷新
+  // /api/progress does not carry prose; fetch selected chapter content on demand，content_rev refresh on change
   let chapterContent = '';
   let chapterBlocks = [];
   let loadedNum = -1;
@@ -141,12 +141,12 @@
   }
   $: hasContent = !!(ch?.content_rev);
 
-  // —— Block 编辑 ——
-  let editingBlockId = null;   // 正在内联编辑的 block
+  // —— Block Block editing ——
+  let editingBlockId = null;   // block being edited inline
   let editingText = '';
-  let revisingBlockId = null;  // 正在填写 AI 修订意见的 block
+  let revisingBlockId = null;  // block whose AI revision feedback is being typed
   let blockFeedback = '';
-  let insertAfterId = null;    // 正在其后插入新 block 的 id（0 = 开头）
+  let insertAfterId = null;    // id of the block after which a new block is inserted (0 = start)
   let insertText = '';
 
   function startBlockEdit(b) {
@@ -224,7 +224,7 @@
     } catch (e) { addToast(e.message, 'error'); }
   }
 
-  // 流式期间 $streamingContent 只含尾部窗口（性能保护），全文在生成结束后按需拉取
+  // During streaming $streamingContent only holds the tail window (perf guard); full text is fetched after generation ends
   $: displayContent = isStreamingThis ? $streamingContent : chapterContent;
   $: chapterWordCount = ch?.word_count || (chapterContent ? countProseUnits(chapterContent) : 0);
   $: showTaskTokens = $taskRunning && isCurrent;
@@ -284,7 +284,7 @@
   let reviseTextareaEl;
   let hasPolishSkills = false;
 
-  // 框选原文后的浮动「引用」按钮：null 表示隐藏
+  // Floating "quote" button after selecting source text; null means hidden
   let quotePopover = null;
 
   function checkContentSelection() {
@@ -311,7 +311,7 @@
     if (!quotePopover) return;
     const text = quotePopover.text;
     const quoteLine = `> ${text}`;
-    // 若用户已在修改意见里写过内容，先确保引用行与原内容之间有空行分隔
+    // If the user already wrote feedback, ensure a blank line separates the quote from it
     const current = reviseFeedback;
     let insertion;
     if (current === '') {
@@ -321,7 +321,7 @@
     } else {
       insertion = '\n' + quoteLine + '\n';
     }
-    // 优先在 textarea 光标位置插入；否则追加到末尾
+    // Prefer inserting at the textarea cursor; otherwise append at the end
     const ta = reviseTextareaEl;
     if (ta && document.activeElement === ta && ta.selectionStart != null) {
       const start = ta.selectionStart;
@@ -340,13 +340,13 @@
     }
     showRevise = true;
     addToast($t('writing.toasts.quoteInserted', { n: text.length }), 'success');
-    // 清空选区并隐藏按钮
+    // Clear the selection and hide the button
     const sel = window.getSelection();
     if (sel) sel.removeAllRanges();
     hideQuotePopover();
   }
 
-  // 流式输出时自动滚动到底部：合并到 rAF，每帧最多一次，避免高频强制重排
+  // Auto-scroll to bottom while streaming: coalesced into rAF, at most once per frame, to avoid forced reflows
   let scrollPending = false;
   function scheduleScroll() {
     if (scrollPending) return;
@@ -382,7 +382,7 @@
       await api('POST', '/api/chapter/confirm');
       progress.set(await api('GET', '/api/progress'));
       addToast($t('writing.toasts.confirmed', { num: ch?.num }), 'success');
-      // 跳到下一章
+      // Jump to next chapter
       const next = await api('GET', '/api/progress');
       if (next.current_chapter_index < (next.chapters || []).length) {
         selectedChapter.set(next.current_chapter_index);
@@ -411,10 +411,10 @@
     const body = { feedback: fb, worldview_ids: selectedSettings };
     try {
       if (!selectedSettings.length && isCurrent && ch.status === 'review') {
-        // 当前审核中章节：完整修订流程
+        // Current under-review chapter: full revision flow
         await api('POST', '/api/chapter/revise', body, factHeaders(confirmed === true));
       } else {
-        // 其他章节（含已确认）：定向最小化修订，不影响其他章节
+        // Other chapters (incl. confirmed): targeted minimal revision without touching other chapters
         await api('POST', '/api/chapter/revise/' + ch.num, body, factHeaders(confirmed === true));
       }
       addToast($t('writing.toasts.reviseStarted', { num: ch.num }), 'info');
@@ -489,7 +489,7 @@
 </script>
 
 {#if !inWriting}
-  <div class="text-center py-16 text-base-content/65">
+  <div id="WritingNotReadyState" class="text-center py-16 text-base-content/65">
     <div class="text-5xl mb-4"></div>
     <p class="text-base mb-1">{$t('writing.notReady.title')}</p>
     <p class="text-sm text-base-content/65 mb-6">{$t('writing.notReady.hint')}</p>
@@ -501,8 +501,8 @@
       <p class="alert alert-info">{$t('ending.completeHint')}</p>
     {/if}
 
-    <!-- 进度 -->
-    <div class="card bg-base-200">
+    <!-- Progress -->
+    <div id="CardSection_BookProgress" class="card bg-base-200">
       <div class="card-body p-4 gap-2">
         <div class="flex items-center gap-3">
           <h2 class="card-title text-base flex-1">{$t('writing.progress.title')}</h2>
@@ -527,7 +527,7 @@
     </div>
 
     {#if writingConflict}
-      <div class="card bg-error/10 border border-error/30 ">
+      <div id="CardSection_WritingConflict" class="card bg-error/10 border border-error/30 ">
         <div class="card-body p-4 gap-3">
           <h3 class="font-semibold text-error">{$t('writing.conflict.title')}</h3>
           <p class="text-sm">{$t('writing.conflict.summary')}：{writingConflict.summary}</p>
@@ -558,7 +558,7 @@
         </div>
       </div>
     {:else if orphanWriting}
-      <div class="card bg-warning/10 border border-warning/30 ">
+      <div id="CardSection_OrphanChapter" class="card bg-warning/10 border border-warning/30 ">
         <div class="card-body p-4 gap-3">
           <h3 class="font-semibold text-warning">{$t('writing.orphan.title')}</h3>
           <p class="text-sm text-base-content/70">{$t('writing.orphan.hint')}</p>
@@ -573,7 +573,7 @@
     {/if}
 
     {#if foreshadows.length > 0}
-      <div class="card bg-base-200">
+      <div id="CardSection_ForeshadowSummary" class="card bg-base-200">
         <div class="card-body p-4 gap-2">
           <div class="flex items-center justify-between gap-2">
             <h3 class="font-medium text-sm">{$t('writing.fs.title')}</h3>
@@ -597,7 +597,7 @@
         </div>
       </div>
     {:else}
-      <div class="card bg-base-200">
+      <div id="CardSection_ForeshadowSetup" class="card bg-base-200">
         <div class="card-body p-4 flex items-center justify-between gap-2">
           <p class="text-sm text-base-content/65">{$t('writing.fs.none')}</p>
           <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.setup')}</button>
@@ -605,10 +605,10 @@
       </div>
     {/if}
 
-    <!-- 章节区 -->
-    <div class="writing-grid grid grid-cols-[345px_minmax(0,1fr)] gap-3" style="min-height:400px">
-      <!-- 章节列表 -->
-      <div class="card bg-base-200  overflow-y-auto max-h-[calc(100vh-280px)]">
+    <!-- Chapter area -->
+    <div id="WritingWorkspace" class="writing-grid grid grid-cols-[345px_minmax(0,1fr)] gap-3" style="min-height:400px">
+      <!-- Chapter list -->
+      <div id="ChapterSidebarList" class="card bg-base-200  overflow-y-auto max-h-[calc(100vh-280px)]">
         <ul class="menu menu-sm p-0 w-full">
           {#each chapters as c, i}
             <li>
@@ -625,10 +625,10 @@
         </ul>
       </div>
 
-      <!-- 内容区 -->
-      <div class="min-w-0">
+      <!-- Content area -->
+      <div id="ChapterContentArea" class="min-w-0">
         {#if ch}
-          <div class="card bg-base-200">
+          <div id="CardSection_ChapterReader" class="card bg-base-200">
             <div class="card-body p-4 gap-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch.num, title: ch.title })}</h2>
@@ -665,7 +665,7 @@
                   </div>
                 {/if}
                 <!-- svelte-ignore a11y-no-static-element-interactions -->
-                <div bind:this={contentEl} class="bg-base-300 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto"
+                <div id="ChapterProseViewer" bind:this={contentEl} class="bg-base-300 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto"
                      on:mouseup={checkContentSelection}
                      on:scroll={hideQuotePopover}>
                   {#if isStreamingThis}
@@ -730,8 +730,8 @@
                 </div>
               {/if}
 
-              <!-- 操作 -->
-              <div class="flex gap-2 flex-wrap items-center mt-1">
+              <!-- Actions -->
+              <div id="ChapterActionsBar" class="flex gap-2 flex-wrap items-center mt-1">
                 {#if ch.status === 'pending' && isCurrent}
                   <button class="btn btn-primary btn-sm" on:click={doGenerate} disabled={$taskRunning}>{$t('writing.btn.generate')}</button>
                 {/if}
@@ -754,9 +754,9 @@
               </div>
 
               {#if showRevise}
-                <div class="bg-base-300 rounded-lg p-3 space-y-2">
+                <div id="CardSection_ChapterRevise" class="bg-base-300 rounded-lg p-3 space-y-2">
                     {#if showKnowledge}
-                      <fieldset class="border border-base-content/20 rounded-lg p-3 space-y-3" disabled={$taskRunning || savingKnowledge}>
+                      <fieldset id="ChapterKnowledgePicker" class="border border-base-content/20 rounded-lg p-3 space-y-3" disabled={$taskRunning || savingKnowledge}>
                         <legend>{$t('writing.knowledge.title')}</legend>
                         <p class="text-sm">{$t('writing.knowledge.hint')}</p>
                         <label class="block text-sm">{$t('config.wv.name')}<input class="input input-sm w-full" bind:value={knowledgeName} /></label>

@@ -30,7 +30,7 @@
     return true;
   });
 
-  // 原文片段由后端在 /api/progress 中直接解析（正文不随 progress 下发）
+  // source snippets are parsed by the backend in /api/progress directly (prose is not delivered with progress progress)
   function extractSnippet(entry) {
     return entry?.snippet || '';
   }
@@ -38,7 +38,7 @@
   function formatEntryLine(e) {
     const snippet = extractSnippet(e);
     if (snippet) {
-      return `${e.content}（原文：「${snippet}」）`;
+      return `${e.content} (source: “${snippet}”)`;
     }
     return e.content;
   }
@@ -64,14 +64,14 @@
   }
 </script>
 
-<div class="space-y-4">
-  <div class="card bg-base-200">
+<div id="MemoryPage" class="space-y-4">
+  <div id="CardSection_MemoryOverview" class="card bg-base-200">
     <div class="card-body py-4 gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="card-title text-base">{$t('memory.title')}</h2>
         <div class="flex flex-wrap gap-2">
-          <button class="btn btn-outline btn-sm" on:click={refreshProgress}>{$t('common.refresh')}</button>
-          <button class="btn btn-outline btn-sm" disabled={entries.length === 0} on:click={copyAll}>
+          <button id="RefreshMemoryButton" class="btn btn-outline btn-sm" on:click={refreshProgress}>{$t('common.refresh')}</button>
+          <button id="CopyAllMemoryButton" class="btn btn-outline btn-sm" disabled={entries.length === 0} on:click={copyAll}>
             {$t('common.copy')}
           </button>
         </div>
@@ -91,19 +91,20 @@
   </div>
 
   {#if entries.length === 0}
-    <div class="card bg-base-200">
+    <div id="MemoryEmptyState" class="card bg-base-200">
       <div class="card-body py-10 text-center gap-2">
         <p class="font-medium text-base-content/70">{$t('memory.empty.title')}</p>
         <p class="text-sm text-base-content/65 max-w-lg mx-auto">{$t('memory.empty.hint')}</p>
       </div>
     </div>
   {:else}
-    <div class="card bg-base-200">
+    <div id="CardSection_MemoryEntries" class="card bg-base-200">
       <div class="card-body py-4 gap-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap gap-2">
             <!-- svelte-ignore a11y-no-redundant-roles -->
             <SmartSelect
+              id="MemoryCategoryFilter"
               classes="w-56"
               options={[
                 { value: 'all', label: $t('memory.filter.allCategories') },
@@ -124,7 +125,7 @@
           <p class="text-sm text-base-content/65 py-6 text-center">{$t('memory.filter.noMatch')}</p>
         {:else}
           <div class="overflow-x-auto">
-            <table class="table table-sm">
+            <table id="MemoryEntriesTable" class="table table-sm">
               <thead>
                 <tr>
                   <th>{$t('memory.col.id')}</th>
@@ -139,7 +140,7 @@
                   <tr>
                     <td class="font-mono text-xs">{e.id}</td>
                     <td class="whitespace-nowrap">
-                      <!-- DaisyUI 5 badge 固定高度且无 nowrap；窄列里中文会逐字换行成竖排 -->
+                      <!-- DaisyUI 5 badge fixed height with no nowrap；in narrow columns CJK text wraps per character into vertical stacks -->
                       <span class="badge badge-sm {categoryBadge[e.category] || 'badge-ghost'} whitespace-nowrap">
                         {$t('memory.category.' + (e.category || 'other'))}
                       </span>

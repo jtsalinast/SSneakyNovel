@@ -192,15 +192,15 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 		IdleTimeout:  120 * time.Second,
 	}
 
-	fmt.Printf(" [系统] AI 小说写手 Web UI 启动中...\n")
-	fmt.Printf(" [系统] 访问地址: http://localhost%s\n", port)
-	fmt.Printf(" [系统] 程序目录: %s\n", progDir)
-	fmt.Printf(" [系统] 项目目录: %s\n", filepath.Join(progDir, "storys"))
+	fmt.Printf(" [is] AI smallsaywritehand Web UI enablemovemiddle...\n")
+	fmt.Printf(" [is] ask : http://localhost%s\n", port)
+	fmt.Printf(" [is] order: %s\n", progDir)
+	fmt.Printf(" [is] item: %s\n", filepath.Join(progDir, "storys"))
 
 	go openBrowser(fmt.Sprintf("http://localhost%s", port))
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, " [错误] 服务器启动失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, " [] clothesdeviceenablemove: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -242,7 +242,7 @@ func (h *Handlers) GetProjects(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Project language comes from config.json; old projects default to zh.
-		lang := i18n.LangZH
+		lang := i18n.LangEN
 		if data, err := os.ReadFile(filepath.Join(projectDir, "config.json")); err == nil {
 			var probe struct {
 				Language string `json:"language"`

@@ -48,7 +48,7 @@ func batchAnswer(start, count int) string {
 }
 
 func TestFirstOutlineBatchFillsEmptyTitle(t *testing.T) {
-	cfg := config.DefaultConfigForLang("zh")
+	cfg := config.DefaultConfigForLang("en")
 	cfg.Prompts.ContinuationOutlineGeneration = "CUSTOM"
 	state := &Progress{}
 	api := batchAPI(t, func(prompt string) string {
@@ -80,7 +80,7 @@ func TestFirstOutlineBatchFillsEmptyTitle(t *testing.T) {
 }
 
 func TestOutlineBatchAppendReplaceAndRoundTrip(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		t.Run(lang, func(t *testing.T) {
 			cfg := config.DefaultConfigForLang(lang)
 			// Simulate a saved custom template with none of the new placeholders.
@@ -207,7 +207,7 @@ func TestOutlineBatchFailurePreservesState(t *testing.T) {
 }
 
 func TestBatchDefaultTemplatesUseCurrentInputs(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		t.Run(lang, func(t *testing.T) {
 			cfg := config.DefaultConfigForLang(lang)
 			cfg.Story.Title = "SAVED_TITLE"

@@ -28,10 +28,10 @@ func TestCalcChapterLengthRange(t *testing.T) {
 
 func TestChapterLengthInRange(t *testing.T) {
 	minLen, maxLen := calcChapterLengthRange(5000)
-	if !chapterLengthInRange(strings.Repeat("字", 5000), minLen, maxLen) {
+	if !chapterLengthInRange(strings.Repeat("word ", 5000), minLen, maxLen) {
 		t.Fatal("5000 prose units should be in range for 5000 target")
 	}
-	if chapterLengthInRange(strings.Repeat("字", 15000), minLen, maxLen) {
+	if chapterLengthInRange(strings.Repeat("word ", 15000), minLen, maxLen) {
 		t.Fatal("15000 prose units should be out of range for 5000 target")
 	}
 }
@@ -75,8 +75,8 @@ func TestMaybeUpdateBestDraft(t *testing.T) {
 	target := 5000
 	var best string
 	score := int(^uint(0) >> 1)
-	maybeUpdateBestDraft(&best, &score, strings.Repeat("字", 15000), minLen, maxLen, target)
-	maybeUpdateBestDraft(&best, &score, strings.Repeat("字", 6200), minLen, maxLen, target)
+	maybeUpdateBestDraft(&best, &score, strings.Repeat("word ", 15000), minLen, maxLen, target)
+	maybeUpdateBestDraft(&best, &score, strings.Repeat("word ", 6200), minLen, maxLen, target)
 	if prose.CountProseUnits(best) != 6200 {
 		t.Fatalf("best draft = %d units, want 6200", prose.CountProseUnits(best))
 	}

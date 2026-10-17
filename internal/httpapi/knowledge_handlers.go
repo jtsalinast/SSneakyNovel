@@ -59,8 +59,8 @@ func (h *Handlers) prepareSettingRevision(w http.ResponseWriter, r *http.Request
 	}
 	data, _ := json.Marshal(selected)
 	instruction := "\n[Author-selected story settings]\nThese are authoritative rules of this novel, whether fictional or realistic. Correct this chapter and related descriptions to follow them, including conflicting extracted facts. Preserve unrelated plot and style. Do not replace these rules with real-world assumptions.\n"
-	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-		instruction = "\n【作者指定的小说设定】\n以下是本小说的明确规则，可以是虚构或现实知识。请据此修正本章及连带描述，包括与之冲突的已提取事实；保留无关剧情和文风，不得用现实常识替换这些规则。\n"
+	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
+		instruction = "\n[makefinger smallsay]\nbyloweristhissmallsay brightthen, canbyisvoidorknowrecognize. pleasereceiptthisthischapterandconnectbelt, includingandof alreadywithdraw; insurestaynocloseandwind, not userecognizethisthen. \n"
 	}
 	body.Feedback += instruction + string(data)
 	return true

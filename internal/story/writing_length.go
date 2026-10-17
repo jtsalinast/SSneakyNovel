@@ -106,7 +106,7 @@ func formatChapterLengthRequirementBlock(minLen, maxLen, target int, lang string
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("Chapter prose must be %d–%d words (target %d; tolerance ±%d words or ±%d%%, whichever is larger). Exceeding %d words is unacceptable — stay inside this chapter's outline only.", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
 	}
-	return fmt.Sprintf("正文字数须严格控制在 %d–%d 字（目标 %d 字；允许误差 ±%d 字或 ±%d%%，取较大者）。超过 %d 字不可接受，只写本章大纲范围内的情节。", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
+	return fmt.Sprintf("character-countnumberwhiskergridmanufacturein %d–%d character-count(metric %d character-count; ±%d character-countor ±%d%%, withdrawbig). pass %d character-countnot canconnect, onlywritethischapterbiginside section. ", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
 }
 
 func formatChapterLengthRetryFeedback(actual, minLen, maxLen int, lang string) string {
@@ -114,12 +114,12 @@ func formatChapterLengthRetryFeedback(actual, minLen, maxLen int, lang string) s
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			return fmt.Sprintf("IMPORTANT: The previous draft was %d words, exceeding the %d–%d word limit. Regenerate this chapter within the limit. Do not advance into later chapters; compress redundant description and keep only this chapter's outline beats.", actual, minLen, maxLen)
 		}
-		return fmt.Sprintf("重要：上一稿为 %d 字，超出 %d–%d 字上限。请重新撰写并严格控制在范围内；不要写入后续章节内容，精简冗余描写，只保留本章大纲情节。", actual, minLen, maxLen)
+		return fmt.Sprintf("heavywant to: upperonefor %d character-count, exit %d–%d character-countupper. pleaseheavynewwriteandgridmanufactureininside; not want towriteenterlaterchaptersectioninside, refinedwrite, onlyinsurestaythischapterbigsection. ", actual, minLen, maxLen)
 	}
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("IMPORTANT: The previous draft was only %d words, below the %d–%d word range. Expand with concrete scene, action, and dialogue while staying inside this chapter's outline.", actual, minLen, maxLen)
 	}
-	return fmt.Sprintf("重要：上一稿仅 %d 字，低于 %d–%d 字下限。请在不超出本章大纲的前提下补充具体场景、动作与对话。", actual, minLen, maxLen)
+	return fmt.Sprintf("heavywant to: upperoneonly %d character-count, lowin %d–%d character-countlower. pleaseinnot exitthischapterbig frontlowertoolbody, movemakeandto. ", actual, minLen, maxLen)
 }
 
 func mergeWritingConstraints(a, b string) string {
@@ -154,11 +154,11 @@ Output ONLY the full revised chapter prose.
 [Chapter text]
 %s`, actual, minLen, maxLen, content)
 		} else {
-			userPrompt = fmt.Sprintf(`你是小说编辑。以下章节为 %d 字，须压缩至 %d–%d 字。
-在不改变本章情节走向、人物行为与关键对话的前提下精简冗余描写与重复叙述；不得删去大纲中的核心事件。
-只输出修改后的完整正文。
+			userPrompt = fmt.Sprintf(`youissmallsaycompile. bylowerchaptersectionfor %d character-count, whiskerpressto %d–%d character-count. 
+innot thischaptersectionwalkdirection, travelforandclosekeyto frontlowerrefinedwriteandheavy; not gobigmiddle heartitem. 
+output only the revised text afterwards. 
 
-【章节正文】
+[chaptersection]
 %s`, actual, minLen, maxLen, content)
 		}
 	} else {
@@ -170,11 +170,11 @@ Output ONLY the full revised chapter prose.
 [Chapter text]
 %s`, actual, minLen, maxLen, content)
 		} else {
-			userPrompt = fmt.Sprintf(`你是小说编辑。以下章节为 %d 字，须扩展至 %d–%d 字。
-在不超出本章大纲的前提下补充具体场景、感官细节与对话，不要添加新情节线。
-只输出修改后的完整正文。
+			userPrompt = fmt.Sprintf(`youissmallsaycompile. bylowerchaptersectionfor %d character-count, whiskerto %d–%d character-count. 
+innot exitthischapterbig frontlowertoolbody, feelsectionandto, not want tonewsectionthread. 
+output only the revised text afterwards. 
 
-【章节正文】
+[chaptersection]
 %s`, actual, minLen, maxLen, content)
 		}
 	}
@@ -187,14 +187,14 @@ Output ONLY the full revised chapter prose.
 		raw = llm.CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
 	}
 	if raw == "" {
-		return "", fmt.Errorf("章节字数调整 API 调用失败或被取消")
+		return "", fmt.Errorf("chaptersectioncharacter-countnumber API useorquiltwithdraw")
 	}
 	return stripChapterMetaProse(raw, lang), nil
 }
 
 func recoverChapterLengthBest(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, bestContent string, minLen, maxLen, target int, bestScore int, logger *sse.LogBroadcaster) (string, error) {
 	if bestContent == "" {
-		return "", fmt.Errorf("正文生成失败或被取消")
+		return "", fmt.Errorf("lifeorquiltwithdraw")
 	}
 	actual := prose.CountProseUnits(bestContent)
 	if chapterLengthInRange(bestContent, minLen, maxLen) {
@@ -257,12 +257,12 @@ func generateChapterContentWithLengthControl(ctx context.Context, apiCfg *config
 
 	for attempt := 0; attempt <= chapterGenMaxLengthAttempts; attempt++ {
 		if ctx.Err() != nil {
-			return "", fmt.Errorf("任务已取消")
+			return "", fmt.Errorf("alreadywithdraw")
 		}
 		constraints := mergeWritingConstraints(extraWritingConstraints, lengthFeedback)
 		content := generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, idx, settings, constraints, logger)
 		if content == "" {
-			return "", fmt.Errorf("正文生成失败或被取消")
+			return "", fmt.Errorf("lifeorquiltwithdraw")
 		}
 		actualLen := prose.CountProseUnits(content)
 		maybeUpdateBestDraft(&bestContent, &bestScore, content, minLen, maxLen, target)

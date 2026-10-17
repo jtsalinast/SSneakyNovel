@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"showmethestory/internal/config"
-	"showmethestory/internal/i18n"
 	"showmethestory/internal/story"
 )
 
@@ -95,7 +94,6 @@ func (h *Handlers) runPrePlanGenerate(ctx context.Context) error {
 
 func (h *Handlers) runPrePlanGenerateWith(ctx context.Context, sc config.StoryConfig, cfgLang string) error {
 	h.logger.TaskStart("preplan_generate")
-	zh := i18n.NormalizeLanguage(cfgLang) == i18n.LangZH
 	structure := strings.TrimSpace(sc.Structure)
 	if structure == "" {
 		structure = config.DefaultStructureForLength(sc.StoryLength)
@@ -104,27 +102,19 @@ func (h *Handlers) runPrePlanGenerateWith(ctx context.Context, sc config.StoryCo
 	minCh, maxCh := config.SuggestedChaptersByLength(sc.StoryLength)
 
 	var b strings.Builder
-	if zh {
-		b.WriteString("你是资深小说架构师。基于以下作品参数，制定全书“预规划”（pre-planning），必须先于任何批次大纲存在。\n")
-	} else {
-		b.WriteString("You are a senior novel architect. Based on the work parameters below, produce a book-level \"pre-planning\" that precedes any outline batch.\n")
-	}
+	b.WriteString("You are a senior novel architect. Based on the work parameters below, produce a book-level \"pre-planning\" that precedes any outline batch.\n")
+
 	b.WriteString(storyParamsContext(&sc, cfgLang))
 	b.WriteString("\n")
-	if zh {
-		fmt.Fprintf(&b, "故事结构框架（必须作为分幕依据）：%s\n建议总章数范围（按篇幅）：%d-%d\n", structLabel, minCh, maxCh)
-		b.WriteString("要求：\n1) recommended_total_chapters：结合结构、篇幅与目标字数给出一个具体整数（通常落在建议范围内）。\n2) long_term_direction：全书长期走向（3-6 句）：主角弧光、核心冲突的升级路径与结局方向，跨批次一致。\n3) acts：严格按照上述结构框架划分幕/阶段（如三幕结构=3 幕，英雄之旅按其节拍归并为 4-6 个可行阶段）。每幕包含：name（幕名）、summary（本幕职责一句话）、suggested_chapters（本幕建议章数，正整数，各幕之和≈总章数；单幕不超过 36，因为每批大纲最多 36 章）、start_hint/end_hint 不需要——起始章由顺序累加推算、batch_synopsis（可直接粘贴进“批次梗概 Batch synopsis”输入框的本幕剧情梗概：主要事件、冲突升级、幕末转折，3-5 句）。\n")
-		b.WriteString("所有文本内容必须使用与上文【输出语言】一致的語言（若设定为西班牙语请用西班牙语，英语用英语）。")
-	} else {
-		fmt.Fprintf(&b, "Narrative structure framework (MUST drive the act breakdown): %s\nSuggested total-chapter range for this length: %d-%d\n", structLabel, minCh, maxCh)
-		b.WriteString("Requirements:\n1) recommended_total_chapters: one concrete integer (usually inside the suggested range) considering structure, length and target words per chapter.\n2) long_term_direction: the book's cross-batch direction (3-6 sentences): protagonist arc, escalation path of the central conflict, ending direction.\n3) acts: split the book strictly according to the structure framework above (e.g. three-act = 3 acts; hero's journey condensed into 4-6 workable stages). Each act has: name, summary (one line about its duty), suggested_chapters (positive integers summing to roughly the total; each act must be <= 36 chapters because one outline batch covers at most 36), and batch_synopsis (a ready-to-paste synopsis for the \"Batch synopsis\" field: key events, escalation and the act-ending turn, 3-5 sentences).\n")
-		b.WriteString("All text content must be written in the output language pinned above (Spanish if es, English if en).")
-	}
+	fmt.Fprintf(&b, "Narrative structure framework (MUST drive the act breakdown): %s\nSuggested total-chapter range for this length: %d-%d\n", structLabel, minCh, maxCh)
+	b.WriteString("Requirements:\n1) recommended_total_chapters: one concrete integer (usually inside the suggested range) considering structure, length and target words per chapter.\n2) long_term_direction: the book's cross-batch direction (3-6 sentences): protagonist arc, escalation path of the central conflict, ending direction.\n3) acts: split the book strictly according to the structure framework above (e.g. three-act = 3 acts; hero's journey condensed into 4-6 workable stages). Each act has: name, summary (one line about its duty), suggested_chapters (positive integers summing to roughly the total; each act must be <= 36 chapters because one outline batch covers at most 36), and batch_synopsis (a ready-to-paste synopsis for the \"Batch synopsis\" field: key events, escalation and the act-ending turn, 3-5 sentences).\n")
+	b.WriteString("All text content must be written in the output language pinned above (Spanish if es, English if en).")
+
 	switch lang := config.NormalizeOutputLanguage(sc.OutputLanguage); lang {
 	case "en":
 		b.WriteString(" Write everything in English.")
 	case "es":
-		b.WriteString(" Escribe todo en español.")
+		b.WriteString(" Write everything in Spanish.")
 	}
 	b.WriteString(jsonRule(cfgLang, `{"recommended_total_chapters": 48, "long_term_direction": "...", "acts": [{"name": "...", "summary": "...", "suggested_chapters": 12, "batch_synopsis": "..."}]}`))
 

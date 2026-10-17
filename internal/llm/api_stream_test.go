@@ -17,7 +17,7 @@ func TestStreamIntegrity(t *testing.T) {
 	chunk := func(content, reason string) string {
 		return fmt.Sprintf("data:{\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":%q}]}\r\n\r\n", content, reason)
 	}
-	long := strings.Repeat("章", 30000)
+	long := strings.Repeat("chapter", 30000)
 	for _, tt := range []struct {
 		name, wire, want, reason, errText string
 		shortBody                         bool

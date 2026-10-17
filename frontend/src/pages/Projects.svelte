@@ -3,10 +3,10 @@
   import logo from '../../../docs/show-me-the-story.webp';
   import { api, apiFetch } from '../lib/api.js';
   import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage } from '../lib/stores.js';
-  import { t, setLocale } from '../lib/i18n/index.js';
+  import { t } from '../lib/i18n/index.js';
 
   let newProjectName = '';
-  let newProjectLang = 'zh';
+  let newProjectLang = 'en';
   let creating = false;
   let backupBusy = false;
   let restoreName = '';
@@ -51,7 +51,6 @@
         config.set(cfg);
         if (cfg && cfg.language) {
           projectLanguage.set(cfg.language);
-          setLocale(cfg.language);
         }
       } catch (e) {}
       try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
@@ -135,17 +134,18 @@
 <div class="flex items-center justify-center min-h-[60vh]">
   <div class="w-full max-w-xl space-y-6">
     <!-- Title -->
-    <div class="text-center">
+    <div id="ProjectPickerHeader" class="text-center">
       <img src={logo} alt={$t('app.title')} class="w-36 h-36 object-contain mx-auto mb-4" />
       <h2 class="text-2xl font-bold mb-1">{$t('projects.title')}</h2>
       <p class="text-sm text-base-content/65">{$t('projects.subtitle')}</p>
     </div>
 
     <!-- Create new project -->
-    <div class="card bg-base-200">
+    <div id="CardSection_CreateProject" class="card bg-base-200">
       <div class="card-body p-4">
         <h3 class="card-title text-base">{$t('projects.create')}</h3>
         <input
+          id="ProjectNameInput"
           type="text"
           class="input w-full"
           aria-label={$t('projects.create.placeholder')}
@@ -158,11 +158,11 @@
           <div class="flex items-center gap-2">
             <span class="text-xs text-base-content/65">{$t('projects.create.lang')}</span>
             <div class="tabs tabs-box tabs-sm" role="tablist">
-              <button type="button" role="tab" class="tab tab-sm" class:tab-active={newProjectLang === 'zh'} aria-selected={newProjectLang === 'zh'} disabled={creating} on:click={() => newProjectLang = 'zh'}>中文</button>
               <button type="button" role="tab" class="tab tab-sm" class:tab-active={newProjectLang === 'en'} aria-selected={newProjectLang === 'en'} disabled={creating} on:click={() => newProjectLang = 'en'}>EN</button>
             </div>
           </div>
           <button
+            id="CreateProjectButton"
             class="btn btn-primary btn-sm"
             on:click={createProject}
             disabled={creating || !newProjectName.trim()}
@@ -178,30 +178,31 @@
       </div>
     </div>
 
-    <div class="card bg-base-200">
+    <div id="CardSection_RestoreProject" class="card bg-base-200">
       <div class="card-body p-4">
         <h3 class="card-title text-base">{$t('projects.restore.title')}</h3>
         <p class="text-sm text-base-content/65">{$t('projects.restore.hint')}</p>
-        <input class="input w-full" aria-label={$t('projects.restore.name')} placeholder={$t('projects.restore.name')} bind:value={restoreName} disabled={backupBusy || $taskRunning} />
-        <input type="file" accept=".zip,application/zip" class="file-input w-full" aria-label={$t('projects.restore.file')} bind:this={restoreInput} bind:files={restoreFiles} disabled={backupBusy || $taskRunning} />
-        <button class="btn btn-primary btn-sm self-end" on:click={restoreProject} disabled={backupBusy || $taskRunning || !restoreName.trim() || !restoreFiles?.length}>
+        <input id="RestoreProjectNameInput" class="input w-full" aria-label={$t('projects.restore.name')} placeholder={$t('projects.restore.name')} bind:value={restoreName} disabled={backupBusy || $taskRunning} />
+        <input id="RestoreProjectFileInput" type="file" accept=".zip,application/zip" class="file-input w-full" aria-label={$t('projects.restore.file')} bind:this={restoreInput} bind:files={restoreFiles} disabled={backupBusy || $taskRunning} />
+        <button id="RestoreProjectButton" class="btn btn-primary btn-sm self-end" on:click={restoreProject} disabled={backupBusy || $taskRunning || !restoreName.trim() || !restoreFiles?.length}>
           {$t('projects.restore.button')}
         </button>
       </div>
     </div>
 
     <!-- Project list -->
-    <div class="card bg-base-200">
+    <div id="CardSection_ProjectList" class="card bg-base-200">
       <div class="card-body p-4">
         <h3 class="card-title text-base">{$t('projects.list')} <span class="text-xs font-normal text-base-content/60">({$projects.length})</span></h3>
         {#if $projects.length === 0}
-          <p class="text-sm text-base-content/60 py-4 text-center">{$t('projects.empty')}</p>
+          <p id="ProjectsEmptyState" class="text-sm text-base-content/60 py-4 text-center">{$t('projects.empty')}</p>
         {:else}
-          <div class="space-y-1.5">
+          <div id="ProjectListContainer" class="space-y-1.5">
             {#each $projects as p}
               <!-- svelte-ignore a11y-click-events-have-key-events -->
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <div
+                id="ProjectItem_{p.name}"
                 class="flex items-center gap-3 bg-base-300 rounded-lg p-3 transition-colors group {p.compatibility === 'supported' ? 'cursor-pointer hover:bg-base-300/80' : 'opacity-60'}"
                 class:ring-1={$currentProject === p.name}
                 class:ring-primary={$currentProject === p.name}
@@ -213,7 +214,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate flex items-center gap-2">
                     <span class="truncate" title={p.name}>{p.name}</span>
-                    <span class="badge badge-accent badge-xs uppercase shrink-0">{(p.language || 'zh') === 'en' ? 'EN' : 'ZH'}</span>
+                    <span class="badge badge-accent badge-xs uppercase shrink-0">{(p.language || 'en') === 'zh' ? 'ZH' : 'EN'}</span>
                     {#if p.compatibility !== 'supported'}
                       <span class="badge badge-warning badge-xs">{$t('projects.incompatible.badge')}</span>
                     {/if}
@@ -235,6 +236,7 @@
                   <span class="badge badge-primary badge-xs">{$t('projects.current')}</span>
                 {:else}
                   <button
+                    id="DeleteProjectButton_{p.name}"
                     class="btn btn-error btn-outline btn-xs shrink-0"
                     on:click|stopPropagation={() => deleteProject(p.name)}
                     disabled={$taskRunning}
@@ -242,7 +244,7 @@
                     {$t('common.delete')}
                   </button>
                 {/if}
-                <button class="btn btn-outline btn-xs shrink-0" on:click|stopPropagation={() => backupProject(p.name)} disabled={backupBusy || $taskRunning || p.compatibility !== 'supported'}>
+                <button id="BackupProjectButton_{p.name}" class="btn btn-outline btn-xs shrink-0" on:click|stopPropagation={() => backupProject(p.name)} disabled={backupBusy || $taskRunning || p.compatibility !== 'supported'}>
                   {$t('projects.backup')}
                 </button>
               </div>
