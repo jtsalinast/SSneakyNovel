@@ -52,6 +52,14 @@
   // so the parent can place them at the same level as the rest of the
   // "Story parameters" content instead of nested inside two extra divs.
   export let flat = false;
+  // UI-reorder request: Tone now lives in the "Theme & Motif" card (Config.svelte
+  // renders it there, bound to the same cfg.tone field). When this flag is set,
+  // the cascade hides its own Tone block so the field is not duplicated.
+  export let showTone = true;
+  // UI-reorder request: render a daisyUI `<div class="divider">` right before
+  // the "Specific settings" block (both flat and card layouts). Used when the
+  // cascade sits inside a larger field grid so the section gets a visual rule.
+  export let dividerBeforeSettings = false;
   // Escape hatch: the legacy ComboSelect twins of Genre/Subgenre/Conflict/
   // Protagonist are hidden by default (the SmartCombobox widgets are now the
   // primary UI). Set this to true to bring them back — they stay mounted and
@@ -883,6 +891,15 @@
     cfg.structure = String(e.detail.value || '').trim();
     dispatch('structureChange', { value: cfg.structure });
   }
+
+  // —— UI-reorder (novel-params): the flat-mode Length & Structure cells are
+  // rendered by Config.svelte directly (in the grid rows under Gore Level), so
+  // these accessors expose the reactive option lists and change handlers for
+  // that use. The card-mode twins below keep using them internally. ————
+  export function getLengthOpts() { return lengthOpts; }
+  export function getStructureOpts() { return structureOpts; }
+  export function applyLengthChange(e) { onLengthChange(e); }
+  export function applyStructureChange(e) { onStructureChange(e); }
 </script>
 
 {#if flat}
@@ -1049,6 +1066,8 @@
       </div>
     {/if}
 
+    {#if dividerBeforeSettings}<div class="divider col-span-2 my-0 py-6 h-px"></div>{/if}
+
     <div class="col-span-2">
       <span class="field-label flex items-center gap-1">
         {labels.settings || 'Specific settings'}
@@ -1093,7 +1112,7 @@
       <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
            storage field as the checkboxes so both stay in sync. -->
       <textarea
-        class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1"
+        class="textarea textarea-sm w-full text-xs font-mono mt-1"
         bind:value={freeSettingsText}
         on:blur={applyFreeSettings}
         on:input={() => { freeSettingsDirty = true; }}
@@ -1102,6 +1121,14 @@
       ></textarea>
     </div>
 
+    <!-- UI-reorder: Length & Structure moved OUT of this block — Config.svelte
+         now renders them (using the exported lengthOpts/structureOpts/
+         onLengthChange/onStructureChange) in the grid rows under Gore Level:
+         "Story length | Target words per chapter" then
+         "Story structure | Story language". The card-mode twins further below
+         are untouched. -->
+
+    {#if showTone}
     <div class="col-span-2">
       <span class="field-label flex items-center gap-1">
         {labels.tone || 'Tone'}
@@ -1119,50 +1146,7 @@
         </div>
       {/if}
     </div>
-
-    <!-- Story length — SmartSelect (unified UI). Same lengthOpts data and
-         onLengthChange handler as the old ComboSelect: ONE value, searchable
-         two-line rows (label + blurb), ⓘ summary popover and ✕ clear button.
-         Optional field → clearing maps to the legacy "—" (empty) state, so
-         allowCustom stays off (a free-text length makes no sense here). -->
-    <div>
-      <span class="field-label flex items-center gap-1">
-        {labels.length || 'Story length'}
-      </span>
-      <!-- svelte-ignore a11y-no-redundant-roles -->
-      <SmartSelect
-        options={lengthOpts}
-        allowCustom={false}
-        placeholder={labels.lengthNone || '—'}
-        emptyLabel={labels.lengthNone || '—'}
-        disabled={disabled}
-        title={tips.length || ''}
-        ariaLabel={labels.length || 'Story length'}
-        bind:value={cfg.story_length}
-        on:change={onLengthChange}
-      />
-    </div>
-    <!-- Narrative structure — SmartSelect (unified UI). Same structureOpts /
-         onStructureChange as the old ComboSelect; custom values allowed
-         ("Other"), matching the legacy allowOther={true} behaviour. -->
-    <div>
-      <span class="field-label flex items-center gap-1">
-        {labels.structure || 'Narrative structure'}
-      </span>
-      <!-- svelte-ignore a11y-no-redundant-roles -->
-      <SmartSelect
-        options={structureOpts}
-        allowCustom={true}
-        otherLabel={otherLabel}
-        placeholder={labels.structurePlaceholder || ''}
-        emptyLabel={emptyLabel}
-        disabled={disabled}
-        title={tips.structure || ''}
-        ariaLabel={labels.structure || 'Narrative structure'}
-        bind:value={cfg.structure}
-        on:change={onStructureChange}
-      />
-    </div>
+    {/if}
   </div>
 {:else}
 <div class="surface-card p-3 space-y-3">
@@ -1327,6 +1311,8 @@
     {/if}
   </div>
 
+  {#if dividerBeforeSettings}<div class="divider my-0 py-6 h-px" style="width: 100%"></div>{/if}
+
   <div>
     <span class="field-label flex items-center gap-1">
       {labels.settings || 'Specific settings'}
@@ -1371,7 +1357,7 @@
   <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
        storage field as the checkboxes so both stay in sync. -->
   <textarea
-    class="textarea textarea-sm w-full h-12 text-xs font-mono"
+    class="textarea textarea-sm w-full text-xs font-mono"
     bind:value={freeSettingsText}
     on:blur={applyFreeSettings}
     on:input={() => { freeSettingsDirty = true; }}
@@ -1381,6 +1367,7 @@
 
   <!-- Tone: free text + per-subgenre suggestion chips (from the resolved
        catalog). Same comma-separated storage as the legacy field. -->
+  {#if showTone}
   <div>
     <span class="field-label flex items-center gap-1">
       {labels.tone || 'Tone'}
@@ -1398,6 +1385,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 
   <!-- Length & structure: SmartSelect twins of the flat-mode fields above
        (same lengthOpts/structureOpts data and handlers). Picking a length

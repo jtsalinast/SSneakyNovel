@@ -57,7 +57,7 @@ func SuggestForeshadows(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 
 	var resp ForeshadowPlanResponse
 	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return nil, fmt.Errorf("untieJSON: %w", err)
+		return nil, fmt.Errorf("parse JSON: %w", err)
 	}
 
 	logger.InfoKey("log.foreshadow_plan_parsed", len(resp.Foreshadows))
@@ -94,7 +94,7 @@ func UpdateForeshadows(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 
 	var resp ForeshadowUpdateResponse
 	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return fmt.Errorf("untiemorenewJSON: %w", err)
+		return fmt.Errorf("parse update JSON: %w", err)
 	}
 
 	applyForeshadowUpdates(state, resp.Updates, ch.Num)
@@ -145,7 +145,7 @@ func BuildForeshadowWarnings(state *Progress) string {
 			continue
 		}
 		if fs.TargetChapter > 0 && currentChapter > fs.TargetChapter+3 {
-			warnings = append(warnings, fmt.Sprintf(" #%d \"%s\" alreadypasscountreturncollectchaptersection %d chapterbyupper", fs.ID, fs.Name, fs.TargetChapter))
+			warnings = append(warnings, fmt.Sprintf(" #%d \"%s\" ya superó el capítulo de resolución #%d", fs.ID, fs.Name, fs.TargetChapter))
 		}
 	}
 
@@ -153,7 +153,7 @@ func BuildForeshadowWarnings(state *Progress) string {
 		return ""
 	}
 
-	return "⚠️ expecttell: " + strings.Join(warnings, "; ")
+	return "⚠️ Hilos sin resolver: " + strings.Join(warnings, "; ")
 }
 
 func NextForeshadowID(foreshadows []Foreshadow) int {
@@ -169,13 +169,13 @@ func NextForeshadowID(foreshadows []Foreshadow) int {
 func ForeshadowStatusLabel(status ForeshadowStatus) string {
 	switch status {
 	case ForeshadowPlanted:
-		return "already"
+		return "plantado"
 	case ForeshadowProgressing:
-		return "advancemiddle"
+		return "en progreso"
 	case ForeshadowResolved:
-		return "alreadyreturncollect"
+		return "resuelto"
 	case ForeshadowAbandoned:
-		return "alreadyput"
+		return "abandonado"
 	default:
 		return string(status)
 	}
@@ -232,26 +232,26 @@ func BuildForeshadowRoadmapMarkdown(state *Progress) string {
 		}
 	}
 
-	sb.WriteString("## probabilitybrowse\n\n")
-	sb.WriteString(fmt.Sprintf("- count **%d** strip | alive **%d** | alreadyreturncollect **%d** | alreadyput **%d**\n\n", len(state.Foreshadows), active, resolved, abandoned))
+	sb.WriteString("## Resumen\n\n")
+	sb.WriteString(fmt.Sprintf("- total **%d** | activos **%d** | resueltos **%d** | abandonados **%d**\n\n", len(state.Foreshadows), active, resolved, abandoned))
 
 	if warn := BuildForeshadowWarnings(state); warn != "" {
-		sb.WriteString("## expecttell\n\n")
-		sb.WriteString(strings.TrimPrefix(warn, "⚠️ expecttell: "))
+		sb.WriteString("## Hilos sin resolver\n\n")
+		sb.WriteString(strings.TrimPrefix(warn, "⚠️ Hilos sin resolver: "))
 		sb.WriteString("\n\n")
 	}
 
 	maxCh := maxChapterNum(state)
 	if maxCh > 0 {
-		sb.WriteString("## by chaptersectionhourthread\n\n")
+		sb.WriteString("## Por capítulo\n\n")
 		for chNum := 1; chNum <= maxCh; chNum++ {
 			var lines []string
 			for _, fs := range state.Foreshadows {
 				if fs.PlantChapter == chNum {
-					lines = append(lines, fmt.Sprintf("- 🔵 **#%d %s** — (%s)", fs.ID, fs.Name, ForeshadowStatusLabel(fs.Status)))
+					lines = append(lines, fmt.Sprintf("- 🔵 **#%d %s** — plantado (%s)", fs.ID, fs.Name, ForeshadowStatusLabel(fs.Status)))
 				}
 				if fs.TargetChapter == chNum {
-					lines = append(lines, fmt.Sprintf("- 🎯 **#%d %s** — countreturncollect(%s)", fs.ID, fs.Name, ForeshadowStatusLabel(fs.Status)))
+					lines = append(lines, fmt.Sprintf("- 🎯 **#%d %s** — resolución (%s)", fs.ID, fs.Name, ForeshadowStatusLabel(fs.Status)))
 				}
 				for _, ev := range fs.Events {
 					if ev.Chapter == chNum {
@@ -262,28 +262,28 @@ func BuildForeshadowRoadmapMarkdown(state *Progress) string {
 			if len(lines) == 0 {
 				continue
 			}
-			sb.WriteString(fmt.Sprintf("### # %d chapter\n\n", chNum))
+			sb.WriteString(fmt.Sprintf("### Capítulo #%d\n\n", chNum))
 			sb.WriteString(strings.Join(lines, "\n"))
 			sb.WriteString("\n\n")
 		}
 	}
 
-	sb.WriteString("## \n\n")
+	sb.WriteString("## Detalle de hilos\n\n")
 	for _, fs := range state.Foreshadows {
 		sb.WriteString(fmt.Sprintf("### #%d %s [%s]\n\n", fs.ID, fs.Name, ForeshadowStatusLabel(fs.Status)))
 		sb.WriteString(fmt.Sprintf("%s\n\n", fs.Description))
-		sb.WriteString(fmt.Sprintf("- chaptersection: # **%d** chapter\n", fs.PlantChapter))
+		sb.WriteString(fmt.Sprintf("- Plantado en: capítulo ** #%d**\n", fs.PlantChapter))
 		if fs.TargetChapter > 0 {
-			sb.WriteString(fmt.Sprintf("- countreturncollect: # **%d** chapter\n", fs.TargetChapter))
+			sb.WriteString(fmt.Sprintf("- Resolución prevista: capítulo **#%d**\n", fs.TargetChapter))
 		}
 		if len(fs.Events) > 0 {
-			sb.WriteString("- advance: \n")
+			sb.WriteString("- Progreso:\n")
 			for _, ev := range fs.Events {
-				sb.WriteString(fmt.Sprintf(" - # %d chapter: %s\n", ev.Chapter, ev.Note))
+				sb.WriteString(fmt.Sprintf("  - Capítulo #%d: %s\n", ev.Chapter, ev.Note))
 			}
 		}
 		if fs.Resolution != "" {
-			sb.WriteString(fmt.Sprintf("- returncollectsquare: %s\n", fs.Resolution))
+			sb.WriteString(fmt.Sprintf("- Resolución: %s\n", fs.Resolution))
 		}
 		sb.WriteString("\n")
 	}
@@ -291,13 +291,13 @@ func BuildForeshadowRoadmapMarkdown(state *Progress) string {
 	return sb.String()
 }
 
-// SaveForeshadowRoadmap BAroadthreadimagewriteenteritem Foreshadows.md.
+// SaveForeshadowRoadmap escribe el mapa de presagios en el archivo Foreshadows.md del proyecto.
 func SaveForeshadowRoadmap(projectDir string, state *Progress) error {
 	content := BuildForeshadowRoadmapMarkdown(state)
 	return os.WriteFile(ForeshadowRoadmapPath(projectDir), []byte(content), 0644)
 }
 
-// syncForeshadowsAfterChapter inchaptersectionmorelatermorenewpostureandpassageplateroadthreadimage.
+// syncForeshadowsAfterChapter actualiza el estado de los hilos tras un capítulo y reescribe el mapa de presagios.
 func syncForeshadowsAfterChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, progressPath string, logger *sse.LogBroadcaster) {
 	if len(state.Foreshadows) == 0 {
 		return
@@ -354,10 +354,10 @@ func CheckForeshadowOutlineConsistency(ctx context.Context, apiCfg *config.APICo
 	var report ForeshadowOutlineReport
 	jsonStr := llm.ExtractJSON(cleanJSONResponse(rawResp))
 	if jsonStr == "" {
-		return nil, fmt.Errorf("nountie-bigonefruit")
+		return nil, fmt.Errorf("no batch result parsed")
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &report); err != nil {
-		return nil, fmt.Errorf("untie-bigoneJSON: %w", err)
+		return nil, fmt.Errorf("parse batch JSON: %w", err)
 	}
 	return &report, nil
 }

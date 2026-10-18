@@ -40,6 +40,32 @@ func WithTaskTokens(ctx context.Context, logger *sse.LogBroadcaster) (context.Co
 	return context.WithValue(ctx, taskTokenCtxKey{}, usage), usage
 }
 
+// AttachTaskTokens re-uses an existing tracker for ctx: it returns a derived
+// context whose LLM calls accumulate into usage. When usage is nil the context
+// is returned unchanged (calls then report no usage, same as before). Used by
+// detached background work (Generate buttons) so its tokens land in the same
+// badge the UI reads via /api/status instead of an orphaned tracker.
+func AttachTaskTokens(ctx context.Context, usage *TaskTokenUsage) context.Context {
+	if usage == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, taskTokenCtxKey{}, usage)
+}
+
+// MaxTaskDuration is the hard wall-clock ceiling for a single background
+// generation task. Without it, a persistently failing or hanging API endpoint
+// could keep a task (and its retry loops) alive forever, saturating CPU,
+// connections and log channels — the root cause of machine freezes during
+// generation. Callers must invoke the returned cancel func when the task ends
+// normally so resources are released early.
+const MaxTaskDuration = 30 * time.Minute
+
+// NewTaskContext builds the root context for a background generation task:
+// cancellable on demand (manual stop) and bounded by MaxTaskDuration.
+func NewTaskContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, MaxTaskDuration)
+}
+
 func TaskTokensFromContext(ctx context.Context) *TaskTokenUsage {
 	if ctx == nil {
 		return nil

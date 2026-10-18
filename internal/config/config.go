@@ -119,8 +119,9 @@ func (s *StoryConfig) EffectiveProtagonist() string {
 	return effectiveMulti(s.ProtagonistType, s.ProtagonistOther)
 }
 
-// EffectiveMotif returns the literary motif. Theme and Motif are merged in the
-// UI into a single field, so the effective motif is either Motif or Theme.
+// EffectiveMotif returns the literary motif. When the dedicated Motif field is
+// empty it falls back to Theme (legacy configs stored both merged in one
+// field), so prompts never lose the motif information entirely.
 func (s *StoryConfig) EffectiveMotif() string {
 	if m := strings.TrimSpace(s.Motif); m != "" {
 		return m

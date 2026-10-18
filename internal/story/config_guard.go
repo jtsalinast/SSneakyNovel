@@ -51,12 +51,12 @@ var storyFieldSpecs = []storyFieldSpec{
 	{"output_language", "Story output language (en/es; empty = follow project language)", "lifeinside(en/es, empty=along withitem)", func(s config.StoryConfig) string { return s.OutputLanguage }, func(c *config.StoryConfig, v string) { c.OutputLanguage = config.NormalizeOutputLanguage(v) }, nil, nil},
 	{"romance_level", "Romance level", "lovethreadratioheavy", func(s config.StoryConfig) string { return s.RomanceLevel }, func(c *config.StoryConfig, v string) { c.RomanceLevel = v }, nil, nil},
 	{"sexual_content", "Sexual content level", "writedegree", func(s config.StoryConfig) string { return s.SexualContent }, func(c *config.StoryConfig, v string) { c.SexualContent = v }, nil, nil},
-	{"gore_level", "Gore level", "forcebloodfishydegree", func(s config.StoryConfig) string { return s.GoreLevel }, func(c *config.StoryConfig, v string) { c.GoreLevel = v }, nil, nil},
-	{"world_darkness", "World darkness", "blackdarkdegree", func(s config.StoryConfig) string { return s.WorldDarkness }, func(c *config.StoryConfig, v string) { c.WorldDarkness = v }, nil, nil},
-	{"gender_bias", "Gender bias", "otherdirection", func(s config.StoryConfig) string { return s.GenderBias }, func(c *config.StoryConfig, v string) { c.GenderBias = v }, nil, nil},
-	{"locations_enabled", "Locations enabled", "enableuse dotbody", func(s config.StoryConfig) string { return strconv.FormatBool(s.LocationsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.LocationsEnabled = v }, nil},
-	{"character_arcs_enabled", "Character arcs enabled", "enableusehornlight", func(s config.StoryConfig) string { return strconv.FormatBool(s.CharacterArcsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.CharacterArcsEnabled = v }, nil},
-	{"target_words_per_chapter", "Target words per chapter", "eachchaptermetriccharacter-countnumber", func(s config.StoryConfig) string { return strconv.Itoa(s.TargetWordsPerChapter) }, nil, nil, func(c *config.StoryConfig, v int) { c.TargetWordsPerChapter = v }},
+	{"gore_level", "Gore level", "grado de sangre/violencia", func(s config.StoryConfig) string { return s.GoreLevel }, func(c *config.StoryConfig, v string) { c.GoreLevel = v }, nil, nil},
+	{"world_darkness", "World darkness", "grado de oscuridad del mundo", func(s config.StoryConfig) string { return s.WorldDarkness }, func(c *config.StoryConfig, v string) { c.WorldDarkness = v }, nil, nil},
+	{"gender_bias", "Gender bias", "sesgo de género", func(s config.StoryConfig) string { return s.GenderBias }, func(c *config.StoryConfig, v string) { c.GenderBias = v }, nil, nil},
+	{"locations_enabled", "Locations enabled", "habilitar lugares", func(s config.StoryConfig) string { return strconv.FormatBool(s.LocationsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.LocationsEnabled = v }, nil},
+	{"character_arcs_enabled", "Character arcs enabled", "habilitar arcos de personaje", func(s config.StoryConfig) string { return strconv.FormatBool(s.CharacterArcsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.CharacterArcsEnabled = v }, nil},
+	{"target_words_per_chapter", "Target words per chapter", "palabras objetivo por capítulo", func(s config.StoryConfig) string { return strconv.Itoa(s.TargetWordsPerChapter) }, nil, nil, func(c *config.StoryConfig, v int) { c.TargetWordsPerChapter = v }},
 	{"writing_style", "Writing style", "writing style", func(s config.StoryConfig) string { return s.WritingStyle }, func(c *config.StoryConfig, v string) { c.WritingStyle = v }, nil, nil},
 	{"writing_pov", "Narration POV", "POV", func(s config.StoryConfig) string { return s.WritingPOV }, func(c *config.StoryConfig, v string) { c.WritingPOV = v }, nil, nil},
 }
@@ -367,7 +367,7 @@ func FormatConfigConflictMessage(conflicts []ConfigFieldChange, lang string) str
 	if en {
 		sb.WriteString("Cannot overwrite user-filled config fields without explicit consent. Conflicts:\n")
 	} else {
-		sb.WriteString("nocoverusealreadywrite placecharacter-countparagraph, first useintent. character-countparagraph: \n")
+		sb.WriteString("No se pueden sobrescribir campos de configuración rellenados por el usuario sin su consentimiento explícito. Conflictos:\n")
 	}
 	for _, c := range conflicts {
 		sb.WriteString(fmt.Sprintf("- %s (%s): current=%q proposed=%q\n", c.Field, StoryFieldLabel(c.Field, lang), c.Current, c.Proposed))

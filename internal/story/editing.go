@@ -41,10 +41,10 @@ func EditChapterContent(state *Progress, req EditChapterContentRequest) (int, er
 		}
 	}
 	if ch == nil {
-		return 0, fmt.Errorf("# %d chapternot depositin", req.ChapterNum)
+		return 0, fmt.Errorf("el capítulo #%d no existe", req.ChapterNum)
 	}
 	if ch.Content == "" {
-		return 0, fmt.Errorf("# %d chapterforempty, nocompile", req.ChapterNum)
+		return 0, fmt.Errorf("el capítulo #%d está vacío, nada que editar", req.ChapterNum)
 	}
 	original := ch
 	copyChapter := *ch
@@ -57,10 +57,10 @@ func EditChapterContent(state *Progress, req EditChapterContentRequest) (int, er
 	switch req.Operation {
 	case EditOpReplaceLines:
 		if req.StartLine < 1 || req.StartLine > totalLines {
-			return 0, fmt.Errorf("travel %d exit( %d travel)", req.StartLine, totalLines)
+			return 0, fmt.Errorf("número de línea %d fuera de rango (1-%d)", req.StartLine, totalLines)
 		}
 		if req.EndLine < req.StartLine || req.EndLine > totalLines {
-			return 0, fmt.Errorf("travel %d exit(travel %d, %d travel)", req.EndLine, req.StartLine, totalLines)
+			return 0, fmt.Errorf("número de línea %d fuera de rango (debe ser ≥ %d y ≤ %d)", req.EndLine, req.StartLine, totalLines)
 		}
 		newLines := strings.Split(req.NewText, "\n")
 		result := make([]string, 0, len(lines)-(req.EndLine-req.StartLine+1)+len(newLines))
@@ -71,17 +71,17 @@ func EditChapterContent(state *Progress, req EditChapterContentRequest) (int, er
 
 	case EditOpReplaceText:
 		if req.OldText == "" {
-			return 0, fmt.Errorf("old_text not canforempty")
+			return 0, fmt.Errorf("old_text no puede estar vacío")
 		}
 		idx := strings.Index(ch.Content, req.OldText)
 		if idx < 0 {
-			return 0, fmt.Errorf("not yettothis(longdegree %d character-count)", len(req.OldText))
+			return 0, fmt.Errorf("texto no encontrado (longitud %d caracteres)", len(req.OldText))
 		}
 		ch.Content = ch.Content[:idx] + req.NewText + ch.Content[idx+len(req.OldText):]
 
 	case EditOpInsertAfterLine:
 		if req.Line < 0 || req.Line > totalLines {
-			return 0, fmt.Errorf("travelNo. %d exit( %d travel, 0 tableitemopenhead)", req.Line, totalLines)
+			return 0, fmt.Errorf("número de línea %d fuera de rango (1-%d, o 0 para insertar al inicio)", req.Line, totalLines)
 		}
 		newLines := strings.Split(req.NewText, "\n")
 		result := make([]string, 0, len(lines)+len(newLines))

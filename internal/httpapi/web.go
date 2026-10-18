@@ -63,6 +63,11 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("GET /api/status", h.GetStatus)
 
 	mux.HandleFunc("POST /api/outline/revise", h.PostOutlineRevise)
+	mux.HandleFunc("POST /api/outline/analyze", h.PostOutlineAnalyze)
+	mux.HandleFunc("POST /api/outline/analysis/apply", h.PostOutlineAnalysisApply)
+	mux.HandleFunc("POST /api/outline/analysis/edit-recommendation", h.PostOutlineAnalysisEditRecommendation)
+	mux.HandleFunc("POST /api/outline/analysis/propose", h.PostOutlineAnalysisPropose)
+	mux.HandleFunc("DELETE /api/outline/analysis", h.DeleteOutlineAnalysis)
 	mux.HandleFunc("POST /api/outline/generate-continuation", h.PostOutlineGenerateContinuation)
 	mux.HandleFunc("POST /api/outline/preplan/generate", h.PostPrePlanGenerate)
 	mux.HandleFunc("GET /api/outline/preplan", h.GetPrePlan)

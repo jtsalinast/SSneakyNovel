@@ -11,6 +11,7 @@ import (
 	"showmethestory/internal/config"
 	"showmethestory/internal/sse"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -99,9 +100,11 @@ func TestOutlineBatchAppendReplaceAndRoundTrip(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			var wg sync.WaitGroup
+			defer wg.Wait()
 			run := func(mode string, id int) {
 				t.Helper()
-				err := GenerateOutlineBatch(ctx, api, cfg, state, nil, OutlineBatchRequest{ChapterCount: count, Synopsis: synopsis, LongTermDirection: "DIRECTION_MARKER", Mode: mode, BatchID: id}, path, sse.NewLogBroadcaster())
+				err := GenerateOutlineBatch(ctx, api, cfg, state, nil, OutlineBatchRequest{ChapterCount: count, Synopsis: synopsis, LongTermDirection: "DIRECTION_MARKER", Mode: mode, BatchID: id}, path, sse.NewLogBroadcaster(), &wg)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -50,14 +50,14 @@ func formatCharacterListForOutline(settings *ProjectSettings, lang string) strin
 		if en {
 			return "(No characters registered yet. You may introduce new characters only when necessary; mark each debut with \"first appearance\" and include a one-line role or relationship to the protagonist.)"
 		}
-		return "(not yetinhornmiddlehorn. onlywant tosquarecanenternew; whiskerinitstimesexitchaptersectionmetric\"times\", andonetravelbodycopyorandhorncloseissaybright. )"
+		return "(Aún no hay personajes registrados. Solo introduce personajes nuevos cuando sea estrictamente necesario; marca cada debut con \"primera aparición\" e incluye una línea sobre su rol o relación con el protagonista.)"
 	}
 
 	var sb strings.Builder
 	if en {
 		sb.WriteString("Registered characters (prefer these; avoid duplicates):\n")
 	} else {
-		sb.WriteString("alreadyhorn(firstmakeuse, canheavy): \n")
+		sb.WriteString("Personajes registrados (úsolos en primer lugar; evita duplicados):\n")
 	}
 	for _, c := range settings.Characters {
 		sb.WriteString(fmt.Sprintf("- %s", c.Name))
@@ -79,7 +79,7 @@ func formatCharacterListForOutline(settings *ProjectSettings, lang string) strin
 	if en {
 		sb.WriteString("\nOnly add unlisted characters when the plot requires it; mark \"first appearance\" in their debut chapter with a one-line description.")
 	} else {
-		sb.WriteString("\nonlywhenwant tohoursquarecannewnot yethorn; initstimesexitchaptersectionmetric\"times\"andonetravelsaybright. ")
+		sb.WriteString("\nSolo añade personajes no listados cuando la trama lo requiera; marca \"primera aparición\" en su capítulo de debut con una descripción de una línea.")
 	}
 	return sb.String()
 }
@@ -88,14 +88,14 @@ func formatOutlineLengthRequirementBlock(minLen, maxLen int, lang string) string
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("Each chapter outline must be %d–%d characters (not counting the chapter title). Outlines shorter than %d characters are unacceptable.", minLen, maxLen, minLen)
 	}
-	return fmt.Sprintf("eachchapter outline character-countparagraphwhiskerfor %d–%d character-count(not chaptersectionmetric). lowin %d character-countviewfornot joingrid. ", minLen, maxLen, minLen)
+	return fmt.Sprintf("El outline de cada capítulo debe tener entre %d y %d caracteres (sin contar el título del capítulo). No se aceptan outlines de menos de %d caracteres.", minLen, maxLen, minLen)
 }
 
 func formatOutlineStructureRequirementBlock(lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return "Each chapter outline must cover, in order: opening scene/location; core conflict or goal; key turning point or revelation; characters appearing (with roles); how the chapter ends or what hook it leaves."
 	}
-	return "eachchapterbigwhiskerin orderbag: open/ dot; thischapterheartormetric; closekeyrotateordot; exit(andmakeuse); chapterwalkdirectionorthoughthook. "
+	return "Cada outline de capítulo debe cubrir, en orden: escena y ubicación de apertura; conflicto o meta central del capítulo; punto de giro o revelación clave; personajes que aparecen (con sus roles); cómo termina el capítulo o qué gancho deja. "
 }
 
 func buildOutlinePromptExtras(cfg *config.Config, settings *ProjectSettings) map[string]string {
@@ -243,5 +243,5 @@ func formatCharactersLine(chars []OutlineChapterCharacter, lang string) string {
 	if en {
 		return "Cast: " + strings.Join(parts, "; ")
 	}
-	return "exit: " + strings.Join(parts, ", ")
+	return "Reparto: " + strings.Join(parts, ", ")
 }

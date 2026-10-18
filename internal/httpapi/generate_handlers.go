@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"showmethestory/internal/agent"
 	"showmethestory/internal/config"
@@ -30,8 +29,12 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	switch section {
 	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "pre_planning":
 	default:
-		h.writeErrorReq(w, r, http.StatusBadRequest, "unknown_section", section)
-		return
+		// Per-category worldview sections (wv_geography, wv_faction, ...) are
+		// also valid — see agent.WorldviewCategoryBySection.
+		if !agent.IsWorldviewCategorySection(section) {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "unknown_section", section)
+			return
+		}
 	}
 	if !h.tryStartTask() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
@@ -51,6 +54,9 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		// whole-section batch generation.
 		CharacterID string `json:"character_id"`
 		OrgID       string `json:"org_id"`
+		// Per-category worldview section (wv_geography, ...): the frontend can
+		// pass the category explicitly; otherwise it is derived from the key.
+		WorldviewCategory string `json:"worldview_category"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.endTask()
@@ -58,17 +64,18 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := SectionGenRequest{
-		Section:     section,
-		StoryIdea:   body.StoryIdea,
-		Story:       body.Story,
-		Name:        body.Name,
-		Category:    body.Category,
-		EntryID:     body.EntryID,
-		SourceID:    body.SourceID,
-		TargetID:    body.TargetID,
-		CharacterID: body.CharacterID,
-		OrgID:       body.OrgID,
-		Ctx:         h.taskCtx, // snapshot: the caller holds the task lock
+		Section:           section,
+		StoryIdea:         body.StoryIdea,
+		Story:             body.Story,
+		Name:              body.Name,
+		Category:          body.Category,
+		EntryID:           body.EntryID,
+		SourceID:          body.SourceID,
+		TargetID:          body.TargetID,
+		CharacterID:       body.CharacterID,
+		OrgID:             body.OrgID,
+		WorldviewCategory: body.WorldviewCategory,
+		Ctx:               h.taskCtx, // snapshot: the caller holds the task lock
 	}
 	if err := h.validateSectionGen(req); err != nil {
 		h.endTask()
@@ -185,13 +192,18 @@ func (h *Handlers) StartDetachedPrePlanGenerate() error {
 		return errors.New("task_running_wait")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	// Same token wiring as tryStartTask: without llm.WithTaskTokens the LLM
-	// calls inside this detached run report no token activity to the chat
-	// panel (the Pre-planning Generate button looked dead even though the
-	// generation was running).
+	// Same token wiring as tryStartTask: without a llm.TaskTokenUsage tracker in
+	// the context, the LLM calls inside this detached run report no token
+	// activity to the frontend badge. Re-use the live task's tracker when one
+	// exists (chat fast path); only create a fresh one when nothing else owns a
+	// tracker, so /api/status keeps reading the right numbers.
 	h.taskMu.Lock()
 	genID := h.generationID
-	ctx, _ = llm.WithTaskTokens(ctx, h.logger)
+	if h.taskTokens != nil {
+		ctx = llm.AttachTaskTokens(ctx, h.taskTokens)
+	} else {
+		ctx, _ = llm.WithTaskTokens(ctx, h.logger)
+	}
 	h.taskCtx = ctx
 	h.taskCancel = cancel
 	h.taskMu.Unlock()
@@ -240,6 +252,10 @@ func (h *Handlers) StartDetachedSectionGenerate(req SectionGenRequest) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.taskMu.Lock()
 	genID := h.generationID
+	// Re-use the live task's token tracker (the chat turn owns it): without this
+	// the detached generation accumulated its tokens in an orphaned tracker and
+	// the frontend badge showed no prompt/completion counts at all.
+	ctx = llm.AttachTaskTokens(ctx, h.taskTokens)
 	h.taskCtx = ctx
 	h.taskCancel = cancel
 	h.taskMu.Unlock()
@@ -288,7 +304,17 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 		case "locations":
 			err = h.generateLocations(ctx, &storyCfg)
 		case "worldview":
-			err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
+			// With an entry target the button enriches that single form entry;
+			// without one it batch-generates entries across all categories.
+			if strings.TrimSpace(req.Name) != "" || strings.TrimSpace(req.EntryID) != "" {
+				err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
+			} else {
+				err = h.generateWorldviewBatch(ctx, &storyCfg)
+			}
+		case "wv_geography", "wv_location", "wv_faction", "wv_rule", "wv_knowledge", "wv_history", "wv_other":
+			// Per-category worldview sections: each Worldview-card section has its
+			// own Generate button and only produces entries for that category.
+			err = h.generateWorldviewCategory(ctx, &storyCfg, worldviewCategoryForSection(section, req.WorldviewCategory))
 		case "motif":
 			err = h.generateMotif(ctx, &storyCfg)
 		case "story_idea":
@@ -347,7 +373,17 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 		case "locations":
 			err = h.generateLocations(ctx, &storyCfg)
 		case "worldview":
-			err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
+			// With an entry target the button enriches that single form entry;
+			// without one it batch-generates entries across all categories.
+			if strings.TrimSpace(req.Name) != "" || strings.TrimSpace(req.EntryID) != "" {
+				err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
+			} else {
+				err = h.generateWorldviewBatch(ctx, &storyCfg)
+			}
+		case "wv_geography", "wv_location", "wv_faction", "wv_rule", "wv_knowledge", "wv_history", "wv_other":
+			// Per-category worldview sections: each Worldview-card section has its
+			// own Generate button and only produces entries for that category.
+			err = h.generateWorldviewCategory(ctx, &storyCfg, worldviewCategoryForSection(section, req.WorldviewCategory))
 		case "motif":
 			err = h.generateMotif(ctx, &storyCfg)
 		case "story_idea":
@@ -392,6 +428,27 @@ func sectionLabel(section, lang string) string {
 	case "worldview":
 
 		return "worldview entry"
+	case "wv_geography":
+
+		return "geography entries"
+	case "wv_location":
+
+		return "location entries"
+	case "wv_faction":
+
+		return "faction entries"
+	case "wv_rule":
+
+		return "world rules entries"
+	case "wv_knowledge":
+
+		return "story knowledge entries"
+	case "wv_history":
+
+		return "history entries"
+	case "wv_other":
+
+		return "other worldview entries"
 	case "motif":
 
 		return "literary motif"
@@ -424,15 +481,14 @@ func storyParamsContext(sc *config.StoryConfig, lang string) string {
 	return story.NovelParametersBlock(cfg) + "\n"
 }
 
-// —— motif ——
-
-// motifSeedCount is how many candidate motifs the LLM proposes; one is picked
-// at random so repeated clicks give varied results.
-const motifSeedCount = 12
+// —— motif (Theme & Motif card: theme + literary motif + tone) ——
 
 func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) error {
 	var b strings.Builder
-	b.WriteString("You are a literary consultant. Based on the work parameters below, propose " + fmt.Sprint(motifSeedCount) + " distinct literary motifs suitable for this work.\n")
+	b.WriteString("You are a literary consultant. Based on the work parameters below, propose the central theme, one recurring literary motif and a fitting tone for this work:\n")
+	b.WriteString("- \"theme\": the novel's central idea stated as a short thematic statement (one clause, no explanations);\n")
+	b.WriteString("- \"motif\": one concrete recurring image or device that carries that theme (a short phrase naming one or two key images, no explanations);\n")
+	b.WriteString("- \"tone\": 2-4 mood adjectives describing the work's emotional register, comma-separated.\n")
 
 	wroteParams := false
 	if t := strings.TrimSpace(sc.Type); t != "" {
@@ -484,31 +540,39 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 		wroteParams = true
 	}
 	if !wroteParams {
-		b.WriteString("No parameters were provided; draw broadly from classic and modern literature (rebirth, doubles, thresholds, water & purification, mirrors, revenge, homecoming, forbidden love...), keeping the list diverse.\n")
+		b.WriteString("No parameters were provided; draw broadly from classic and modern literature (rebirth, doubles, thresholds, water & purification, mirrors, revenge, homecoming, forbidden love...), keeping theme, motif and tone coherent with each other.\n")
 	}
-	schema := `{"motifs": ["...", "..."]}`
-	b.WriteString("\nEach motif must be a short English phrase (optionally naming one or two key images); no explanations. Output only one JSON object, no other text, no code fences. Format: " + schema)
+	schema := `{"theme": "...", "motif": "...", "tone": "..."}`
+	b.WriteString("\nOutput only one JSON object, no other text, no code fences. Format: " + schema)
 
 	var out struct {
-		Motifs []string `json:"motifs"`
+		Theme string `json:"theme"`
+		Motif string `json:"motif"`
+		Tone  string `json:"tone"`
 	}
 	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
 		return err
 	}
-	var valid []string
-	for _, m := range out.Motifs {
-		if m = strings.TrimSpace(m); m != "" {
-			valid = append(valid, m)
-		}
-	}
-	if len(valid) == 0 {
+	theme := strings.TrimSpace(out.Theme)
+	motif := strings.TrimSpace(out.Motif)
+	tone := strings.TrimSpace(out.Tone)
+	if theme == "" && motif == "" && tone == "" {
 		return errEmptyGeneration
 	}
-	pick := valid[seededRandInt(len(valid))]
 
 	newCfg := *h.cfg
 	newCfg.Story = *sc
-	newCfg.Story.Theme = pick // theme & motif are merged in the UI
+	// The Theme & Motif Generate button fills the three fields of its card:
+	// Theme, Literary motif and Tone. Only non-empty LLM answers overwrite.
+	if theme != "" {
+		newCfg.Story.Theme = theme
+	}
+	if motif != "" {
+		newCfg.Story.Motif = motif
+	}
+	if tone != "" {
+		newCfg.Story.Tone = tone
+	}
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
@@ -521,17 +585,6 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 	}
 	h.cfg = &newCfg
 	return nil
-}
-
-// seededRandInt returns a pseudo-random int in [0,n) seeded from the clock —
-// good enough to vary motif picks between clicks without importing math/rand
-// global state.
-func seededRandInt(n int) int {
-	if n <= 1 {
-		return 0
-	}
-	ns := time.Now().UnixNano()
-	return int(ns % int64(n))
 }
 
 // —— story_idea ——
@@ -676,15 +729,15 @@ func lengthLabelEN(length string) string {
 }
 
 var structureLabels = map[string][2]string{ // key -> {zh, en}
-	"three_act":            {"three", "3-Act Structure"},
-	"six_act":              {"six", "6-Act Structure"},
-	"fichtean":             {"thread", "Fichtean Curve"},
-	"freytag":              {"gridgoldcharacter-count", "Freytag's Pyramid"},
-	"seven_point":          {"sevendot", "Seven-Point Structure"},
-	"heros_journey":        {"of", "Hero's Journey"},
-	"heros_journey_simple": {"of()", "Hero's Journey (Simplified)"},
-	"save_the_cat":         {"cat(Save the Cat!)", "Save the Cat!"},
-	"episodic":             {"billyuan", "Episodic Structure"},
+	"three_act":            {"Tres actos", "3-Act Structure"},
+	"six_act":              {"Seis actos", "6-Act Structure"},
+	"fichtean":             {"Curva de Fichtean", "Fichtean Curve"},
+	"freytag":              {"Pirámide de Freytag", "Freytag's Pyramid"},
+	"seven_point":          {"Estructura de siete puntos", "Seven-Point Structure"},
+	"heros_journey":        {"El viaje del héroe", "Hero's Journey"},
+	"heros_journey_simple": {"El viaje del héroe (simplificado)", "Hero's Journey (Simplified)"},
+	"save_the_cat":         {"Save the Cat!", "Save the Cat!"},
+	"episodic":             {"Estructura episódica", "Episodic Structure"},
 }
 
 func structureLabel(structure, lang string) string {
@@ -1036,7 +1089,7 @@ func (h *Handlers) generateOrganizations(ctx context.Context, sc *config.StoryCo
 	}
 	if len(charLines) > 0 {
 		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
-			prompt += "\n[canusehorn]\n" + strings.Join(charLines, ", ") + "\nmembers character-countparagraphonlycanmakeuseupperhorn. "
+			prompt += "\n[NOMBRES DE PERSONAJES DISPONIBLES]\n" + strings.Join(charLines, ", ") + "\nEl campo members solo puede referenciar nombres de esta lista."
 		} else {
 			prompt += "\n[AVAILABLE CHARACTER NAMES]\n" + strings.Join(charLines, ", ") + "\nThe members field may only reference names from this list."
 		}
@@ -1430,20 +1483,31 @@ func (h *Handlers) generateWorldview(ctx context.Context, sc *config.StoryConfig
 	return nil
 }
 
-// —— locations —— (worldview entries with Category == "location")
+// —— worldview batch —— (generate entries across ALL categories at once:
+// geography, location, faction, rule, knowledge, history, other). Kept for
+// the chat "worldview" section when no entry target is given. The config-page
+// Worldview card now uses generateWorldviewCategory per category instead, so
+// each section only produces what the author actually asked for. When
+// LocationsEnabled is false the "location" category is excluded.
 
-func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig) error {
+func (h *Handlers) generateWorldviewBatch(ctx context.Context, sc *config.StoryConfig) error {
 	prompt := storyParamsContext(sc, h.cfg.Language)
 
-	existing := h.settings.Locations()
-	if len(existing) > 0 {
-		lines := make([]string, 0, len(existing))
-		for _, w := range existing {
-			lines = append(lines, "- "+w.Name)
-		}
-		prompt += "\n[EXISTING LOCATIONS]\n" + strings.Join(lines, "\n") + "\nKeep the existing ones and add any locations the story idea implies but that are missing."
-
+	categories := []string{"geography", "faction", "rule", "knowledge", "history", "other"}
+	if sc.LocationsEnabled {
+		categories = append(categories, "location")
 	}
+
+	existingLines := make([]string, 0, len(h.settings.Worldview))
+	for _, w := range h.settings.Worldview {
+		existingLines = append(existingLines, fmt.Sprintf("- [%s] %s", w.Category, w.Name))
+	}
+	if len(existingLines) > 0 {
+		prompt += "\n[EXISTING WORLDBUILDING ENTRIES]\n" + strings.Join(existingLines, "\n") + "\nKeep the existing ones; only add new entries for what the story implies but is missing."
+	} else {
+		prompt += "\nThere are no worldbuilding entries yet — create them from scratch."
+	}
+
 	orgLines := make([]string, 0, len(h.settings.Organizations))
 	for _, o := range h.settings.Organizations {
 		orgLines = append(orgLines, o.Name)
@@ -1452,52 +1516,63 @@ func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig
 	for _, c := range h.settings.Characters {
 		charLines = append(charLines, c.Name)
 	}
-	prompt += "\nDesign 3-6 important locations/scenes for this story (cities, strongholds, landmarks, hidden places...). For each provide name, a short description and comma-separated tags (may mention existing organizations or characters)."
+
+	prompt += fmt.Sprintf("\nDesign the worldview of this story as concise entries spread across these categories: %s. Cover every category that matters for this story (geography & key places, factions/power groups, governing rules or magic-system constraints, knowledge/lore, pivotal history) and generate as many entries per category as the story genuinely needs — skip a category entirely if it does not apply. For each entry provide name, category, a short concrete description consistent with the story idea, genre and tone, and comma-separated tags (you may reference existing organizations or characters).", strings.Join(categories, ", "))
 
 	if len(orgLines) > 0 || len(charLines) > 0 {
 		names := append(append([]string{}, orgLines...), charLines...)
 		prompt += "\n[RELATED ENTITIES] " + strings.Join(names, ", ") + " (you may reference them in tags)"
-
 	}
-	prompt += jsonRule(h.cfg.Language, `{"locations":[{"name":"...","description":"...","tags":"..."}]}`)
+
+	prompt += jsonRule(h.cfg.Language, `{"entries":[{"name":"...","category":"geography|location|faction|rule|knowledge|history|other","description":"...","tags":"..."}]}`)
 
 	var out struct {
-		Locations []struct {
+		Entries []struct {
 			Name        string `json:"name"`
+			Category    string `json:"category"`
 			Description string `json:"description"`
 			Tags        string `json:"tags"`
-		} `json:"locations"`
+		} `json:"entries"`
 	}
 	if err := h.llmJSON(ctx, prompt, &out); err != nil {
 		return err
 	}
-	if len(out.Locations) == 0 {
+	if len(out.Entries) == 0 {
 		return errEmptyGeneration
+	}
+
+	validCategory := map[string]bool{}
+	for _, c := range categories {
+		validCategory[c] = true
 	}
 
 	next := *h.settings
 	next.Worldview = append([]story.WorldviewEntry{}, h.settings.Worldview...)
 	existingNames := map[string]bool{}
 	for _, w := range next.Worldview {
-		if w.Category == story.WorldviewCategoryLocation {
-			existingNames[strings.TrimSpace(w.Name)] = true
-		}
+		existingNames[strings.ToLower(strings.TrimSpace(w.Name))] = true
 	}
 	ps := &next
 	added := 0
-	for _, gen := range out.Locations {
+	for _, gen := range out.Entries {
 		name := strings.TrimSpace(gen.Name)
-		if name == "" || existingNames[name] {
+		cat := strings.TrimSpace(strings.ToLower(gen.Category))
+		if name == "" || existingNames[strings.ToLower(name)] {
 			continue
+		}
+		if !validCategory[cat] {
+			// Unknown/disallowed category (e.g. "location" when disabled): keep
+			// the entry but file it under "other" so it still shows in the UI.
+			cat = "other"
 		}
 		next.Worldview = append(next.Worldview, story.WorldviewEntry{
 			ID:          ps.NextWorldviewID(),
-			Category:    story.WorldviewCategoryLocation,
+			Category:    cat,
 			Name:        name,
 			Description: strings.TrimSpace(gen.Description),
 			Tags:        strings.TrimSpace(gen.Tags),
 		})
-		existingNames[name] = true
+		existingNames[strings.ToLower(name)] = true
 		added++
 	}
 	if added == 0 {
@@ -1511,6 +1586,142 @@ func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig
 	}
 	h.settings = &next
 	return nil
+}
+
+// —— worldview per-category —— (one section per category in the Worldview
+// card: geography, location, faction, rule, knowledge, history, other). Each
+// section's Generate button only produces entries for its own category, and
+// the number of entries is decided by the LLM according to what the story
+// actually needs ("other" gets a soft cap so it never swells). The "location"
+// category requires LocationsEnabled. Existing entries are kept; only new,
+// non-duplicated ones are added.
+
+// worldviewCategoryForSection resolves the target category for a per-category
+// worldview section (wv_geography, ...). An explicit request override wins;
+// otherwise the category is derived from the section key.
+func worldviewCategoryForSection(section, override string) string {
+	if c := strings.TrimSpace(override); c != "" {
+		return c
+	}
+	return agent.WorldviewCategoryBySection()[section]
+}
+
+func (h *Handlers) generateWorldviewCategory(ctx context.Context, sc *config.StoryConfig, category string) error {
+	category = strings.TrimSpace(strings.ToLower(category))
+	if category == "" {
+		return errors.New("worldview category is required")
+	}
+	if category == story.WorldviewCategoryLocation && !sc.LocationsEnabled {
+		return errors.New("locations are disabled in the novel parameters")
+	}
+
+	prompt := storyParamsContext(sc, h.cfg.Language)
+
+	existing := make([]string, 0)
+	for _, w := range h.settings.Worldview {
+		if strings.EqualFold(strings.TrimSpace(w.Category), category) {
+			existing = append(existing, "- "+w.Name+": "+w.Description)
+		}
+	}
+	if len(existing) > 0 {
+		prompt += "\n[EXISTING \"" + category + "\" ENTRIES]\n" + strings.Join(existing, "\n") + "\nKeep the existing ones; only add new entries for what the story implies but is missing."
+	} else {
+		prompt += "\nThere are no \"" + category + "\" entries yet — create them from scratch."
+	}
+
+	orgLines := make([]string, 0, len(h.settings.Organizations))
+	for _, o := range h.settings.Organizations {
+		orgLines = append(orgLines, o.Name)
+	}
+	charLines := make([]string, 0, len(h.settings.Characters))
+	for _, c := range h.settings.Characters {
+		charLines = append(charLines, c.Name)
+	}
+
+	guidance := map[string]string{
+		"geography": "regions, terrain, climate, borders, routes and other spatial facts of the world",
+		"location":  "specific cities, buildings, landmarks or scenes where the story takes place",
+		"faction":   "power groups that drive the plot (sects, companies, families, guilds, secret societies...)",
+		"rule":      "governing rules of the world: physical/magic-system constraints, laws, taboos and their costs",
+		"knowledge": "lore the characters can know or discover: legends, sciences, secrets, in-world books",
+		"history":   "pivotal past events, wars, eras and their consequences for the present story",
+		"other":     "any other worldbuilding element that does not fit the standard categories",
+	}[category]
+	if guidance == "" {
+		guidance = "worldbuilding elements of this kind"
+	}
+
+	countRule := "Generate as many entries as this story genuinely needs for the category (typically 2-6)."
+	if category == "other" {
+		countRule = "Only generate entries that clearly do not fit geography/location/faction/rule/knowledge/history, and keep it minimal (at most 3)."
+	}
+
+	prompt += fmt.Sprintf("\nDesign the \"%s\" dimension of this story's worldview: %s. %s For each entry provide name, a short concrete description consistent with the story idea, genre and tone, and comma-separated tags (you may reference existing organizations or characters). Every entry MUST belong to the category \"%s\".", category, guidance, countRule, category)
+
+	if len(orgLines) > 0 || len(charLines) > 0 {
+		names := append(append([]string{}, orgLines...), charLines...)
+		prompt += "\n[RELATED ENTITIES] " + strings.Join(names, ", ") + " (you may reference them in tags)"
+	}
+
+	prompt += jsonRule(h.cfg.Language, `{"entries":[{"name":"...","description":"...","tags":"..."}]}`)
+
+	var out struct {
+		Entries []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Tags        string `json:"tags"`
+		} `json:"entries"`
+	}
+	if err := h.llmJSON(ctx, prompt, &out); err != nil {
+		return err
+	}
+	if len(out.Entries) == 0 {
+		return errEmptyGeneration
+	}
+
+	next := *h.settings
+	next.Worldview = append([]story.WorldviewEntry{}, h.settings.Worldview...)
+	existingNames := map[string]bool{}
+	for _, w := range next.Worldview {
+		existingNames[strings.ToLower(strings.TrimSpace(w.Name))] = true
+	}
+	ps := &next
+	added := 0
+	for _, gen := range out.Entries {
+		name := strings.TrimSpace(gen.Name)
+		if name == "" || existingNames[strings.ToLower(name)] {
+			continue
+		}
+		next.Worldview = append(next.Worldview, story.WorldviewEntry{
+			ID:          ps.NextWorldviewID(),
+			Category:    category,
+			Name:        name,
+			Description: strings.TrimSpace(gen.Description),
+			Tags:        strings.TrimSpace(gen.Tags),
+		})
+		existingNames[strings.ToLower(name)] = true
+		added++
+	}
+	if added == 0 {
+		return errEmptyGeneration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := story.SaveProjectSettings(h.settingsPath, &next); err != nil {
+		return err
+	}
+	h.settings = &next
+	return nil
+}
+
+// —— locations —— (worldview entries with Category == "location"). Thin alias
+// of the per-category worldview generator so both section keys ("locations"
+// from the chat tool and "wv_location" from the Worldview card button) share
+// exactly one implementation.
+
+func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig) error {
+	return h.generateWorldviewCategory(ctx, sc, "location")
 }
 
 // —— relations ——

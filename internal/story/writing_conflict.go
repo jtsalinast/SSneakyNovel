@@ -162,11 +162,11 @@ func splitFactCheckIssues(issues string) []string {
 // pending conflict chapter if set, otherwise the writing frontier chapter.
 func ResolveForceReviewIndex(state *Progress) (int, error) {
 	if state == nil {
-		return -1, fmt.Errorf("noadvancedegreeposture")
+		return -1, fmt.Errorf("no hay un capítulo en estado de avance")
 	}
 	if c := state.PendingWritingConflict; c != nil {
 		if c.ChapterIndex < 0 || c.ChapterIndex >= len(state.Chapters) {
-			return -1, fmt.Errorf("chaptersectioncordno")
+			return -1, fmt.Errorf("índice de capítulo inválido")
 		}
 		return c.ChapterIndex, nil
 	}
@@ -180,7 +180,21 @@ func ResolveForceReviewIndex(state *Progress) (int, error) {
 // PromoteWritingToReview moves the chapter at idx to review and clears any pending conflict.
 func PromoteWritingToReview(state *Progress, idx int) error {
 	if state == nil || idx < 0 || idx >= len(state.Chapters) {
-		return fmt.Errorf("chaptersectioncordno")
+		return fmt.Errorf("índice de capítulo inválido")
+	}
+	// The user chose to keep the conflicted draft in review: capture its
+	// unresolved fact-check issues as continuity notes before the conflict is
+	// cleared, so later chapters and outline plannings avoid repeating them.
+	if c := state.PendingWritingConflict; c != nil && c.ChapterIndex == idx && len(state.Chapters[idx].ContinuityNotes) == 0 {
+		notes := []string{}
+		for _, issue := range c.Issues {
+			if n := strings.TrimSpace(issue); n != "" {
+				notes = append(notes, Truncate(n, 200))
+			}
+		}
+		if len(notes) > 0 {
+			state.Chapters[idx].ContinuityNotes = notes[:min(len(notes), 6)]
+		}
 	}
 	state.Chapters[idx].Status = StatusReview
 	state.PendingWritingConflict = nil

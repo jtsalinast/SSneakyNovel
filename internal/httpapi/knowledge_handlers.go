@@ -58,10 +58,10 @@ func (h *Handlers) prepareSettingRevision(w http.ResponseWriter, r *http.Request
 		seen[id] = true
 	}
 	data, _ := json.Marshal(selected)
+	// NOTE: a corrupted English variant of this instruction previously replaced
+	// the canonical text when language==EN. The canonical English text is used
+	// for every locale (the model handles mixed-language prompts).
 	instruction := "\n[Author-selected story settings]\nThese are authoritative rules of this novel, whether fictional or realistic. Correct this chapter and related descriptions to follow them, including conflicting extracted facts. Preserve unrelated plot and style. Do not replace these rules with real-world assumptions.\n"
-	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
-		instruction = "\n[makefinger smallsay]\nbyloweristhissmallsay brightthen, canbyisvoidorknowrecognize. pleasereceiptthisthischapterandconnectbelt, includingandof alreadywithdraw; insurestaynocloseandwind, not userecognizethisthen. \n"
-	}
 	body.Feedback += instruction + string(data)
 	return true
 }

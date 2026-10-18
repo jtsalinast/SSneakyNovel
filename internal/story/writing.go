@@ -106,7 +106,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	}
 
 	if state.CurrentChapterIndex >= len(state.Chapters) {
-		return fmt.Errorf("haschaptersectionalready")
+		return fmt.Errorf("todos los capítulos ya fueron escritos")
 	}
 
 	i := state.CurrentChapterIndex
@@ -116,7 +116,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	ch := &state.Chapters[i]
 
 	if ch.Status == StatusAccepted {
-		return fmt.Errorf("# %d chapteralready, pleasewhenfrontchaptersectionorheavyplaceadvancedegree", ch.Num)
+		return fmt.Errorf("el capítulo #%d ya está aceptado; ve al capítulo actual o reinicia el avance", ch.Num)
 	}
 
 	ch.Status = StatusWriting
@@ -126,10 +126,11 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 
 	logger.InfoKey("log.chapter_start", ch.Num, ch.Title)
 
-	// writefront: thischapterbigifalreadyandwrite out (such asbigarrangemeetbutfrontalreadyrecognize),
-	// firstmostsmallbigagainmove, by passhourbigwrite outshieldinside.
+	// Pre-check: if this chapter's outline contradicts what has already been
+	// written (e.g. re-staging a meeting that already happened), revise it
+	// first — with safeguards against degraded overwrites — before writing.
 	if i > 0 {
-		logger.StepInfo(1, 6, "checking this chapter's outline against the current story state...")
+		logger.StepInfo(1, 6, "Checking this chapter's outline against the current story state...")
 		revised, err := checkOutlineConsistency(ctx, apiCfg, cfg, state, i, logger)
 		if err != nil {
 			logger.WarnKey("log.outline_check_failed", err)
@@ -159,23 +160,28 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	}
 	extraConstraints := ""
 	var accumulatedIssues []string
+	// Issues fixed via the reconcilable-constraint retry path. When the chapter
+	// finally passes with them applied, they become this chapter's continuity
+	// notes (persisted by ConfirmChapterAction) so later chapters/plannings
+	// treat them as hard "do not repeat" constraints.
+	var resolvedIssues []string
 
 	for attempt := 0; attempt <= maxFactCheckRetries; attempt++ {
 		if ctx.Err() != nil {
-			return fmt.Errorf("alreadywithdraw")
+			return fmt.Errorf("generación cancelada")
 		}
-		logger.StepInfo(2, 6, "inthoughtandwrite...")
+		logger.StepInfo(2, 6, "Escribiendo la prosa del capítulo...")
 		content, err := generateChapterContentWithLengthControl(ctx, apiCfg, cfg, state, i, settings, extraConstraints, logger)
 		if err != nil {
 			return err
 		}
 		if content == "" {
-			return fmt.Errorf("lifeorquiltwithdraw")
+			return fmt.Errorf("la generación de prosa falló o fue cancelada")
 		}
 		ch.Content = content
 		logger.InfoKey("log.prose_done", prose.CountProseUnits(content))
 
-		logger.StepInfo(3, 6, "inthischapterwant to...")
+		logger.StepInfo(3, 6, "Resumiendo este capítulo para el historial...")
 		summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
 		if summary == "" {
 			return fmt.Errorf("summary generation failed or was canceled")
@@ -183,7 +189,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 		ch.Summary = summary
 		logger.InfoKey("log.summary_done")
 
-		logger.StepInfo(4, 6, "intothischapteradvancetravel...")
+		logger.StepInfo(4, 6, "Verifying this chapter against established facts...")
 		historySummary := buildHistorySummary(state, i)
 		factCheckResult := generateChapterFactCheckWithRetryLog(factCtx, apiCfg, cfg, state, i, content, historySummary, logger)
 
@@ -211,7 +217,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 					return err
 				}
 				if content == "" {
-					return fmt.Errorf("lifeorquiltwithdraw")
+					return fmt.Errorf("la generación de prosa falló o fue cancelada")
 				}
 				ch.Content = content
 				summary = generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
@@ -225,6 +231,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 					accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues))
 				} else {
 					logger.InfoKey("log.factcheck_constraint_pass")
+					resolvedIssues = mergeUniqueIssues(nil, accumulatedIssues)
 					break
 				}
 			}
@@ -244,13 +251,25 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	}
 
 	state.PendingWritingConflict = nil
+	// Persist the continuity notes on the in-progress chapter so they survive
+	// even if the user edits/confirms through another path. ConfirmChapterAction
+	// keeps them when moving the chapter to accepted.
+	if len(resolvedIssues) > 0 {
+		notes := []string{}
+		for _, issue := range resolvedIssues {
+			if n := strings.TrimSpace(issue); n != "" {
+				notes = append(notes, Truncate(n, 200))
+			}
+		}
+		ch.ContinuityNotes = notes[:min(len(notes), 6)]
+	}
 
 	if len(state.Foreshadows) > 0 {
-		logger.StepInfo(5, 6, "inmorenewposture...")
+		logger.StepInfo(5, 6, "Updating foreshadow tracking...")
 		syncForeshadowsAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
 	}
 
-	logger.StepInfo(6, 6, "inprotectmemory...")
+	logger.StepInfo(6, 6, "Syncing narrative memory...")
 	syncMemoryAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
 	// Memory sync commits a copied chapter slice, so refresh the chapter reference.
 	ch = &state.Chapters[i]
@@ -267,8 +286,21 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	return nil
 }
 
-// parseFactCheckResult untiefruit.
-// firstuntie JSON middle result character-countparagraph, untiehourretreatforcharacter-count.
+// factVerdictFailRe matches an explicit FAIL verdict in JSON form ("result":
+// "FAIL") or in plain text (FAIL as a standalone word). The old substring scan
+// treated any occurrence of "FAIL" — including inside issue descriptions like
+// "the plan does not fail anywhere" or a PASS verdict explaining what did NOT
+// fail — as a failed check, triggering needless full-chapter regenerations.
+var factVerdictFailRe = regexp.MustCompile(`(?i)"result"\s*:\s*"?\s*FAIL\b|\bFAIL\b`)
+
+// factVerdictPassRe detects an explicit PASS verdict used as a tie-breaker when
+// both words appear in free-form prose.
+var factVerdictPassRe = regexp.MustCompile(`(?i)\bPASS\b`)
+
+// parseFactCheckResult parses the fact-check verdict.
+// It first tries to read the JSON result/issues fields; on failure it falls
+// back to strict keyword scanning that only treats a standalone FAIL token
+// (or the JSON verdict field) as a failed check.
 func parseFactCheckResult(raw string) (failed bool, issues string) {
 	cleaned := cleanJSONResponse(raw)
 	var resp struct {
@@ -276,17 +308,29 @@ func parseFactCheckResult(raw string) (failed bool, issues string) {
 		Issues []string `json:"issues"`
 	}
 	if jsonStr := llm.ExtractJSON(cleaned); jsonStr != "" {
-		if err := json.Unmarshal([]byte(jsonStr), &resp); err == nil && resp.Result != "" {
-			return strings.EqualFold(strings.TrimSpace(resp.Result), "FAIL"), strings.Join(resp.Issues, "; ")
+		if err := json.Unmarshal([]byte(jsonStr), &resp); err == nil && strings.TrimSpace(resp.Result) != "" {
+			verdict := strings.ToUpper(strings.TrimSpace(resp.Result))
+			failed = strings.HasPrefix(verdict, "FAIL")
+			return failed, strings.Join(resp.Issues, "; ")
 		}
 	}
-	// fallback: nountie JSON hourby character-count
-	return strings.Contains(raw, "FAIL"), Truncate(raw, 300)
+	// fallback: the response is not valid JSON. Scan for a standalone FAIL
+	// verdict token; if the text also carries a standalone PASS token, prefer
+	// PASS (models often write "PASS — no issues" but mention failures only
+	// hypothetically). Issue list, when failed, is the truncated raw text.
+	hasFail := factVerdictFailRe.FindString(raw) != ""
+	hasPass := factVerdictPassRe.FindString(raw) != ""
+	failed = hasFail && !hasPass
+	if failed {
+		return true, Truncate(raw, 300)
+	}
+	return false, ""
 }
 
-// checkOutlineConsistency writefrontbigone: toperfrontwant toandupperonechaptertail,
-// thischapterbigisalreadyand(such asarrangemeetbutfrontalreadyrecognize).
-// houruse AI give mostsmallthischapterbig(onlywhenfrontchapter), returnishairlife.
+// checkOutlineConsistency verifies the upcoming chapter's outline does not
+// contradict what has already been written (e.g. restaging an event that
+// already happened). It asks the AI for a minimal revision of THIS chapter's
+// outline only when earlier chapters changed it; returns whether it revised.
 func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, logger *sse.LogBroadcaster) (bool, error) {
 	ch := &state.Chapters[idx]
 	if strings.TrimSpace(ch.Outline) == "" {
@@ -300,7 +344,7 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg 
 			if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 				prevEnding = "[Previous chapter ending]\n" + tail + "\n\n"
 			} else {
-				prevEnding = "[upperonechaptertailplain]\n" + tail + "\n\n"
+				prevEnding = "[Final del capítulo anterior]\n" + tail + "\n\n"
 			}
 		}
 	}
@@ -336,13 +380,74 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		return false, nil
 	}
 
+	revised := strings.TrimSpace(resp.RevisedOutline)
+	// Guard against the checker "revising" the outline into a generic
+	// summary: an accepted rewrite must preserve the original chapter's
+	// substance (length and named entities). Otherwise we would silently
+	// degrade the detailed outline into plot drift that every later
+	// generation inherits. When in doubt, keep the human-approved outline.
+	oldRunes := []rune(ch.Outline)
+	newRunes := []rune(revised)
+	if len(newRunes) < len(oldRunes)/2 {
+		logger.WarnKey("log.outline_revision_rejected", ch.Num)
+		return false, nil
+	}
+	if droppedNamedEntities(ch.Outline, revised) {
+		logger.WarnKey("log.outline_revision_rejected", ch.Num)
+		return false, nil
+	}
+
 	logger.WarnKey("log.outline_conflict", ch.Num, strings.Join(resp.Issues, "; "))
-	ch.Outline = strings.TrimSpace(resp.RevisedOutline)
+	ch.Outline = revised
 	return true, nil
 }
 
+// entityPattern matches capitalized multi-token names (character/place
+// entities) commonly used in Latin-script outlines. Single common words are
+// filtered through the stoplist below; CJK text yields no matches, which
+// droppedNamedEntities treats as "nothing to compare".
+var entityPattern = regexp.MustCompile(`[A-ZÀ-ÖØ-Þ][\p{L}'’-]*(?:[ \t]+[A-ZÀ-ÖØ-Þ][\p{L}'’-]*)*`)
+
+var entityStoplist = map[string]bool{
+	"The": true, "A": true, "An": true, "He": true, "She": true, "It": true,
+	"They": true, "We": true, "In": true, "On": true, "At": true, "But": true,
+	"And": true, "Or": true, "If": true, "When": true, "While": true, "After": true,
+	"Before": true, "Meanwhile": true, "However": true, "Then": true, "Finally": true,
+	"Chapter": true, "His": true, "Her": true, "Their": true, "This": true, "That": true,
+	"There": true, "Here": true, "As": true, "No": true, "Yes": true, "Not": true,
+}
+
+// entitySet extracts candidate proper-name entities from text.
+func entitySet(text string) map[string]bool {
+	set := map[string]bool{}
+	for _, m := range entityPattern.FindAllString(text, -1) {
+		m = strings.TrimSpace(m)
+		if m == "" || entityStoplist[m] || len([]rune(m)) < 3 {
+			continue
+		}
+		set[strings.ToLower(m)] = true
+	}
+	return set
+}
+
+// droppedNamedEntities reports whether the revised outline loses named
+// entities that were present in the original outline.
+func droppedNamedEntities(original, revised string) bool {
+	orig := entitySet(original)
+	if len(orig) == 0 {
+		return false // nothing to compare (non-Latin script or nameless outline)
+	}
+	rev := entitySet(revised)
+	for e := range orig {
+		if !rev[e] {
+			return true
+		}
+	}
+	return false
+}
+
 // ReviseChapterAction targets the "frontier chapter" (a chapter in review/writing state).
-// makeusemostsmallword(plain), andinwant tohourlater pending chaptersectionbig.
+// Usa la menor cantidad de palabras posible y no toca tramas de capítulos pendientes posteriores.
 func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath, feedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
 	if err := llm.ValidateConfig(apiCfg); err != nil {
 		return err
@@ -353,7 +458,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 
 	chapterIdx := state.CurrentChapterIndex
 	if chapterIdx < 0 || chapterIdx >= len(state.Chapters) {
-		return fmt.Errorf("chaptersectioncordcross")
+		return fmt.Errorf("índice de capítulo fuera de rango")
 	}
 
 	ch := &state.Chapters[chapterIdx]
@@ -408,8 +513,8 @@ func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	return nil
 }
 
-// ReviseSpecificChapterAction tofingercompileNo. chaptersectiondomostsmall(includingalreadychaptersection).
-// onlythechapterandwant to, not tentacleitshechaptersection, bigoradvancedegreefinger.
+// ReviseSpecificChapterAction revisa un capítulo por número (incluidos los ya aceptados).
+// Solo afecta a ese capítulo; no toca otros capítulos, tramas ni el cursor de avance.
 func ReviseSpecificChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, chapterNum int, feedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
 	if err := llm.ValidateConfig(apiCfg); err != nil {
 		return err
@@ -485,16 +590,34 @@ func ConfirmChapterAction(state *Progress, progressPath string) error {
 
 	chapterIdx := state.CurrentChapterIndex
 	if chapterIdx < 0 || chapterIdx >= len(state.Chapters) {
-		return fmt.Errorf("chaptersectioncordcross")
+		return fmt.Errorf("índice de capítulo fuera de rango")
 	}
 
 	ch := &state.Chapters[chapterIdx]
 	if ch.Status != StatusReview {
-		return fmt.Errorf("whenfrontchaptersectionnot inposture, no")
+		return fmt.Errorf("el capítulo actual no está en estado de revisión")
 	}
 
 	ch.Status = StatusAccepted
 	ch.KnowledgeTracked = true
+	// The fact-check issues that this chapter had to overcome are exactly the
+	// continuity pitfalls later chapters tend to repeat (a character knowing
+	// something they shouldn't yet, a location reached too early…). Record them
+	// on the chapter so outline generation and writing treat them as hard
+	// constraints. Only set once; manual edits after acceptance keep the notes.
+	if len(ch.ContinuityNotes) == 0 && state.PendingWritingConflict != nil &&
+		state.PendingWritingConflict.ChapterIndex == chapterIdx {
+		notes := []string{}
+		for _, issue := range state.PendingWritingConflict.Issues {
+			if n := strings.TrimSpace(issue); n != "" {
+				notes = append(notes, Truncate(n, 200))
+			}
+		}
+		if len(notes) > 0 {
+			next.Chapters[chapterIdx].ContinuityNotes = notes[:min(len(notes), 6)]
+			ch = &state.Chapters[chapterIdx]
+		}
+	}
 	state.CurrentChapterIndex = chapterIdx + 1
 	if err := SaveProgress(progressPath, state); err != nil {
 		return err
@@ -519,6 +642,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 	characterContext, worldviewContext := buildChapterSettingsContexts(settings, ch, lang)
 	outlineConstraints := buildOutlineConstraintsForLang(state, idx, lang)
 	memoryContext := buildMemoryForLang(state, idx, lang)
+	voiceSamples := buildVoiceSamplesForLang(state, idx, settings, lang)
 
 	minLen, maxLen := calcChapterLengthRange(snapshot.TargetWordsPerChapter)
 	targetWords := snapshot.TargetWordsPerChapter
@@ -541,6 +665,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 		"TargetWordsMax":     fmt.Sprintf("%d", maxLen),
 		"Foreshadows":        foreshadowContext,
 		"Memory":             memoryContext,
+		"VoiceSamples":       voiceSamples,
 		"OutlineConstraints": outlineConstraints,
 	})
 	userPrompt = finalizeChapterWritingPrompt(cfg.Prompts.ChapterWriting, userPrompt, minLen, maxLen, targetWords, lang)
@@ -560,7 +685,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 		logger.ContentChunk(idx, chunk)
 	}
 
-	// knowfrontclearempty(heavy/moveconnectwritehourinside)
+	// Stream the prose live to the UI while generating.
 	logger.StreamStart(idx)
 	content, err := llm.CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
 	if err != nil {
@@ -576,15 +701,22 @@ func generateChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *confi
 			return ""
 		}
 		content, err := generateChapterContentStream(ctx, apiCfg, cfg, state, idx, settings, extraWritingConstraints, logger)
-		if err == nil && content != "" {
+		if err == nil && strings.TrimSpace(content) != "" {
 			return content
 		}
-		if llm.IsFatalAPIError(err) {
+		if err == nil {
+			err = fmt.Errorf("la API devolvió una respuesta vacía")
+		}
+		if llm.IsFatalAPIError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
-
 		retryCount++
+		if retryCount > llm.MaxAPIRetries {
+			logger.ErrorKey("log.max_retries_exceeded", fmt.Errorf("se agotaron los %d reintentos de generación del capítulo %d", llm.MaxAPIRetries, idx+1))
+			return ""
+		}
+
 		waitTime := llm.RetryWaitTime(retryCount)
 		logger.WarnKey("log.content_gen_retry", err, retryCount, waitTime)
 		select {
@@ -611,15 +743,22 @@ func generateChapterSummaryWithRetryLog(ctx context.Context, apiCfg *config.APIC
 			return ""
 		}
 		summary, err := generateChapterSummary(ctx, apiCfg, cfg, content)
-		if err == nil && summary != "" {
+		if err == nil && strings.TrimSpace(summary) != "" {
 			return summary
 		}
-		if llm.IsFatalAPIError(err) {
+		if err == nil {
+			err = fmt.Errorf("la API devolvió una respuesta vacía")
+		}
+		if llm.IsFatalAPIError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
-
 		retryCount++
+		if retryCount > llm.MaxAPIRetries {
+			logger.ErrorKey("log.max_retries_exceeded", fmt.Errorf("se agotaron los %d reintentos de resumen del capítulo", llm.MaxAPIRetries))
+			return ""
+		}
+
 		waitTime := llm.RetryWaitTime(retryCount)
 		logger.WarnKey("log.summary_retry", err, retryCount, waitTime)
 		select {
@@ -655,15 +794,22 @@ func generateChapterFactCheckWithRetryLog(ctx context.Context, apiCfg *config.AP
 			return ""
 		}
 		result, err := generateChapterFactCheck(ctx, apiCfg, cfg, state, idx, content, historySummary)
-		if err == nil && result != "" {
+		if err == nil && strings.TrimSpace(result) != "" {
 			return result
 		}
-		if llm.IsFatalAPIError(err) {
+		if err == nil {
+			err = fmt.Errorf("la API devolvió una respuesta vacía")
+		}
+		if llm.IsFatalAPIError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			logger.ErrorKey("log.fatal_no_retry", err)
 			return ""
 		}
-
 		retryCount++
+		if retryCount > llm.MaxAPIRetries {
+			logger.ErrorKey("log.max_retries_exceeded", fmt.Errorf("se agotaron los %d reintentos de verificación de hechos del capítulo %d", llm.MaxAPIRetries, idx+1))
+			return ""
+		}
+
 		waitTime := llm.RetryWaitTime(retryCount)
 		logger.WarnKey("log.factcheck_api_retry", err, retryCount, waitTime)
 		select {
@@ -675,7 +821,7 @@ func generateChapterFactCheckWithRetryLog(ctx context.Context, apiCfg *config.AP
 }
 
 // quoteLineRegexp intentseemiddle usetravel: by '> ' openhead(markdown useblock).
-// useinfrontplainlaterdotstrike"use"by , frontmoveBAmiddlecharacter-countby '> ' frontenterintentseeloseenter.
+// Uses the plain-text quote marker ">" at line starts to locate the quoted passage in the current text.
 var quoteLineRegexp = regexp.MustCompile(`(?m)^[ \t]*>[ \t]?(.+?)\s*$`)
 
 // errSegmentFallback fallback parsing (e.g. template usage failed, AI output paragraph numbering inconsistent),
@@ -706,9 +852,9 @@ func extractQuotedSentences(feedback string) (quotes []string, cleanFeedback str
 	return quotes, cleanFeedback
 }
 
-// findParagraphsContaining inchaptersectionmiddletobagoneusesentence paragraph.
-// paragraphpassagefirstby doubletravelcutdivide; ifplainnot emptytravelthenby billtravelcutdivide. sep formakeuse divide,
-// heavygrouphourwhiskeruseonedivide, thenassociationwritechapter travelgrid.
+// findParagraphsContaining localiza los párrafos del capítulo que contienen una cita.
+// Los párrafos se separan primero por doble salto de línea; si no hay, por salto simple. sep indica
+// el separador usado; al reagrupar se reconstruye el texto del capítulo tal cual.
 // ponytail: substring match on naive paragraph split; first hit per quote; miss → errSegmentFallback / full-chapter revise.
 func findParagraphsContaining(content string, quotes []string) (matchedIdx []int, paragraphs []string, sep string, ok bool) {
 	sep = "\n\n"
@@ -739,7 +885,7 @@ func findParagraphsContaining(content string, quotes []string) (matchedIdx []int
 	return matchedIdx, paragraphs, sep, true
 }
 
-// trimEmptyEnds goexceptcutpiecetail emptywhiteparagraph(onlyemptywhitecharacter-count yuanplain).
+// trimEmptyEnds removes leading/trailing blank paragraphs (whitespace-only lines).
 func trimEmptyEnds(paras []string) []string {
 	start, end := 0, len(paras)
 	for start < end && strings.TrimSpace(paras[start]) == "" {
@@ -751,8 +897,8 @@ func trimEmptyEnds(paras []string) []string {
 	return paras[start:end]
 }
 
-// reviseChapterSegment tochaptersectionmiddlebagusesentence paragraphdopartmostsmall.
-// onlyheavywriteparagraph, itsplaininsurestay. returnnew chapter.
+// reviseChapterSegment revisa solo los párrafos citados del capítulo.
+// Reescribe únicamente esos párrafos; el resto permanece intacto. Devuelve el capítulo nuevo.
 // if template usage fails, or the AI output paragraph numbers are inconsistent with the expected count, return errSegmentFallback.
 func reviseChapterSegment(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, quotes []string, cleanFeedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) (string, error) {
 	ch := state.Chapters[chapterIdx]
@@ -924,7 +1070,7 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *config.APIConfig, cfg
 
 	var resp OutlineResponse
 	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return fmt.Errorf("untiebigJSON: %w", err)
+		return fmt.Errorf("parse JSON: %w", err)
 	}
 
 	for _, newCh := range resp.Chapters {
@@ -939,7 +1085,7 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *config.APIConfig, cfg
 	return nil
 }
 
-// futureOutlineWindow enterlaterchaptersectionbig windowmouthbigsmall(chapternumber)
+// futureOutlineWindow es el tamaño de la ventana de capítulos futuros (en número de capítulos)
 const futureOutlineWindow = 10
 
 // that omit a supported placeholder.
@@ -955,11 +1101,11 @@ func buildHistorySummary(state *Progress, idx int) string {
 }
 
 const (
-	prevTailMaxRunes = 800  // enterupperonechaptertailpartplain mostbigcharacter-countnumber
-	openingMaxRunes  = 1000 // connecthourwithdrawthischapteropenheadpieceparagraph mostbigcharacter-countnumber
+	prevTailMaxRunes = 800  // máximo de caracteres del fragmento del final del capítulo anterior
+	openingMaxRunes  = 1000 // max runes taken from the opening paragraphs of the chapter when linking
 )
 
-// tailAtParagraph withdraw content tailapprox maxRunes character-count, directionlatertotoparagraphpassageedge, fromsentenceopen.
+// tailAtParagraph devuelve el final de content con ~maxRunes caracteres, alineado a límite de párrafo.
 func tailAtParagraph(content string, maxRunes int) string {
 	trimmed := strings.TrimSpace(content)
 	runes := []rune(trimmed)
@@ -973,8 +1119,8 @@ func tailAtParagraph(content string, maxRunes int) string {
 	return strings.TrimSpace(tail)
 }
 
-// splitChapterOpening BAchaptersectioncutdivideforopenheadpieceparagraphandpartdivide, cutdotdirectionfronttotoparagraphpassageedge.
-// rest foremptytablechapterallcalculateopenhead(chaptersectionshort).
+// splitChapterOpening divide el capítulo en su párrafo de apertura y el resto; el corte queda en
+// el límite del primer párrafo. rest puede contener todo el capítulo si este es corto.
 func splitChapterOpening(content string, maxRunes int) (opening, rest string) {
 	runes := []rune(content)
 	if len(runes) <= maxRunes {
@@ -990,9 +1136,10 @@ func splitChapterOpening(content string, maxRunes int) (opening, rest string) {
 	return string(runes[:cut]), string(runes[cut:])
 }
 
-// SmoothTransitionsAction batchmeasurealreadychaptersectionof connect:
-// chapterBAupperonechaptertailpartandthischapteropenheadinteractgive AI disconnect, onlyinconnectlifehardhourmostsmallheavywritethischapteropenheadpieceparagraph.
-// eachonechapteri.e.passageplate, canalong withhourwithdrawandnot alreadypartdivide.
+// SmoothTransitionsAction revisa en lote las uniones entre capítulos escritos:
+// pasa a la IA el final del capítulo anterior y la apertura del actual; solo reescribe la primera
+// frase del capítulo actual cuando la conexión es dura. Cada capítulo se procesa secuencialmente
+// y los cambios pueden revertirse porque se guardan por separado.
 func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, logger *sse.LogBroadcaster) error {
 	if err := llm.ValidateConfig(apiCfg); err != nil {
 		return err
@@ -1006,17 +1153,17 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		}
 	}
 	if len(targets) == 0 {
-		return fmt.Errorf("hascan chaptersection(want totofew alreadychaptersection)")
+		return fmt.Errorf("no hay suficientes capítulos consecutivos ya escritos para suavizar transiciones")
 	}
 
 	logger.InfoKey("log.smooth_start", len(targets))
 	optimized := 0
 	for n, idx := range targets {
 		if ctx.Err() != nil {
-			return fmt.Errorf("alreadywithdraw")
+			return fmt.Errorf("generación cancelada")
 		}
 		ch := &state.Chapters[idx]
-		logger.StepInfo(n+1, len(targets), fmt.Sprintf("in# %d chapter<%s> connect...", ch.Num, ch.Title))
+		logger.StepInfo(n+1, len(targets), fmt.Sprintf("Suavizando transicion del capitulo #%d <%s>...", ch.Num, ch.Title))
 
 		prevTail := tailAtParagraph(state.Chapters[idx-1].Content, prevTailMaxRunes)
 		opening, rest := splitChapterOpening(ch.Content, openingMaxRunes)
@@ -1066,12 +1213,12 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 
 func PolishChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, skills []Skill, progressPath string, logger *sse.LogBroadcaster) error {
 	if chapterIdx < 0 || chapterIdx >= len(state.Chapters) {
-		return fmt.Errorf("chaptersectioncordcross")
+		return fmt.Errorf("índice de capítulo fuera de rango")
 	}
 
 	ch := &state.Chapters[chapterIdx]
 	if ch.Content == "" {
-		return fmt.Errorf("chaptersectioninsideforempty, no")
+		return fmt.Errorf("el capítulo está vacío")
 	}
 
 	skillsContent := FormatSkillsContent(skills)
@@ -1122,7 +1269,7 @@ func PolishChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("insuredepositadvancedegree: %w", err)
+		return fmt.Errorf("guardar progreso: %w", err)
 	}
 
 	return nil

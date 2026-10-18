@@ -215,19 +215,19 @@ func cleanJSONResponse(s string) string {
 }
 
 func ReviseOutlineAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, progressPath, cfgPath, feedback string, logger *sse.LogBroadcaster) error {
-	logger.StepInfo(1, 2, "inrootreceiptintentseebig...")
+	logger.StepInfo(1, 2, "Checking the outline against the current story state...")
 	if err := EnsureNarrativeCheckpoints(ctx, apiCfg, cfg, state, progressPath, logger); err != nil {
 		return err
 	}
 
 	if err := reviseOutline(ctx, apiCfg, cfg, state, settings, feedback, progressPath, cfgPath, logger); err != nil {
-		return fmt.Errorf("big: %w", err)
+		return fmt.Errorf("revision del outline fallo: %w", err)
 	}
 
-	logger.StepInfo(2, 2, "ininsuredepositlater big...")
+	logger.StepInfo(2, 2, "Saving the revised outline...")
 
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("insuredepositadvancedegree: %w", err)
+		return fmt.Errorf("guardar el progreso fallo: %w", err)
 	}
 
 	runOutlinePostProcessChecks(ctx, apiCfg, cfg, state, settings, progressPath, logger)
@@ -265,7 +265,7 @@ func EditChapterOutline(state *Progress, chapterNum int, title, outline string, 
 		}
 	}
 	if idx == -1 {
-		return fmt.Errorf("chaptersection %d not depositin", chapterNum)
+		return fmt.Errorf("el capítulo %d no existe", chapterNum)
 	}
 	if !outlineEditable(state.Chapters[idx].Status) {
 		return fmt.Errorf("only pending/writing/in-review chapters can be outlined (accepted chapters cannot)")

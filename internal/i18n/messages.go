@@ -42,6 +42,30 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_revised": {
 
 		LangEN: "Outline revised."},
+	"log.outline_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over the full outline..."},
+	"log.outline_analyze_cancelled": {
+
+		LangEN: "Outline analysis cancelled"},
+	"log.outline_analyze_failed": {
+
+		LangEN: "Outline analysis failed: %s"},
+	"log.outline_analyze_done": {
+
+		LangEN: "Outline analysis complete — %d editorial suggestions"},
+	"log.outline_analyze_proposing": {
+
+		LangEN: "Editor is drafting concrete outline replacements for this point..."},
+	"log.outline_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d chapter replacement(s) drafted"},
+	"log.outline_analysis_applied": {
+
+		LangEN: "Editorial suggestion applied to %d chapter(s)"},
+	"log.outline_analysis_cleared": {
+
+		LangEN: "Outline analysis cleared"},
 	"log.chapter_writing": {
 
 		LangEN: "Writing chapter %d..."},
@@ -278,6 +302,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_conflict": {
 
 		LangEN: "Chapter %d outline conflicts with story: %s"},
+	"log.outline_revision_rejected": {
+
+		LangEN: "Proposed outline revision for chapter %d was rejected (it dropped detail or named entities); keeping the approved outline"},
 	"log.chapter_modifying": {
 
 		LangEN: "Revising chapter %d \"%s\"..."},
@@ -365,6 +392,12 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_character_check_failed": {
 
 		LangEN: "Outline character check failed: %v"},
+	"log.outline_postprocess_skipped": {
+
+		LangEN: "Post-batch consistency checks skipped (state snapshot failed): %v"},
+	"log.outline_postprocess_panic": {
+
+		LangEN: "Post-batch consistency check crashed and was recovered: %v"},
 	"log.outline_character_report_save_failed": {
 
 		LangEN: "Failed to save outline character check report: %v"},

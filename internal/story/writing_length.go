@@ -106,7 +106,7 @@ func formatChapterLengthRequirementBlock(minLen, maxLen, target int, lang string
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("Chapter prose must be %d–%d words (target %d; tolerance ±%d words or ±%d%%, whichever is larger). Exceeding %d words is unacceptable — stay inside this chapter's outline only.", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
 	}
-	return fmt.Sprintf("character-countnumberwhiskergridmanufacturein %d–%d character-count(metric %d character-count; ±%d character-countor ±%d%%, withdrawbig). pass %d character-countnot canconnect, onlywritethischapterbiginside section. ", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
+	return fmt.Sprintf("La prosa del capítulo debe tener entre %d y %d palabras (objetivo: %d; tolerancia ±%d palabras o ±%d%%, la que sea mayor). Superar %d palabras no es aceptable: quédate dentro del outline de este capítulo.", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
 }
 
 func formatChapterLengthRetryFeedback(actual, minLen, maxLen int, lang string) string {
@@ -114,12 +114,12 @@ func formatChapterLengthRetryFeedback(actual, minLen, maxLen int, lang string) s
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			return fmt.Sprintf("IMPORTANT: The previous draft was %d words, exceeding the %d–%d word limit. Regenerate this chapter within the limit. Do not advance into later chapters; compress redundant description and keep only this chapter's outline beats.", actual, minLen, maxLen)
 		}
-		return fmt.Sprintf("heavywant to: upperonefor %d character-count, exit %d–%d character-countupper. pleaseheavynewwriteandgridmanufactureininside; not want towriteenterlaterchaptersectioninside, refinedwrite, onlyinsurestaythischapterbigsection. ", actual, minLen, maxLen)
+		return fmt.Sprintf("IMPORTANTE: El borrador anterior tenía %d palabras y superaba el límite de %d–%d. Regenera el capítulo dentro del límite; no avances a capítulos posteriores, comprime la descripción redundante y conserva solo los beats del outline de este capítulo.", actual, minLen, maxLen)
 	}
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("IMPORTANT: The previous draft was only %d words, below the %d–%d word range. Expand with concrete scene, action, and dialogue while staying inside this chapter's outline.", actual, minLen, maxLen)
 	}
-	return fmt.Sprintf("heavywant to: upperoneonly %d character-count, lowin %d–%d character-countlower. pleaseinnot exitthischapterbig frontlowertoolbody, movemakeandto. ", actual, minLen, maxLen)
+	return fmt.Sprintf("IMPORTANTE: El borrador anterior tenía solo %d palabras, por debajo del rango de %d–%d. Amplía con escenas concretas, acción y diálogo sin salirte del outline de este capítulo.", actual, minLen, maxLen)
 }
 
 func mergeWritingConstraints(a, b string) string {
@@ -154,11 +154,11 @@ Output ONLY the full revised chapter prose.
 [Chapter text]
 %s`, actual, minLen, maxLen, content)
 		} else {
-			userPrompt = fmt.Sprintf(`youissmallsaycompile. bylowerchaptersectionfor %d character-count, whiskerpressto %d–%d character-count. 
-innot thischaptersectionwalkdirection, travelforandclosekeyto frontlowerrefinedwriteandheavy; not gobigmiddle heartitem. 
-output only the revised text afterwards. 
+			userPrompt = fmt.Sprintf(`Eres un editor de novelas. El capítulo siguiente tiene %d palabras pero debe tener entre %d y %d palabras.
+Comprime sin alterar los beats de la trama, las acciones de los personajes ni los diálogos clave. Elimina descripción redundante y narración repetida; no borres eventos centrales del outline de este capítulo.
+Devuelve SOLO el texto revisado del capítulo.
 
-[chaptersection]
+[Texto del capítulo]
 %s`, actual, minLen, maxLen, content)
 		}
 	} else {
@@ -170,11 +170,11 @@ Output ONLY the full revised chapter prose.
 [Chapter text]
 %s`, actual, minLen, maxLen, content)
 		} else {
-			userPrompt = fmt.Sprintf(`youissmallsaycompile. bylowerchaptersectionfor %d character-count, whiskerto %d–%d character-count. 
-innot exitthischapterbig frontlowertoolbody, feelsectionandto, not want tonewsectionthread. 
-output only the revised text afterwards. 
+			userPrompt = fmt.Sprintf(`Eres un editor de novelas. El capítulo siguiente tiene %d palabras pero debe tener entre %d y %d palabras.
+Amplía con escenas concretas, detalle sensorial y diálogo sin añadir nuevos beats de trama más allá del outline de este capítulo.
+Devuelve SOLO el texto revisado del capítulo.
 
-[chaptersection]
+[Texto del capítulo]
 %s`, actual, minLen, maxLen, content)
 		}
 	}
@@ -187,14 +187,14 @@ output only the revised text afterwards.
 		raw = llm.CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
 	}
 	if raw == "" {
-		return "", fmt.Errorf("chaptersectioncharacter-countnumber API useorquiltwithdraw")
+		return "", fmt.Errorf("el capítulo no produjo texto (API vacía)")
 	}
 	return stripChapterMetaProse(raw, lang), nil
 }
 
 func recoverChapterLengthBest(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, bestContent string, minLen, maxLen, target int, bestScore int, logger *sse.LogBroadcaster) (string, error) {
 	if bestContent == "" {
-		return "", fmt.Errorf("lifeorquiltwithdraw")
+		return "", fmt.Errorf("no hay borrador recuperable para el capítulo")
 	}
 	actual := prose.CountProseUnits(bestContent)
 	if chapterLengthInRange(bestContent, minLen, maxLen) {
@@ -257,12 +257,12 @@ func generateChapterContentWithLengthControl(ctx context.Context, apiCfg *config
 
 	for attempt := 0; attempt <= chapterGenMaxLengthAttempts; attempt++ {
 		if ctx.Err() != nil {
-			return "", fmt.Errorf("alreadywithdraw")
+			return "", fmt.Errorf("generación cancelada")
 		}
 		constraints := mergeWritingConstraints(extraWritingConstraints, lengthFeedback)
 		content := generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, idx, settings, constraints, logger)
 		if content == "" {
-			return "", fmt.Errorf("lifeorquiltwithdraw")
+			return "", fmt.Errorf("no hay borrador recuperable para el capítulo")
 		}
 		actualLen := prose.CountProseUnits(content)
 		maybeUpdateBestDraft(&bestContent, &bestScore, content, minLen, maxLen, target)

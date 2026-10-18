@@ -644,14 +644,14 @@
               {#if returnRef}<button class="btn btn-outline btn-xs self-start" on:click={() => jumpToFact(returnRef, true)}>{$t('facts.return')}</button>{/if}
 
               {#if ch.outline}
-                <details class="bg-base-300 rounded">
+                <details class="bg-base-100 rounded">
                   <summary class="p-2 text-xs text-base-content/65 cursor-pointer select-none">{$t('writing.chapter.outline')}</summary>
                   <div class="px-2 pb-2 text-sm text-base-content/70">{ch.outline}</div>
                 </details>
               {/if}
 
               {#if ch.summary}
-                <details class="bg-base-300 rounded">
+                <details class="bg-base-100 rounded">
                   <summary class="p-2 text-xs text-base-content/65 cursor-pointer select-none">{$t('writing.chapter.summary')}</summary>
                   <div class="px-2 pb-2 text-sm text-base-content/70 whitespace-pre-wrap">{ch.summary}</div>
                 </details>
@@ -665,7 +665,7 @@
                   </div>
                 {/if}
                 <!-- svelte-ignore a11y-no-static-element-interactions -->
-                <div id="ChapterProseViewer" bind:this={contentEl} class="bg-base-300 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto"
+                <div id="ChapterProseViewer" bind:this={contentEl} class="bg-base-100 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto"
                      on:mouseup={checkContentSelection}
                      on:scroll={hideQuotePopover}>
                   {#if isStreamingThis}
@@ -688,7 +688,7 @@
                           {/if}
                           {#if revisingBlockId === b.id}
                             <div class="bg-base-100 rounded p-2 mt-1 space-y-1">
-                              <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={blockFeedback} placeholder={$t('writing.block.revisePlaceholder')} disabled={$taskRunning}></textarea>
+                              <textarea class="textarea textarea-sm w-full text-sm" bind:value={blockFeedback} placeholder={$t('writing.block.revisePlaceholder')} disabled={$taskRunning}></textarea>
                               <div class="flex gap-2 justify-end">
                                 <button class="btn btn-ghost btn-xs" on:click={cancelBlockOps}>{$t('common.cancel')}</button>
                                 <button class="btn btn-primary btn-xs" on:click={submitBlockRevise} disabled={$taskRunning || !blockFeedback.trim()}>{$t('writing.block.reviseSubmit')}</button>
@@ -697,7 +697,7 @@
                           {/if}
                           {#if insertAfterId === b.id}
                             <div class="bg-base-100 rounded p-2 mt-1 space-y-1">
-                              <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={insertText} placeholder={$t('writing.block.insertPlaceholder')} disabled={$taskRunning}></textarea>
+                              <textarea class="textarea textarea-sm w-full text-sm" bind:value={insertText} placeholder={$t('writing.block.insertPlaceholder')} disabled={$taskRunning}></textarea>
                               <div class="flex gap-2 justify-end">
                                 <button class="btn btn-ghost btn-xs" on:click={cancelBlockOps}>{$t('common.cancel')}</button>
                                 <button class="btn btn-primary btn-xs" on:click={saveBlockInsert} disabled={$taskRunning || !insertText.trim()}>{$t('writing.block.insertSubmit')}</button>
@@ -721,7 +721,7 @@
                   </button>
                 {/if}
               {:else if ch.status === 'pending'}
-                <div class="bg-base-300 rounded-lg p-6 text-center text-sm text-base-content/65">
+                <div class="bg-base-100 rounded-lg p-6 text-center text-sm text-base-content/65">
                   {#if isCurrent}
                     {$t('writing.chapter.pendingCurrent')}
                   {:else}
@@ -754,7 +754,7 @@
               </div>
 
               {#if showRevise}
-                <div id="CardSection_ChapterRevise" class="bg-base-300 rounded-lg p-3 space-y-2">
+                <div id="CardSection_ChapterRevise" class="bg-base-100 rounded-lg p-3 space-y-2">
                     {#if showKnowledge}
                       <fieldset id="ChapterKnowledgePicker" class="border border-base-content/20 rounded-lg p-3 space-y-3" disabled={$taskRunning || savingKnowledge}>
                         <legend>{$t('writing.knowledge.title')}</legend>
@@ -776,7 +776,7 @@
                       </fieldset>
                     {/if}
                   <textarea
-                    class="textarea textarea-sm w-full h-20 text-sm"
+                    class="textarea textarea-sm w-full text-sm"
                     bind:value={reviseFeedback}
                     bind:this={reviseTextareaEl}
                     placeholder={$t('writing.revise.placeholder')}

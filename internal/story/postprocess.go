@@ -34,11 +34,11 @@ func LoadPostProcess(path string) (*PostProcessState, error) {
 		if os.IsNotExist(err) {
 			return NewProofreadState(), nil
 		}
-		return nil, fmt.Errorf("readwithdrawitem: %w", err)
+		return nil, fmt.Errorf("leer entrada: %w", err)
 	}
 	var pp PostProcessState
 	if err := json.Unmarshal(data, &pp); err != nil {
-		return nil, fmt.Errorf("untieitem: %w", err)
+		return nil, fmt.Errorf("analizar entrada: %w", err)
 	}
 	if pp.SchemaVersion != ProofreadSchemaVersion {
 		return nil, fmt.Errorf("not pay itemthis: %d", pp.SchemaVersion)
@@ -52,7 +52,7 @@ func LoadPostProcess(path string) (*PostProcessState, error) {
 func SavePostProcess(path string, pp *PostProcessState) error {
 	data, err := json.MarshalIndent(pp, "", "  ")
 	if err != nil {
-		return fmt.Errorf("orderrowposture: %w", err)
+		return fmt.Errorf("ordenar estado de corrección: %w", err)
 	}
 	return fsutil.WriteFileAtomic(path, data)
 }

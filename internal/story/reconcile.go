@@ -20,7 +20,7 @@ type ReconciliationResult struct {
 func ReconcileSettingsAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress,
 	newSettings config.StoryConfig, settings *ProjectSettings, progressPath string, cfgPath string, logger *sse.LogBroadcaster) error {
 
-	logger.StepInfo(1, 3, "individealreadyhaschaptersectionandnew ...")
+	logger.StepInfo(1, 3, "Reconciliando capítulos existentes con la nueva configuración...")
 	lang := cfg.Language
 	if err := EnsureNarrativeCheckpoints(ctx, apiCfg, cfg, state, progressPath, logger); err != nil {
 		return err
@@ -47,7 +47,7 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		return fmt.Errorf("failed to parse reconciliation result JSON: %w\nraw response: %s", err, rawResp)
 	}
 
-	logger.StepInfo(2, 3, "inmorenew...")
+	logger.StepInfo(2, 3, "Updating affected chapters...")
 
 	adjustedStory := storyConfigFromReconciliation(result, newSettings)
 	conflicts := CollectStoryConfigConflicts(newSettings, adjustedStory, "reconcile", result.Explanation)
@@ -78,7 +78,7 @@ func ReconcileSettingsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 	}
 
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("insuredepositadvancedegree: %w", err)
+		return fmt.Errorf("guardar progreso: %w", err)
 	}
 
 	if err := appendPendingChanges(pendingPath, conflicts, logger); err != nil {
@@ -140,7 +140,7 @@ func regeneratePendingOutlines(ctx context.Context, apiCfg *config.APIConfig, cf
 
 	var resp OutlineResponse
 	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return fmt.Errorf("untiebigJSON: %w", err)
+		return fmt.Errorf("parse JSON: %w", err)
 	}
 
 	return applyOutlineRevision(cfg, state, resp, "outline_revision", PendingConfigChangesPath(progressPath), cfgPath, logger)

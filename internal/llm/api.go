@@ -167,14 +167,46 @@ func FetchModelContextWindow(apiCfg *config.APIConfig) int {
 	return result.ContextWindow
 }
 
+// sharedHTTPClient returns a client that reuses TCP connections (keep-alive)
+// across calls. Creating a fresh http.Client per request prevented connection
+// reuse, so retry storms opened hundreds of sockets and flooded the local
+// network stack — one of the causes of machine freezes during generation.
+func sharedHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 8
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
 func ValidateConfig(apiCfg *config.APIConfig) error {
 	if strings.TrimSpace(apiCfg.BaseURL) == "" {
-		return fmt.Errorf("API Base URL not yetplace")
+		return fmt.Errorf("API Base URL not configured")
 	}
 	if strings.TrimSpace(apiCfg.Model) == "" {
-		return fmt.Errorf("Model not yetplace")
+		return fmt.Errorf("model not configured")
 	}
 	return nil
+}
+
+// isStreamUnsupportedError reports whether err is the server rejecting the
+// streaming request itself (HTTP 400 on a stream=true call). Only in that
+// case does retrying with a plain non-streaming completion make sense; every
+// other fatal error (auth, budget, oversized payload) would fail identically
+// on the second call.
+func isStreamUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "status code: 400") {
+		return false
+	}
+	// A context-budget rejection would fail identically without streaming;
+	// never spend a second HTTP call on it.
+	var budget *contextBudgetError
+	if errors.As(err, &budget) {
+		return false
+	}
+	return true
 }
 
 func IsFatalAPIError(err error) bool {
@@ -190,8 +222,8 @@ func IsFatalAPIError(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	// intent: not want toBAhas "dial tcp" allwhenmakelife-fate——
-	// "dial tcp ... i/o timeout" etchourshouldwhenheavy.
+	// Note: we deliberately do NOT treat every "dial tcp" occurrence as fatal —
+	// "dial tcp ... i/o timeout" is transient and should be retried.
 	if strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "no such host") {
 		return true
@@ -201,10 +233,33 @@ func IsFatalAPIError(err error) bool {
 		strings.Contains(msg, "status code: 404") {
 		return true
 	}
+	// Request-level 4xx errors will never succeed on retry: the server rejected
+	// the payload itself (too large / malformed / unsupported parameter).
+	// Retrying these used to hammer the API until the machine froze.
+	for _, code := range []string{"400", "413", "422"} {
+		if strings.Contains(msg, "status code: "+code) {
+			return true
+		}
+	}
 	if strings.Contains(msg, "context canceled") {
 		return true
 	}
 	return false
+}
+
+// maxErrorBodyRunes bounds how much of an API error response body is kept in
+// the returned error. Some providers echo the entire rejected prompt back in
+// the error body; without a cap this giant string was copied into every log
+// line and broadcast over SSE, saturating memory and UI channels.
+const maxErrorBodyRunes = 600
+
+func truncateErrorBody(body string) string {
+	body = strings.TrimSpace(body)
+	r := []rune(body)
+	if len(r) <= maxErrorBodyRunes {
+		return body
+	}
+	return string(r[:maxErrorBodyRunes]) + "… [truncated]"
 }
 
 // PromptInputBudget reserves output capacity and a small provider/tokenizer
@@ -240,8 +295,9 @@ func CallAPI(ctx context.Context, apiCfg *config.APIConfig, system, user string)
 	})
 }
 
-// CallAPIMessages by multiroundnumbergroupuse API.
-// insidepartfirstwalkand, make token countnumberinetcwaitexpect-toocanmorenew; not canusehourreturnretreatplease.
+// CallAPIMessages calls the API with a full message list. It streams the
+// response, and only when streaming yields no content at all and the error is
+// transient does it fall back to one synchronous call.
 func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []Message) (string, error) {
 	messages = applyPromptAddon(ctx, messages)
 	result, err := CallAPIStreamMessages(ctx, apiCfg, messages, nil)
@@ -257,15 +313,24 @@ func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []M
 	if result.Content != "" {
 		return result.Content, err
 	}
-	if err != nil && IsFatalAPIError(err) {
+	// Fall back to the synchronous endpoint only when the server explicitly
+	// rejected the streaming request itself (HTTP 400 on the stream call).
+	// Other fatal errors (auth, budget, oversized payload, 413/422) will also
+	// fail synchronously, so they must not trigger a second HTTP call — that
+	// doubled the connection pressure and log volume during generation storms.
+	if !isStreamUnsupportedError(err) {
 		return "", err
 	}
-	// Fall back only before any stream content has been received.
 	syncResult, syncErr := CallAPIMessagesSync(ctx, apiCfg, messages)
-	return completionText(syncResult, syncErr, apiCfg.MaxTokens)
+	if syncErr != nil {
+		// If the non-streaming fallback hit the output limit, surface that
+		// diagnostic instead of the original "stream unsupported" error.
+		return "", syncErr
+	}
+	return completionText(syncResult, nil, apiCfg.MaxTokens)
 }
 
-// CallAPIMessagesSync HTTP use(onlymakehour returnretreat).
+// CallAPIMessagesSync performs one plain (non-streaming) HTTP completion.
 func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages []Message) (CompletionResult, error) {
 	if err := validateContextBudget(apiCfg, messages); err != nil {
 		return CompletionResult{}, err
@@ -296,7 +361,10 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	}
 
 	timeout := time.Duration(apiCfg.HTTPTimeoutSeconds) * time.Second
-	client := &http.Client{Timeout: timeout}
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
+	client := sharedHTTPClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return CompletionResult{}, err
@@ -309,7 +377,7 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, string(bodyBytes))
+		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, truncateErrorBody(string(bodyBytes)))
 	}
 
 	var chatResp ChatResponse
@@ -331,61 +399,69 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	return CompletionResult{}, fmt.Errorf("API returned no valid Choices text")
 }
 
-func CallAPIWithRetry(ctx context.Context, apiCfg *config.APIConfig, system, user string) string {
-	retryCount := 0
-	for {
+// MaxAPIRetries bounds the retry loop in CallAPIWithRetry/CallAPIWithRetryLog.
+// Without a ceiling, transient errors or empty responses caused an infinite
+// retry loop that saturated CPU, connections and log channels (this was the
+// root cause of machine freezes when a generation task kept hammering the API).
+const MaxAPIRetries = 8
+
+func callWithRetryLoop(ctx context.Context, apiCfg *config.APIConfig, system, user string, onRetry func(err error, attempt, waitSec int)) string {
+	for retryCount := 1; ; retryCount++ {
 		if ctx.Err() != nil {
 			return ""
 		}
 		result, err := CallAPI(ctx, apiCfg, system, user)
-		if err == nil && result != "" {
+		if err == nil && strings.TrimSpace(result) != "" {
 			return result
 		}
-		if IsFatalAPIError(err) {
-			fmt.Printf(" ❌ [life-fate] %v, not againheavy\n", err)
+		if IsFatalAPIError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return ""
 		}
-
-		retryCount++
+		if retryCount >= MaxAPIRetries {
+			if onRetry != nil {
+				e := err
+				if e == nil {
+					e = fmt.Errorf("API returned empty response")
+				}
+				onRetry(e, retryCount, 0)
+			}
+			return ""
+		}
 		waitTime := RetryWaitTime(retryCount)
-		fmt.Printf(" ⚠️ [] APIuse: %v. # %d timesheavy, etcwait %ds laterheavy...\n", err, retryCount, waitTime)
+		if onRetry != nil {
+			e := err
+			if e == nil {
+				e = fmt.Errorf("API returned empty response")
+			}
+			onRetry(e, retryCount, waitTime)
+		}
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
 			return ""
 		}
 	}
+}
+
+func CallAPIWithRetry(ctx context.Context, apiCfg *config.APIConfig, system, user string) string {
+	return callWithRetryLoop(ctx, apiCfg, system, user, func(err error, attempt, waitSec int) {
+		fmt.Printf(" ⚠️ API call failed: %v. Retry %d/%d, waiting %ds...\n", err, attempt, MaxAPIRetries, waitSec)
+	})
 }
 
 func CallAPIWithRetryLog(ctx context.Context, apiCfg *config.APIConfig, system, user string, logger *sse.LogBroadcaster) string {
-	retryCount := 0
-	for {
-		if ctx.Err() != nil {
-			return ""
+	return callWithRetryLoop(ctx, apiCfg, system, user, func(err error, attempt, waitSec int) {
+		if logger != nil {
+			logger.WarnKey("log.api_retry", err, attempt, waitSec)
+		} else {
+			fmt.Printf(" ⚠️ API call failed: %v. Retry %d/%d, waiting %ds...\n", err, attempt, MaxAPIRetries, waitSec)
 		}
-		result, err := CallAPI(ctx, apiCfg, system, user)
-		if err == nil && result != "" {
-			return result
-		}
-		if IsFatalAPIError(err) {
-			logger.ErrorKey("log.fatal_no_retry", err)
-			return ""
-		}
-
-		retryCount++
-		waitTime := RetryWaitTime(retryCount)
-		logger.WarnKey("log.api_retry", err, retryCount, waitTime)
-		select {
-		case <-time.After(time.Duration(waitTime) * time.Second):
-		case <-ctx.Done():
-			return ""
-		}
-	}
+	})
 }
 
 func RetryWaitTime(retry int) int {
-	if retry > 6 {
-		return 30
+	if retry > 4 {
+		return 20
 	}
 	return retry * 5
 }
@@ -408,7 +484,7 @@ func CallAPIStream(ctx context.Context, apiCfg *config.APIConfig, system, user s
 	return completionText(result, err, apiCfg.MaxTokens)
 }
 
-// CallAPIStreamMessages by multiroundnumbergroupuse API().
+// CallAPIStreamMessages calls the streaming API with a full message list.
 func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messages []Message, onChunk func(string)) (CompletionResult, error) {
 	if err := validateContextBudget(apiCfg, messages); err != nil {
 		return CompletionResult{}, err
@@ -441,7 +517,10 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 	}
 
 	timeout := time.Duration(apiCfg.HTTPTimeoutSeconds) * time.Second
-	client := &http.Client{Timeout: timeout}
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
+	client := sharedHTTPClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return CompletionResult{}, err
@@ -449,8 +528,8 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, truncateErrorBody(string(bodyBytes)))
 	}
 
 	var fullContent strings.Builder
@@ -459,6 +538,40 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 	var finishReason string
 	var readErr error
 	done := false
+
+	// Some OpenAI-compatible servers ignore "stream": true and answer with a
+	// plain JSON completion. Detect that shape up front (content-type is not
+	// text/event-stream) and parse the body as a non-stream response instead of
+	// silently producing an empty stream error.
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		var chatResp ChatResponse
+		if jerr := json.Unmarshal(bodyBytes, &chatResp); jerr == nil && len(chatResp.Choices) > 0 {
+			content := chatResp.Choices[0].Message.Content
+			fr := chatResp.Choices[0].FinishReason
+			if tracker != nil {
+				if chatResp.Usage != nil {
+					tracker.finishCall(chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, true, messages, content)
+				} else {
+					tracker.finishCall(0, 0, false, messages, content)
+				}
+			}
+			if content != "" && onChunk != nil {
+				onChunk(content)
+			}
+			completion := CompletionResult{Content: content, FinishReason: fr}
+			if ctx.Err() != nil {
+				return completion, ctx.Err()
+			}
+			if content == "" {
+				return completion, fmt.Errorf("non-streaming response was empty")
+			}
+			return completion, nil
+		}
+		// Not valid JSON either: fall through to the SSE loop, which will
+		// surface a proper "stream ended" error.
+		reader = bufio.NewReader(bytes.NewReader(bodyBytes))
+	}
 
 	for readErr == nil {
 		if ctx.Err() != nil {

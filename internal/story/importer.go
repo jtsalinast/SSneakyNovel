@@ -181,11 +181,11 @@ func ImportStartAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 		return err
 	}
 	if len(state.Chapters) > 0 {
-		return fmt.Errorf("itemalreadyhaschaptersection, noenter. pleaseinemptyitemmiddleenter")
+		return fmt.Errorf("el proyecto ya tiene capítulos; la importación solo funciona en proyectos vacíos")
 	}
 	chapters, preamble := SplitImportContent(content)
 	if len(chapters) == 0 {
-		return fmt.Errorf("not yetcanfromthismiddlecutdivideexithowchaptersection")
+		return fmt.Errorf("no se pudieron detectar capítulos en el contenido importado")
 	}
 
 	state.Chapters = make([]ChapterState, len(chapters))
@@ -200,7 +200,7 @@ func ImportStartAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 	state.CurrentChapterIndex = len(chapters)
 	state.Phase = "outline"
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("insuredepositadvancedegree: %w", err)
+		return fmt.Errorf("guardar progreso: %w", err)
 	}
 	st := &ImportState{Active: true, Total: len(chapters), Preamble: Truncate(preamble, 2000)}
 	if err := SaveImportState(importPath, st); err != nil {
@@ -289,7 +289,7 @@ func runImportPipeline(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 			ch.Characters = normalizeOutlineCharacters(resp.Characters)
 		}
 		if err := SaveProgress(progressPath, state); err != nil {
-			return fmt.Errorf("insuredepositadvancedegree: %w", err)
+			return fmt.Errorf("guardar progreso: %w", err)
 		}
 		st.Cursor = i + 1
 		SaveImportState(importPath, st)
@@ -330,7 +330,7 @@ func importMetaAnalysis(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		WritingPOV   string `json:"writing_pov"`
 	}
 	if err := json.Unmarshal([]byte(cleanJSONResponse(rawResp)), &meta); err != nil {
-		return fmt.Errorf("yuanuntie: %w", err)
+		return fmt.Errorf("parse source: %w", err)
 	}
 
 	state.Title = meta.Title

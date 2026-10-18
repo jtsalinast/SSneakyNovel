@@ -56,10 +56,10 @@ type Handlers struct {
 	knowledgeAtStart   string
 	forceKnowledgeSync bool
 	skipKnowledgeSync  bool
-	autoConfirm        bool // move: chaptersectionlifelatermoveandlifeloweronechapter
+	autoConfirm        bool // modo auto: avanza al siguiente capítulo tras aceptar uno
 
-	lastChatMessage   string             // depositmostlaterhairsend off chatday, useinheavy
-	lastReconcileBody config.StoryConfig // depositmostlater please
+	lastChatMessage   string             // guarda el último mensaje de chat enviado, para reintentos
+	lastReconcileBody config.StoryConfig // guarda la última solicitud recibida
 }
 
 func NewHandlers(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.LogBroadcaster, progDir string, version string) *Handlers {
@@ -100,7 +100,7 @@ func (h *Handlers) switchProject(name string) error {
 
 	projectDir := filepath.Join(h.progDir, "storys", name)
 	if info, err := os.Stat(projectDir); err != nil || !info.IsDir() {
-		return fmt.Errorf("itemnot depositin: %s", name)
+		return fmt.Errorf("archivo no encontrado: %s", name)
 	}
 	if err := ensureProjectCompatible(projectDir); err != nil {
 		return err
@@ -119,7 +119,7 @@ func (h *Handlers) switchProject(name string) error {
 
 	state, err := story.LoadProgress(progressPath)
 	if err != nil {
-		return fmt.Errorf("itemadvancedegree: %w", err)
+		return fmt.Errorf("leer archivo: %w", err)
 	}
 	if state == nil {
 		state = &story.Progress{Phase: "writing", BookStatus: story.BookStatusActive}
@@ -206,9 +206,12 @@ func (h *Handlers) tryStartTask() bool {
 	h.forceKnowledgeSync = false
 	h.skipKnowledgeSync = false
 	h.activeWork = 1
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx, h.taskTokens = llm.WithTaskTokens(ctx, h.logger)
+	// Hard wall-clock ceiling per task (llm.NewTaskContext): without it a
+	// persistently failing API endpoint could keep retrying forever and freeze
+	// the machine. Manual stop via taskCancel still works as before.
+	ctx, cancel := llm.NewTaskContext(context.Background())
 	h.taskCtx = ctx
+	ctx, h.taskTokens = llm.WithTaskTokens(ctx, h.logger)
 	h.taskCancel = cancel
 	h.generationID++
 	devlog.Log("tryStartTask ok activeWork=1")
@@ -262,6 +265,29 @@ func (h *Handlers) startChildWork() bool {
 	h.activeWork++
 	devlog.Log("startChildWork ok activeWork=%d", h.activeWork)
 	return true
+}
+
+// currentTaskTokens returns the tracker owned by the currently running task
+// (set by tryStartTask). Child work — e.g. a detached section generation
+// started from a chat turn — must accumulate its LLM tokens into this same
+// tracker: /api/status snapshots it and the SSE token_usage events feed the
+// frontend badge from it. A child that builds its own fresh tracker instead
+// makes the badge show nothing even though generation is running fine.
+func (h *Handlers) currentTaskTokens() *llm.TaskTokenUsage {
+	h.taskMu.Lock()
+	defer h.taskMu.Unlock()
+	return h.taskTokens
+}
+
+// ensureTaskTokens returns ctx with a token tracker attached, re-using the
+// current task's tracker when one exists. Used as a safety net by detached
+// runners so their LLM calls are always counted somewhere visible.
+func (h *Handlers) ensureTaskTokens(ctx context.Context) context.Context {
+	if llm.TaskTokensFromContext(ctx) != nil {
+		return ctx
+	}
+	usage := h.currentTaskTokens()
+	return llm.AttachTaskTokens(ctx, usage)
 }
 
 func (h *Handlers) isTaskRunning() bool {
@@ -1187,8 +1213,8 @@ func (h *Handlers) PostChapterRevise(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostChapterReviseSpecific tofingercompileNo.chaptersectiondodirectionmostsmall(alreadychaptersection),
-// onlythechapterandwant to, not shadownoiseitshechaptersectionandbig.
+// PostChapterReviseSpecific revisa un capítulo concreto por número (incluso aceptados);
+// solo afecta a ese capítulo, no a otros capítulos ni a las tramas.
 func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Request) {
 	numStr := r.PathValue("num")
 	var num int
@@ -1238,8 +1264,8 @@ func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Requ
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostChaptersSmoothTransitions batchmeasurealreadychaptersectionof connect.
-// chapterupperonechaptertailandthischapteropenhead connect, onlyinlifehardhourmostsmallheavywritethischapteropenheadpieceparagraph.
+// PostChaptersSmoothTransitions revisa en lote las uniones entre capítulos escritos.
+// Conecta el final del capítulo anterior con la apertura de este; escribe solo lo mínimo necesario para abrir el capítulo actual.
 func (h *Handlers) PostChaptersSmoothTransitions(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -2798,7 +2824,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 				return h.StartDetachedPrePlanGenerate()
 			},
 			StartAsync: func(taskName string, fn func(goCtx context.Context) error) {
-				// whiskercountenter activeWork, then Agent ringlaterpadlockquiltput,
+				// comprueba si hay trabajo activo y luego libera el bloqueo del agente
 				// stillintravelhournewcanandhairadvanceenter, buildnumberreceipt.
 				if !h.startChildWork() {
 					h.logger.WarnKey("log.child_task_start_failed", taskName)

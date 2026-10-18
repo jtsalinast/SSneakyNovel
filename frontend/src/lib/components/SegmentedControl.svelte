@@ -30,8 +30,18 @@
   //               shows the selection name).
   //   title     : fallback text for the popover when the option has no
   //               description (typically the field's ⓘ tip).
+  //   width     : how much horizontal space the WHOLE CONTROL (the outer
+  //               wrapper div, class "flex flex-col gap-2") takes inside its
+  //               container (e.g. the Card body grid cell). Accepts any CSS
+  //               length/percentage string — '80%', '100%', '320px'… — or a
+  //               number of pixels. Default 'fit-content': the control is
+  //               only as wide as its content (original behaviour). The
+  //               percentage is applied ONCE, on the wrapper; the track then
+  //               simply gets `width: stretch` (no `flex: none`) so it fills
+  //               whatever leftover space the row has after the Auto button,
+  //               divider and ⓘ trigger, with segments sharing it equally.
   import { get } from 'svelte/store';
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { uiLocale, translate } from '../i18n/index.js';
 
   export let options = [];
@@ -41,9 +51,25 @@
   export let title = '';
   export let disabled = false;
   export let ariaLabel = '';
+  export let width = 'fit-content';
 
   let root;          // outermost wrapper (outside-click detection)
-  let ro = null;     // ResizeObserver on the track (re-measure on layout shifts)
+  let rowEl;         // Auto + divider + track + ⓘ row (kept for a11y refs)
+
+  // Normalized CSS length for the `width` prop ('100%', '80%', number → px).
+  $: widthCss = typeof width === 'number' ? width + 'px' : (width || 'fit-content');
+  // Fixed-width mode (`width` ≠ fit-content): the percentage is applied ONCE,
+  // on the OUTER WRAPPER div ("flex flex-col gap-2") via an inline style —
+  // this makes the whole control occupy exactly that share of the Card-body
+  // grid cell. The row inside it then has a definite width, and the track
+  // simply gets `width: stretch` (NO `flex: none`, NO duplicated percentage)
+  // so it fills ALL the leftover row space after Auto / divider / ⓘ. Every
+  // segment is `flex: 1 1 0` with `min-width: var(--seg-w)` as floor, so the
+  // stretched bar splits its width EQUALLY among the segments (proportional
+  // segmentation) — pure CSS, zero JS measurement.
+  // `fixedMode` records whether we're in that mode (reactive to the `width`
+  // prop); nothing else about the layout depends on measurements.
+  $: fixedMode = widthCss !== 'fit-content';
 
   // Longest visible label among the segments — rendered once per segment in
   // the invisible sizer row inside the track, which drives the measured
@@ -62,31 +88,37 @@
   let segW = 0;      // width of one segment (widest label incl. padding)
   let trackH = 0;    // natural height of the track content (button height)
 
-  // Pill geometry, computed from the measured segment width instead of
-  // `width: 100%/N` on the track box. The track is a border-box whose CONTENT
-  // is n × --seg-w plus its own left/right borders (the white bar has a
-  // neutral border); a percentage pill sized against the border-box is wider
-  // than one segment by the border allowance, and translateX(100%) steps are
-  // off too — which made the black selection misalign with the labels (most
-  // visible on wide bars like Target audience, 6 segments). Pinning the pill
-  // to exactly --seg-w wide and translating level × --seg-w keeps it perfectly
-  // under the active button at every step.
+  // Pill geometry. The track is a border-box; the button row inside it is
+  // `width: 100%` of the track's CONTENT box, and every button is flex-1 so
+  // each one occupies exactly (content width)/N — whether the bar sits at its
+  // natural content size or is stretched to fill a fixed-width row. The pill
+  // mirrors that with `calc(100%/N)` + `translateX(level*100%)`: percentages
+  // resolve against the same content box, so the pill is always exactly one
+  // segment wide and lands perfectly under the active label at every step,
+  // in both modes, with zero JS measurement involved. (The old measured-px /
+  // calc(--seg-track-w) approach misaligned and, when the measurement pass
+  // failed, left the bar un-stretched entirely.)
   $: pillStyle =
-    'width: ' + (segW ? segW + 'px' : 'calc(100% / ' + (segments.length || 1) + ')') + ';' +
-    'transform: translateX(' + (segW ? level * segW + 'px' : 'calc(' + level + ' * 100%)') + ');';
+    'width: calc(100% / ' + (segments.length || 1) + ');' +
+    'transform: translateX(calc(' + level + ' * 100%));';
 
-  // Track width: BEFORE the first measurement the buttons fall back to
-  // flex-1 inside a `w-fit` track, which collapses to min-content — each
-  // button clipped to its intrinsic minimum ("New adult (17-" style broken
-  // widths) and the whole bar ending up far narrower than n × widest label.
-  // That was the "Target audience width isn't calculated right" bug. Once
-  // measured, pin the track's CONTENT box to exactly n × --seg-w so the bar
-  // fits its segments precisely.
+  // Track sizing. In fit-content mode (default) the track is pinned to its
+  // natural content width once measured (n × --seg-w), preserving the
+  // original behaviour. In fixed-width mode (`width` prop ≠ fit-content) the
+  // percentage lives ONLY on the outer wrapper — here the track just gets
+  // `width: stretch` so it fills all the leftover row space after Auto /
+  // divider / ⓘ, with NO `flex: none` (the default flex-grow lets it expand)
+  // and no duplicated percentage anywhere down the tree. The segments' own
+  // `flex: 1 1 0` then splits the stretched bar EQUALLY (proportional
+  // segmentation); `--seg-w` remains only as a per-segment MINIMUM floor so
+  // labels never clip.
   $: trackStyle =
     '--seg-h: ' + trackH + 'px;' +
-    (segW
-      ? '--seg-w: ' + segW + 'px; width: fit-content; min-width: calc(' + segments.length + ' * var(--seg-w) + 2px); max-width: calc(' + segments.length + ' * var(--seg-w) + 2px);'
-      : '--seg-w: 0px; width: max-content;');
+    (fixedMode
+      ? '--seg-w: ' + segW + 'px; width: stretch; min-width: 0; max-width: 100%;'
+      : segW
+        ? '--seg-w: ' + segW + 'px; width: fit-content; min-width: calc(' + segments.length + ' * var(--seg-w) + 2px); max-width: calc(' + segments.length + ' * var(--seg-w) + 2px);'
+        : '--seg-w: 0px; width: max-content;');
 
   // Localized chrome texts — same keys/pattern SmartSelect uses for its
   // summary panel. `translate()` returns the raw key when it has no entry →
@@ -200,22 +232,19 @@
     }
   }
 
-  // Re-measure whenever options/labels/locale change (after DOM update).
+  // (Removed: updateRowWidth / ResizeObserver-on-row machinery. The fixed-
+  // width layout is now a single `width: widthCss` on the track — nothing to
+  // re-measure when the container resizes; percentages re-resolve natively.)
+
+  // Re-measure whenever options/labels/locale change (after DOM update) so
+  // --seg-w (the per-segment MINIMUM floor + fit-content pin) stays exact.
   $: if (trackEl && options) {
-    options; uiLocale; value;
+    options; uiLocale; value; widthCss;
     tick().then(updateMetrics);
   }
 
   onMount(() => {
     updateMetrics();
-    if (typeof ResizeObserver !== 'undefined' && trackEl) {
-      ro = new ResizeObserver(updateMetrics);
-      ro.observe(trackEl);
-    }
-  });
-
-  onDestroy(() => {
-    if (ro) { ro.disconnect(); ro = null; }
   });
 </script>
 
@@ -225,6 +254,7 @@
   bind:this={root}
   class="flex flex-col gap-2"
   class:opacity-60={disabled}
+  style={fixedMode ? 'width: ' + widthCss + ';' : undefined}
 >
 <!-- AUTO BUTTON (left) | separator | SEGMENTED CONTROL | TOOLTIP TRIGGER (right).
      No internal field label here — the grid cell above already renders it
@@ -233,18 +263,24 @@
      selects' own triggers) and a component-scoped `seg-group` class: Svelte
      scopes every selector in <style>, so an ancestor like `.group` gets its
      own scope hash — which only matches if it also appears in this template.
-     `seg-group` guarantees that match, making the hover-reveal reliable. -->
-<div class="seg-group group flex items-stretch gap-1" role="group" aria-label={ariaLabel}>
-  <!-- External button: Auto, on the LEFT of the segment track. Its chrome
+     `seg-group` guarantees that match, making the hover-reveal reliable.
+     NOTE: the `width` prop is applied exactly ONCE, on the OUTER WRAPPER div
+     above (`style="width: {widthCss}"`). The row stays a plain stretch flex
+     box (it fills the wrapper's definite width), and the track simply gets
+     `width: stretch` — so percentages never duplicate down nested boxes. -->
+<div bind:this={rowEl} class="seg-group group flex items-stretch gap-1" role="group" aria-label={ariaLabel}>
+  <!-- External button: Auto, on the LEFT of the segment bar. Its chrome
        mirrors the white track surface exactly (same rounded-2xl corners,
-       neutral border and soft card shadow) so both read as one unit. -->
+       neutral border and soft card shadow) so both read as one unit.
+       `shrink-0 flex-none` keeps it content-sized; in fixed-width mode the
+       leftover row space goes entirely to the track (`width: stretch`). -->
   <button
     type="button"
     on:click={toggleAuto}
     aria-pressed={isAuto}
     disabled={disabled}
     title={'Auto'}
-    class={'seg-auto shrink-0 flex items-center gap-1.5 rounded-2xl border border-neutral-200/80 bg-white px-3 text-xs font-semibold transition-all duration-150 focus:outline-none ' +
+    class={'seg-auto shrink-0 flex-none flex items-center gap-1.5 rounded-2xl border border-neutral-200/80 bg-white px-3 text-xs font-semibold transition-all duration-150 focus:outline-none ' +
       (isAuto ? '!border-neutral-900 !bg-neutral-900 !text-white' : 'text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900')}
   >
     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -258,20 +294,21 @@
        Tailwind's `border-l` utility: utilities are generated on demand and
        this one was being purged, so the line silently disappeared. A plain
        div also has zero intrinsic width in flex layout, which is why the
-       visible 1px line lives on a pseudo-element. The line color is a theme
-       token (`--surface-border`, defined in app.css for both xianii themes),
-       NOT a hardcoded light hairline — on the default dark theme a fixed
+       visible 1px line lives on a pseudo-element. The line color is a
+       base-content mix (as used across app.css surfaces), NOT a hardcoded
+       light hairline — on the default dark theme a fixed
        near-white 90%-opacity line was invisible against the dark card
        surface, which is exactly why the separator "never showed". -->
   <div class="seg-divider self-stretch" aria-hidden="true"></div>
 
-  <!-- Track sized to its content: the invisible sizer row below shrink-to-
-       fits around n copies of the LONGEST label; we measure it in JS and pin
-       every real button to exactly that width (--seg-w), so all segments are
-       equal, none ever wraps, and the bar is only as wide as it needs to be.
-       Surface matches the Auto button (white fill, neutral border, soft
-       shadow). -->
-  <div bind:this={trackEl} class="seg-track relative inline-flex items-center overflow-hidden rounded-2xl border border-neutral-200/80 bg-white" style={trackStyle}>
+  <!-- Track sizing (see `trackStyle`): in fit-content mode it is pinned to
+       exactly n × --seg-w once measured; in fixed-width mode the WRAPPER has
+       a definite width and the track simply gets `width: stretch` — no
+       `flex: none` — so it absorbs ALL the leftover row space after the Auto
+       button / divider / ⓘ trigger, with the surplus shared equally by the
+       segments' own flex-1 layout. Surface matches the Auto button (white
+       fill, neutral border, soft shadow). -->
+  <div bind:this={trackEl} class="seg-track relative inline-flex min-w-0 items-center overflow-hidden rounded-2xl border border-neutral-200/80 bg-white" style={trackStyle}>
     <!-- Active background pill (fades out during Auto mode). It sits UNDER
          the button row: the track's white bg + border paint first, then the
          black pill (z-index 0), then the transparent buttons with their text
@@ -287,22 +324,25 @@
       style={'background-color: ' + (isAuto ? 'rgba(212,212,212,0.5)' : 'rgb(23 23 23)') + '; opacity: ' + (isAuto ? 0 : 1) + ';' + pillStyle}
     ></div>
 
-    <!-- Visible buttons: fixed height (measured from the natural single-line
-         layout) + exact equal widths (--seg-w) + nowrap → a long label like
-         "very explicit" can never wrap or grow the track. No inner rounding:
-         the black pill underneath carries the bar's `rounded-2xl` radius, so
-         the selection reads as one piece with the bar. Before the first
-         measurement they fall back to flex-1 so the sizer can still drive
-         the initial shrink-to-fit width. -->
-    <div class="relative z-10 flex items-stretch" style={segW ? 'height: var(--seg-h); width: calc(var(--seg-w) * ' + segments.length + ');' : ''}>
+    <!-- Visible buttons: nowrap → a long label like "very explicit" can
+         never wrap. In FIXED-WIDTH mode the button row spans `width: 100%`
+         of the track's definite width and every segment is `flex: 1 1 0`
+         (min-width floor = --seg-w), so the bar's full width is split
+         EQUALLY among the segments — proportional segmentation. In
+         fit-content mode each button is pinned to exactly --seg-w (the
+         widest label — the sizer guarantees n × --seg-w) and the row height
+         is pinned to --seg-h so nothing reflows after measuring. No inner
+         rounding: the black pill underneath carries the bar's `rounded-2xl`
+         radius, so the selection reads as one piece with the bar. -->
+    <div class="relative z-10 flex items-stretch" style={fixedMode ? 'width: 100%;' : (segW ? 'height: var(--seg-h);' : '')}>
       {#each segments as item, idx}
         <button
           type="button"
           on:click={() => selectSegment(idx)}
           disabled={disabled}
           aria-pressed={!isAuto && level === idx}
-          class="seg-btn whitespace-nowrap px-5 py-2 text-center text-xs font-semibold transition-colors duration-150 focus:outline-none"
-          style={segW ? 'width: var(--seg-w); flex: none;' : 'flex: 1 1 0%;'}
+          class="seg-btn min-w-0 whitespace-nowrap px-5 py-2 text-center text-xs font-semibold transition-colors duration-150 focus:outline-none"
+          style={fixedMode ? 'flex: 1 1 0; min-width: var(--seg-w);' : segW ? 'width: var(--seg-w); flex: none;' : 'flex: 1 1 0%;'}
           class:text-white={!isAuto && level === idx}
           class:text-neutral-500={isAuto || level !== idx}
         >{item.label}</button>
@@ -323,12 +363,14 @@
 
   <!-- Tooltip trigger + Revolut-style dark summary popover, identical to
        SmartSelect's (question-circle icon and "Seleccionados" panel), placed
-       at the RIGHT end of the segment bar. Shares the global `.tip-trigger`
-       style (app.css): hidden by default, it fades IN/OUT with a smooth
-       opacity transition while the pointer is over this control (`group`
-       wrapper above) or while it has keyboard focus — the element stays
-       mounted, so the fade-out actually plays. -->
-  <div class="relative shrink-0">
+       at the RIGHT end of the segment bar — LAST row child, content-sized,
+       right after the track. Shares the global `.tip-trigger` style (app.css):
+       hidden by default, it fades IN/OUT with a smooth opacity transition
+       while the pointer is over this control (`group` wrapper above) or while
+       it has keyboard focus — the element stays mounted, so the fade-out
+       actually plays (the ⓘ itself is opacity-only, so its box always
+       measures). -->
+  <div class="seg-tip-wrap relative shrink-0 flex-none">
     <button
       type="button"
       on:click|stopPropagation={toggleTooltip}
@@ -377,6 +419,10 @@
     z-index: 0;
     width: max-content;   /* shrink-to-fit despite absolute positioning */
   }
+  /* Fixed-width mode lives entirely in inline styles: `width: {widthCss}` on
+     the outer wrapper div (the ONE place the percentage appears) +
+     `width: stretch` on .seg-track (no `flex: none`) + `flex: 1 1 0` per
+     segment. No `.seg-fill` spacer and no `!important` stretch overrides. */
   /* The sliding pill sits UNDER the button row (see z-index below) and is
      sized/positioned in JS from the measured segment width (--seg-w):
      `width: var(--seg-w)` + `transform: translateX(level * --seg-w)` keeps it
@@ -433,11 +479,11 @@
     bottom: 6px;
     width: 1px;
     margin-left: -0.5px;
-    /* Theme-aware hairline: `--surface-border` (app.css) resolves to a
-       subtle base-content mix on BOTH themes — ~12% white on the default
-       dark theme, ~12% black on xianii-light. A hardcoded light color was
-       invisible against the dark surface (the "separator never shows" bug). */
-    background-color: var(--surface-border, rgb(115 115 115 / 0.4));
+    /* Theme-aware hairline: subtle base-content mix on BOTH themes —
+       ~12% white on the default dark theme, ~12% black on xianii-light.
+       A hardcoded light color was invisible against the dark surface
+       (the "separator never shows" bug). */
+    background-color: color-mix(in oklch, var(--color-base-content) 12%, transparent);
   }
   /* Pop-in for the summary popover — identical keyframes/class as SmartSelect's
      scoped style (Tailwind v4 has no global `animate-pop` utility). */

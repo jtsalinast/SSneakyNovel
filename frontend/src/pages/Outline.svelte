@@ -186,6 +186,115 @@
     });
   }
 
+  // --- Bestseller-editor outline analysis ---
+  $: outlineAnalysis = p?.outline_analysis || null;
+  let applyingSuggestionId = '';
+  let proposingSuggestionId = '';
+
+  // Local (unsaved) edits the user makes in a recommendation's "Replace:
+  // Outline" textarea before hitting Apply. Keyed by `${suggestionId}:${chapter}`
+  // so each chapter proposal keeps its own draft. Persisted to the backend on
+  // change (debounced) so the edited text survives reloads and is what gets
+  // written into the outline when the suggestion is applied.
+  let recOutlineEdits = {};
+  let recEditTimers = {};
+
+  function recEditKey(s, rec) { return s.id + ':' + rec.chapter_num; }
+
+  function recOutlineValue(s, rec) {
+    const k = recEditKey(s, rec);
+    return k in recOutlineEdits ? recOutlineEdits[k] : (rec.new_outline || '');
+  }
+
+  function persistRecEdit(s, rec) {
+    const k = recEditKey(s, rec);
+    const val = recOutlineEdits[k];
+    if (val === undefined) return;
+    clearTimeout(recEditTimers[k]);
+    recEditTimers[k] = setTimeout(() => {
+      api('POST', '/api/outline/analysis/edit-recommendation', {
+        id: s.id, chapter_num: rec.chapter_num, new_outline: val,
+      }).catch(() => {});
+    }, 400);
+  }
+
+  function onRecOutlineInput(s, rec, e) {
+    recOutlineEdits = { ...recOutlineEdits, [recEditKey(s, rec)]: e.target.value };
+    persistRecEdit(s, rec);
+  }
+
+  // Auto-grow the recommendation textareas to fit their content (same trick
+  // used elsewhere: reset height then match scrollHeight).
+  function autosizeRecTextarea(el) {
+    if (!el) return;
+    const grow = () => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; };
+    grow();
+    el.addEventListener('input', grow);
+    return { destroy() { el.removeEventListener('input', grow); } };
+  }
+
+  // Re-analyze lives at the END of the card; clicking it scrolls back to the
+  // top of the card first so the user sees the fresh report as it arrives.
+  function analyzeOutline() {
+    document.getElementById('CardSection_OutlineAnalysis')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    api('POST', '/api/outline/analyze')
+      .then(() => addToast($t('outline.analysis.toasts.started'), 'info'))
+      .catch((e) => addToast(e.message, 'error'));
+  }
+
+  // Ask the editor to draft concrete outline-level replacements for a point
+  // that came back without automatic ones — or to ADD more proposals on top
+  // of the existing ones (each section keeps its own button and the backend
+  // accumulates, so previously applied improvements are never lost).
+  async function proposeForSuggestion(s) {
+    if (!s?.id) return;
+    proposingSuggestionId = s.id;
+    try {
+      const res = await api('POST', '/api/outline/analysis/propose', { id: s.id });
+      if (res?.progress) progress.set(res.progress);
+      else progress.set(await api('GET', '/api/progress'));
+      addToast($t('outline.analysis.toasts.proposed'), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { proposingSuggestionId = ''; }
+  }
+
+  async function applyAnalysisSuggestion(s) {
+    if (!s?.id) return;
+    applyingSuggestionId = s.id;
+    try {
+      // Flush any pending local edits so the backend applies exactly what the
+      // user sees in the "Replace: Outline" textareas.
+      for (const [k, t] of Object.entries(recEditTimers)) {
+        if (!k.startsWith(s.id + ':')) continue;
+        clearTimeout(t);
+        const [id, chStr] = k.split(':');
+        await api('POST', '/api/outline/analysis/edit-recommendation', {
+          id, chapter_num: Number(chStr), new_outline: recOutlineEdits[k] ?? '',
+        }).catch(() => {});
+      }
+      const res = await api('POST', '/api/outline/analysis/apply', { id: s.id });
+      if (res?.progress) progress.set(res.progress);
+      else progress.set(await api('GET', '/api/progress'));
+      addToast($t('outline.analysis.toasts.applied', { n: res?.chapters ?? 0 }), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { applyingSuggestionId = ''; }
+  }
+
+  async function clearOutlineAnalysis() {
+    showConfirm($t('outline.analysis.clear') + '?', async () => {
+      try {
+        await api('DELETE', '/api/outline/analysis');
+        progress.set(await api('GET', '/api/progress'));
+        addToast($t('outline.analysis.toasts.cleared'), 'success');
+      } catch (e) { addToast(e.message, 'error'); }
+    });
+  }
+
+  function chapterTitleOf(num) {
+    const ch = chapters.find(c => c.num === num);
+    return ch ? ch.title : '';
+  }
+
   async function generateContinuation() {
     if (!planningRequirements.trim() || !validCount || batchBlocked) return;
     if (endingIntent !== 'serial' && endingStyle === 'custom' && !endingRequirements.trim()) return;
@@ -455,10 +564,10 @@
         </p>
       </div>
       <label class="block text-sm" for="batch-synopsis">{$t('outline.batch.synopsis')}</label>
-      <textarea id="batch-synopsis" class="textarea w-full h-36" bind:value={planningRequirements} placeholder={$t('outline.batch.placeholder')} disabled={batchBlocked}></textarea>
+      <textarea id="batch-synopsis" class="textarea w-full" bind:value={planningRequirements} placeholder={$t('outline.batch.placeholder')} disabled={batchBlocked}></textarea>
       <label class="block text-sm" for="batch-direction">{$t('ending.direction')}</label>
       <p class="text-xs text-base-content/70">{$t('ending.directionHelp')}</p>
-      <textarea id="batch-direction" class="textarea textarea-sm w-full h-20" bind:value={longTermDirection} placeholder={$t('ending.directionExample')} disabled={batchBlocked}></textarea>
+      <textarea id="batch-direction" class="textarea textarea-sm w-full" bind:value={longTermDirection} placeholder={$t('ending.directionExample')} disabled={batchBlocked}></textarea>
       <label class="block text-sm" for="ending-intent">{$t('ending.intent')}</label>
       <!-- svelte-ignore a11y-no-redundant-roles -->
       <SmartSelect
@@ -514,14 +623,14 @@
         <div class="card-body p-4 gap-2">
           <h3 class="card-title text-base">{$t('outline.import.title')}</h3>
           <p class="text-xs text-base-content/65">{$t('outline.import.hint')}</p>
-          <textarea class="textarea w-full h-48 text-sm font-serif" bind:value={importContent} on:input={() => importPreview = null} placeholder={$t('outline.import.placeholder')} disabled={$taskRunning}></textarea>
+          <textarea class="textarea w-full text-sm font-serif" bind:value={importContent} on:input={() => importPreview = null} placeholder={$t('outline.import.placeholder')} disabled={$taskRunning}></textarea>
           <div class="flex justify-end gap-2">
             <button class="btn btn-ghost btn-xs" on:click={() => { showImport = false; importContent = ''; importPreview = null; }}>{$t('common.cancel')}</button>
             <button class="btn btn-primary btn-xs" on:click={previewImportSplit} disabled={$taskRunning || !importContent.trim()}>{$t('outline.import.preview')}</button>
           </div>
 
           {#if importPreview}
-            <div class="bg-base-300 rounded-lg p-3 space-y-2">
+            <div class="bg-base-100 rounded-lg p-3 space-y-2">
               <div class="text-sm font-medium">{$t('outline.import.previewTitle', { n: importPreview.length })}</div>
               <div class="max-h-64 overflow-y-auto space-y-1">
                 {#each importPreview as ch (ch.num)}
@@ -558,7 +667,7 @@
           <p class="text-sm text-base-content/60">{$t('outline.charSuggestions.hint')}</p>
           <div class="space-y-2 max-h-72 overflow-y-auto">
             {#each $outlineCharacterSuggestions as s}
-              <label class="flex gap-3 p-3 rounded-lg bg-base-300/50 cursor-pointer">
+              <label class="flex gap-3 p-3 rounded-lg bg-base-100/50 cursor-pointer">
                 <input type="checkbox" class="checkbox checkbox-sm mt-1" bind:checked={s._selected} />
                 <div class="min-w-0 flex-1">
                   <div class="font-medium">{s.name}</div>
@@ -596,8 +705,8 @@
         </div>
 
         {#if showRevise}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2">
-            <textarea class="textarea textarea-sm w-full h-20 text-sm" bind:value={reviseFeedback} placeholder={$t('outline.revise.placeholder')} disabled={$taskRunning}></textarea>
+          <div class="bg-base-100 rounded-lg p-3 space-y-2">
+            <textarea class="textarea textarea-sm w-full text-sm" bind:value={reviseFeedback} placeholder={$t('outline.revise.placeholder')} disabled={$taskRunning}></textarea>
             <div class="flex justify-between items-center">
               <span class="text-xs text-base-content/65">{$t('outline.revise.hint')}</span>
               <div class="flex gap-2">
@@ -615,7 +724,7 @@
         {#if p.core_prompt}
           <div>
             <span class="text-xs text-base-content/65">{$t('outline.corePrompt')}</span>
-            <div class="bg-base-300 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{p.core_prompt}</div>
+            <div class="bg-base-100 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{p.core_prompt}</div>
           </div>
         {/if}
 
@@ -640,15 +749,15 @@
               {#if group.synopsis}<p class="whitespace-pre-wrap text-sm text-base-content/70 mb-3">{group.synopsis}</p>{/if}
           {#each group.chapters as ch (ch.num)}
             {#if editingNum === ch.num}
-              <div data-outline-chapter={ch.num} id="ChapterCard_Edit" class="bg-base-300 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
+              <div data-outline-chapter={ch.num} id="ChapterCard_Edit" class="bg-base-100 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-bold text-base-content/65 shrink-0">{$t('outline.chapter.chapterLabel', { num: ch.num })}</span>
                   <input type="text" class="input input-sm flex-1" bind:value={editTitle} placeholder={$t('outline.chapter.titlePlaceholder')} disabled={$taskRunning} />
                 </div>
-                <textarea class="textarea textarea-sm w-full h-24 text-sm" bind:value={editOutline} placeholder={$t('outline.chapter.outlinePlaceholder')} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={editOutline} placeholder={$t('outline.chapter.outlinePlaceholder')} disabled={$taskRunning}></textarea>
                 <div>
                   <label for="chapter-cast" class="text-xs text-base-content/65 mb-1 block">{$t('outline.chapter.castLabel')}</label>
-                  <textarea id="chapter-cast" class="textarea textarea-sm w-full h-16 text-sm font-mono" bind:value={editCharactersText} placeholder={$t('outline.chapter.castPlaceholder')} disabled={$taskRunning}></textarea>
+                  <textarea id="chapter-cast" class="textarea textarea-sm w-full text-sm font-mono" bind:value={editCharactersText} placeholder={$t('outline.chapter.castPlaceholder')} disabled={$taskRunning}></textarea>
                   <p class="text-xs text-base-content/65 mt-0.5">{$t('outline.chapter.castHint')}</p>
                 </div>
                 <div class="flex justify-end gap-2">
@@ -662,7 +771,7 @@
               <div
                 data-outline-chapter={ch.num}
                 id="ChapterCard_Summary"
-                class="bg-base-300 rounded-lg p-2.5 group {isOutlineEditable(ch.status) && !$taskRunning ? 'cursor-pointer hover:ring-1 hover:ring-primary/40' : ''}"
+                class="bg-base-100 rounded-lg p-2.5 group {isOutlineEditable(ch.status) && !$taskRunning ? 'cursor-pointer hover:ring-1 hover:ring-primary/40' : ''}"
                 on:click={() => isOutlineEditable(ch.status) && !$taskRunning && startEdit(ch)}
               >
                 <div class="flex items-center gap-2">
@@ -691,7 +800,7 @@
         </div>
 
         {#if $streamingChapterIdx >= 0 && $streamingContent}
-          <div class="bg-base-300 rounded p-3 mt-1 text-sm max-h-48 overflow-y-auto chapter-content">
+          <div class="bg-base-100 rounded p-3 mt-1 text-sm max-h-48 overflow-y-auto chapter-content">
             <div class="text-xs text-base-content/65 mb-1 flex items-center gap-1">
               <span class="loading loading-dots loading-xs"></span> {$t('outline.streamHint')}
             </div>
@@ -700,5 +809,162 @@
         {/if}
       </div>
     </div>
+    <!-- Bestseller-editor full-outline analysis -->
+    {#if hasOutline}
+      <div id="CardSection_OutlineAnalysis" class="card bg-base-200">
+        <div class="card-body p-4 gap-3">
+          <div class="flex items-start justify-between gap-2 flex-wrap">
+            <div>
+              <h3 class="card-title text-base">{$t('outline.analysis.title')}</h3>
+              <span class="field-label">{$t('outline.analysis.subtitle')}</span>
+            </div>
+            {#if outlineAnalysis}
+              <button class="btn btn-ghost btn-xs shrink-0" on:click={clearOutlineAnalysis} disabled={$taskRunning}>{$t('outline.analysis.clear')}</button>
+            {/if}
+          </div>
+
+          {#if outlineAnalysis}
+            <div class="space-y-3">
+              <div class="flex items-center gap-3 text-sm text-base-content/70">
+                {#if outlineAnalysis.overall_score}
+                  <span class="badge badge-lg {outlineAnalysis.overall_score >= 80 ? 'badge-success' : outlineAnalysis.overall_score >= 60 ? 'badge-warning' : 'badge-error'}">
+                    {$t('outline.analysis.score')}: {outlineAnalysis.overall_score}/100
+                  </span>
+                {/if}
+                {#if outlineAnalysis.based_on_structure}
+                  <span>{outlineAnalysis.based_on_structure}</span>
+                {/if}
+                <span class="ml-auto text-xs">{outlineAnalysis.generated_at?.slice(0, 10)}</span>
+              </div>
+
+              {#if outlineAnalysis.summary}
+                <details open class="bg-base-100 rounded-lg p-3">
+                  <summary class="cursor-pointer text-sm font-semibold">{$t('outline.analysis.summary')}</summary>
+                  <p class="whitespace-pre-wrap mt-2 text-sm text-base-content/80">{outlineAnalysis.summary}</p>
+                </details>
+              {/if}
+
+              {#if outlineAnalysis.pillar_scores?.length}
+                {@const pillarCatMap = {
+                  reader_profile: ['market'],
+                  inspirational_pieces: ['other', 'hook'],
+                  tone: ['tone'],
+                  story_structure: ['structure', 'pacing']
+                }}
+                {@const hasOpenSuggestionFor = (key) =>
+                  (outlineAnalysis.suggestions || []).some(
+                    (s) => (pillarCatMap[key] || []).includes(s.category) && s.status !== 'applied'
+                  )}
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                  {#each outlineAnalysis.pillar_scores as p (p.key)}
+                    {@const strong = p.score >= 90 && !hasOpenSuggestionFor(p.key)}
+                    <div class="bg-base-100 rounded-lg p-2.5 space-y-1">
+                      <div class="flex items-center justify-between gap-1">
+                        <span class="text-xs font-semibold truncate">{$t('outline.analysis.pillar.' + p.key)}</span>
+                        <span class="badge badge-sm {p.score >= 90 ? 'badge-success' : p.score >= 75 ? 'badge-info' : p.score >= 60 ? 'badge-warning' : 'badge-error'}">{p.score}</span>
+                      </div>
+                      {#if strong}
+                        <div class="text-xs text-success font-medium">✓ {$t('outline.analysis.noChangesNeeded')}</div>
+                      {:else}
+                        <div class="w-full h-1.5 rounded-full bg-base-content/10 overflow-hidden">
+                          <div class="h-full rounded-full {p.score >= 90 ? 'bg-success' : p.score >= 75 ? 'bg-info' : p.score >= 60 ? 'bg-warning' : 'bg-error'}" style="width: {p.score}%"></div>
+                        </div>
+                      {/if}
+                      {#if p.note}<p class="text-[11px] leading-snug text-base-content/60 line-clamp-3">{p.note}</p>{/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+
+              <div class="font-semibold text-sm">{$t('outline.analysis.suggestions')} ({outlineAnalysis.suggestions?.length || 0})</div>
+              <div class="space-y-2">
+                {#each outlineAnalysis.suggestions || [] as s (s.id)}
+                  <section class="border border-base-content/10 rounded-lg p-3 space-y-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="badge badge-outline badge-sm">{$t('outline.analysis.category.' + (s.category || 'other'))}</span>
+                      <h4 class="font-semibold text-sm flex-1 min-w-0">{s.title}</h4>
+                      {#if s.status === 'applied'}
+                        <span class="badge badge-success badge-sm">✓ {$t('outline.analysis.applied')}</span>
+                      {/if}
+                    </div>
+                    {#if s.detail}<p class="text-sm text-base-content/80 whitespace-pre-wrap">{s.detail}</p>{/if}
+                    {#if s.action}<p class="text-sm text-base-content/70 italic whitespace-pre-wrap">{s.action}</p>{/if}
+                    {#if s.applies_to_chapters?.length}
+                      <p class="text-xs text-base-content/60">{$t('outline.analysis.chapters', { list: s.applies_to_chapters.join(', ') })}</p>
+                    {/if}
+                    {#if s.recommendations?.length}
+                      <div class="space-y-2">
+                        {#each s.recommendations as rec (rec.chapter_num)}
+                          <div class="bg-base-100 rounded p-2.5 text-xs space-y-1.5">
+                            <div class="font-semibold">Ch. {rec.chapter_num}{chapterTitleOf(rec.chapter_num) ? ' — ' + chapterTitleOf(rec.chapter_num) : ''}</div>
+                            {#if rec.new_title}
+                              <div><span class="text-base-content/60">{$t('outline.analysis.replacePreview')} Title:</span> <span class="line-through opacity-60">{chapterTitleOf(rec.chapter_num)}</span></div>
+                              <div><span class="text-base-content/60">{$t('outline.analysis.with')}</span> <span class="font-medium">{rec.new_title}</span></div>
+                            {/if}
+                            {#if rec.new_outline}
+                              <details open>
+                                <summary class="cursor-pointer text-base-content/60">{$t('outline.analysis.replacePreview')} Outline</summary>
+                                <!-- Editable before applying: the user can tweak the
+                                     editor's proposed chapter plan; edits are saved to
+                                     the backend (debounced) and flushed on Apply. -->
+                                <textarea
+                                  class="textarea textarea-sm w-full text-xs mt-1 leading-relaxed overflow-hidden"
+                                  style="min-height: 3rem"
+                                  value={recOutlineValue(s, rec)}
+                                  use:autosizeRecTextarea
+                                  on:input={(e) => onRecOutlineInput(s, rec, e)}
+                                  disabled={$taskRunning || s.status === 'applied'}
+                                  placeholder={$t('outline.analysis.editableHint')}
+                                ></textarea>
+                                <p class="text-[10px] text-base-content/45">{$t('outline.analysis.editableHint')}</p>
+                              </details>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                      {#if s.status !== 'applied'}
+                        <div class="flex justify-end gap-2">
+                          <!-- Each section keeps its own Propose button: the backend
+                               accumulates new proposals on top of the existing ones,
+                               so improvements applied earlier are never discarded. -->
+                          <button class="btn btn-outline btn-xs" on:click={() => proposeForSuggestion(s)} disabled={$taskRunning || proposingSuggestionId === s.id}>
+                            {#if proposingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
+                            {$t('outline.analysis.propose')}
+                          </button>
+                          <button class="btn btn-success btn-xs" on:click={() => applyAnalysisSuggestion(s)} disabled={$taskRunning || applyingSuggestionId === s.id}>
+                            {#if applyingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
+                            {$t('outline.analysis.apply')}
+                          </button>
+                        </div>
+                      {/if}
+                    {:else if s.status !== 'applied'}
+                      <div class="space-y-2">
+                        <p class="text-xs text-base-content/50">{$t('outline.analysis.noApply')}</p>
+                        <div class="flex justify-end">
+                          <button class="btn btn-outline btn-xs" on:click={() => proposeForSuggestion(s)} disabled={$taskRunning || proposingSuggestionId === s.id}>
+                            {#if proposingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
+                            {$t('outline.analysis.propose')}
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
+                  </section>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          <div class="flex justify-end pt-1">
+            <button class="btn btn-primary btn-sm" on:click={analyzeOutline} disabled={$taskRunning || chapters.length === 0}>
+              {#if $taskRunning && outlineAnalysis == null}
+                <span class="loading loading-spinner loading-xs"></span>
+              {/if}
+              {$t(outlineAnalysis ? 'outline.analysis.reanalyze' : 'outline.analysis.btn')}
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
   {/if}
+
 </div>
