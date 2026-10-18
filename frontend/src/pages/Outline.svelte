@@ -455,10 +455,10 @@
         </p>
       </div>
       <label class="block text-sm" for="batch-synopsis">{$t('outline.batch.synopsis')}</label>
-      <textarea id="batch-synopsis" class="textarea w-full h-36" bind:value={planningRequirements} placeholder={$t('outline.batch.placeholder')} disabled={batchBlocked}></textarea>
+      <textarea id="batch-synopsis" class="textarea w-full" bind:value={planningRequirements} placeholder={$t('outline.batch.placeholder')} disabled={batchBlocked}></textarea>
       <label class="block text-sm" for="batch-direction">{$t('ending.direction')}</label>
       <p class="text-xs text-base-content/70">{$t('ending.directionHelp')}</p>
-      <textarea id="batch-direction" class="textarea textarea-sm w-full h-20" bind:value={longTermDirection} placeholder={$t('ending.directionExample')} disabled={batchBlocked}></textarea>
+      <textarea id="batch-direction" class="textarea textarea-sm w-full" bind:value={longTermDirection} placeholder={$t('ending.directionExample')} disabled={batchBlocked}></textarea>
       <label class="block text-sm" for="ending-intent">{$t('ending.intent')}</label>
       <!-- svelte-ignore a11y-no-redundant-roles -->
       <SmartSelect
@@ -514,14 +514,14 @@
         <div class="card-body p-4 gap-2">
           <h3 class="card-title text-base">{$t('outline.import.title')}</h3>
           <p class="text-xs text-base-content/65">{$t('outline.import.hint')}</p>
-          <textarea class="textarea w-full h-48 text-sm font-serif" bind:value={importContent} on:input={() => importPreview = null} placeholder={$t('outline.import.placeholder')} disabled={$taskRunning}></textarea>
+          <textarea class="textarea w-full text-sm font-serif" bind:value={importContent} on:input={() => importPreview = null} placeholder={$t('outline.import.placeholder')} disabled={$taskRunning}></textarea>
           <div class="flex justify-end gap-2">
             <button class="btn btn-ghost btn-xs" on:click={() => { showImport = false; importContent = ''; importPreview = null; }}>{$t('common.cancel')}</button>
             <button class="btn btn-primary btn-xs" on:click={previewImportSplit} disabled={$taskRunning || !importContent.trim()}>{$t('outline.import.preview')}</button>
           </div>
 
           {#if importPreview}
-            <div class="bg-base-300 rounded-lg p-3 space-y-2">
+            <div class="bg-base-100 rounded-lg p-3 space-y-2">
               <div class="text-sm font-medium">{$t('outline.import.previewTitle', { n: importPreview.length })}</div>
               <div class="max-h-64 overflow-y-auto space-y-1">
                 {#each importPreview as ch (ch.num)}
@@ -558,7 +558,7 @@
           <p class="text-sm text-base-content/60">{$t('outline.charSuggestions.hint')}</p>
           <div class="space-y-2 max-h-72 overflow-y-auto">
             {#each $outlineCharacterSuggestions as s}
-              <label class="flex gap-3 p-3 rounded-lg bg-base-300/50 cursor-pointer">
+              <label class="flex gap-3 p-3 rounded-lg bg-base-100/50 cursor-pointer">
                 <input type="checkbox" class="checkbox checkbox-sm mt-1" bind:checked={s._selected} />
                 <div class="min-w-0 flex-1">
                   <div class="font-medium">{s.name}</div>
@@ -596,8 +596,8 @@
         </div>
 
         {#if showRevise}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2">
-            <textarea class="textarea textarea-sm w-full h-20 text-sm" bind:value={reviseFeedback} placeholder={$t('outline.revise.placeholder')} disabled={$taskRunning}></textarea>
+          <div class="bg-base-100 rounded-lg p-3 space-y-2">
+            <textarea class="textarea textarea-sm w-full text-sm" bind:value={reviseFeedback} placeholder={$t('outline.revise.placeholder')} disabled={$taskRunning}></textarea>
             <div class="flex justify-between items-center">
               <span class="text-xs text-base-content/65">{$t('outline.revise.hint')}</span>
               <div class="flex gap-2">
@@ -615,7 +615,7 @@
         {#if p.core_prompt}
           <div>
             <span class="text-xs text-base-content/65">{$t('outline.corePrompt')}</span>
-            <div class="bg-base-300 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{p.core_prompt}</div>
+            <div class="bg-base-100 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{p.core_prompt}</div>
           </div>
         {/if}
 
@@ -640,15 +640,15 @@
               {#if group.synopsis}<p class="whitespace-pre-wrap text-sm text-base-content/70 mb-3">{group.synopsis}</p>{/if}
           {#each group.chapters as ch (ch.num)}
             {#if editingNum === ch.num}
-              <div data-outline-chapter={ch.num} id="ChapterCard_Edit" class="bg-base-300 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
+              <div data-outline-chapter={ch.num} id="ChapterCard_Edit" class="bg-base-100 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-bold text-base-content/65 shrink-0">{$t('outline.chapter.chapterLabel', { num: ch.num })}</span>
                   <input type="text" class="input input-sm flex-1" bind:value={editTitle} placeholder={$t('outline.chapter.titlePlaceholder')} disabled={$taskRunning} />
                 </div>
-                <textarea class="textarea textarea-sm w-full h-24 text-sm" bind:value={editOutline} placeholder={$t('outline.chapter.outlinePlaceholder')} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={editOutline} placeholder={$t('outline.chapter.outlinePlaceholder')} disabled={$taskRunning}></textarea>
                 <div>
                   <label for="chapter-cast" class="text-xs text-base-content/65 mb-1 block">{$t('outline.chapter.castLabel')}</label>
-                  <textarea id="chapter-cast" class="textarea textarea-sm w-full h-16 text-sm font-mono" bind:value={editCharactersText} placeholder={$t('outline.chapter.castPlaceholder')} disabled={$taskRunning}></textarea>
+                  <textarea id="chapter-cast" class="textarea textarea-sm w-full text-sm font-mono" bind:value={editCharactersText} placeholder={$t('outline.chapter.castPlaceholder')} disabled={$taskRunning}></textarea>
                   <p class="text-xs text-base-content/65 mt-0.5">{$t('outline.chapter.castHint')}</p>
                 </div>
                 <div class="flex justify-end gap-2">
@@ -662,7 +662,7 @@
               <div
                 data-outline-chapter={ch.num}
                 id="ChapterCard_Summary"
-                class="bg-base-300 rounded-lg p-2.5 group {isOutlineEditable(ch.status) && !$taskRunning ? 'cursor-pointer hover:ring-1 hover:ring-primary/40' : ''}"
+                class="bg-base-100 rounded-lg p-2.5 group {isOutlineEditable(ch.status) && !$taskRunning ? 'cursor-pointer hover:ring-1 hover:ring-primary/40' : ''}"
                 on:click={() => isOutlineEditable(ch.status) && !$taskRunning && startEdit(ch)}
               >
                 <div class="flex items-center gap-2">
@@ -691,7 +691,7 @@
         </div>
 
         {#if $streamingChapterIdx >= 0 && $streamingContent}
-          <div class="bg-base-300 rounded p-3 mt-1 text-sm max-h-48 overflow-y-auto chapter-content">
+          <div class="bg-base-100 rounded p-3 mt-1 text-sm max-h-48 overflow-y-auto chapter-content">
             <div class="text-xs text-base-content/65 mb-1 flex items-center gap-1">
               <span class="loading loading-dots loading-xs"></span> {$t('outline.streamHint')}
             </div>

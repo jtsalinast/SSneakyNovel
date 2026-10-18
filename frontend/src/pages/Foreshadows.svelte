@@ -279,7 +279,7 @@
         {/if}
         <div class="space-y-2 max-h-56 overflow-y-auto text-sm">
           {#each (outlineReport.conflicts || []) as c}
-            <div class="rounded-lg bg-base-300/50 p-3">
+            <div class="rounded-lg bg-base-100/50 p-3">
               <div class="font-medium">#{c.foreshadow_id} {c.foreshadow_name}</div>
               <div class="text-base-content/70 mt-1">{c.description}</div>
               <div class="text-xs text-base-content/65 mt-1">{$t('fs.outlineConflict.suggestedFix')}：{c.suggested_fix}</div>
@@ -298,7 +298,7 @@
         <p class="text-sm text-base-content/60">{$t('fs.suggestions.hint')}</p>
         <div class="space-y-2 max-h-72 overflow-y-auto">
           {#each $foreshadowSuggestions as s, i}
-            <label class="flex gap-3 p-3 rounded-lg bg-base-300/50 cursor-pointer">
+            <label class="flex gap-3 p-3 rounded-lg bg-base-100/50 cursor-pointer">
               <input type="checkbox" class="checkbox checkbox-sm mt-1" bind:checked={s._selected} />
               <div class="min-w-0 flex-1">
                 <div class="font-medium">{s.name}</div>
@@ -439,7 +439,7 @@
         {#if loadingRoadmap}
           <div class="flex justify-center py-8"><span class="loading loading-spinner loading-md"></span></div>
         {:else}
-          <pre id="RoadmapMarkdownViewer" class="text-xs whitespace-pre-wrap bg-base-300/50 rounded-lg p-4 max-h-[480px] overflow-y-auto">{roadmapMarkdown || $t('fs.markdown.empty')}</pre>
+          <pre id="RoadmapMarkdownViewer" class="text-xs whitespace-pre-wrap bg-base-100/50 rounded-lg p-4 max-h-[480px] overflow-y-auto">{roadmapMarkdown || $t('fs.markdown.empty')}</pre>
         {/if}
       </div>
     </div>

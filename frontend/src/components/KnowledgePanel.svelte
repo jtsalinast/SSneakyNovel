@@ -45,7 +45,7 @@
   }
 </script>
 
-<details class="bg-base-300 rounded" open={expanded} on:toggle={e => expanded = e.currentTarget.open}>
+<details class="bg-base-100 rounded" open={expanded} on:toggle={e => expanded = e.currentTarget.open}>
   <summary class="p-2 text-xs text-base-content/60 cursor-pointer select-none flex items-center gap-2">
     <span class="flex-1">{$t('facts.title')}</span>
     <span class="badge badge-ghost badge-sm">{$t('facts.count', {count: facts.length})}</span>
@@ -70,7 +70,7 @@
       <ul class="space-y-1 max-h-60 overflow-auto">
         {#each activeFact.references || [] as ref}
           <li>
-            <button class="text-left w-full rounded-lg p-2 hover:bg-base-300 disabled:opacity-60 break-words" disabled={ref.stale} on:click={() => dispatch('jump', ref)}>
+            <button class="text-left w-full rounded-lg p-2 hover:bg-base-100 disabled:opacity-60 break-words" disabled={ref.stale} on:click={() => dispatch('jump', ref)}>
               {$t('facts.source', {chapter: ref.chapter, block: ref.block_id})}
               {#if ref.stale}<span class="text-warning"> — {$t('facts.stale')}</span>{/if}
               <span class="block text-xs text-base-content/70 line-clamp-2">{ref.quote}</span>

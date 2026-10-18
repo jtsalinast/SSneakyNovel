@@ -77,7 +77,7 @@
       <p class="text-sm text-base-content/60">{$t('configChange.hint')}</p>
       <div class="space-y-2 max-h-80 overflow-y-auto">
         {#each $pendingConfigChanges as c}
-          <label class="flex gap-3 p-3 rounded-lg bg-base-300/50 cursor-pointer">
+          <label class="flex gap-3 p-3 rounded-lg bg-base-100/50 cursor-pointer">
             <input type="checkbox" class="checkbox checkbox-sm mt-1" bind:checked={c._selected} disabled={$taskRunning} />
             <div class="min-w-0 flex-1 space-y-1">
               <div class="flex flex-wrap items-center gap-2">

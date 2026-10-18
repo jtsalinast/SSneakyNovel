@@ -945,7 +945,23 @@ function randomizeStoryParams() {
   const DEFAULT_STRUCTURE = { flash: 'three_act', short: 'three_act', novelette: 'three_act', novella: 'three_act', light_novel: 'kishotenketsu', anthology: 'episodic', novel: 'six_act', epic: 'six_act' };
   function structureOptions() { return ALL_STRUCTURE_KEYS; }
   $: structOpts = structureOptions();
-  function onLengthChange() {
+  // UI-reorder (novel-params): SmartSelect option lists for the Length &
+  // Structure cells now rendered directly in the Story grid (under Gore
+  // Level). Same data pipeline as lengthComboOpts/structureComboOpts but with
+  // the `description` field SmartSelect reads for its two-line rows.
+  $: lengthOpts = (() => {
+    void novelParamsTick;
+    return LENGTH_KEYS.map((k) => ({ value: k, label: $t('config.story.length.' + k), description: lengthDescFor(k) }));
+  })();
+  $: structureOpts = (() => {
+    void novelParamsTick;
+    return ALL_STRUCTURE_KEYS.map((k) => ({ value: k, label: $t('config.story.structure.' + k), description: structHint(k) || '' }));
+  })();
+  function onLengthChange(e) {
+    // The Story-length SmartSelect also binds cfg.story_length directly; when
+    // called from a change event make sure the preset logic sees the final
+    // value regardless of bind/on:change ordering.
+    if (e && e.detail) localStoryCfg.story_length = String(e.detail.value || '').trim();
     // 1) Apply the target-words-per-chapter preset for the new length. The
     //    field stays freely editable afterwards; unknown lengths keep it as is.
     const preset = TARGET_WORDS_BY_LENGTH[localStoryCfg.story_length];
@@ -956,6 +972,10 @@ function randomizeStoryParams() {
     const firstPart = cur.split(',')[0].trim();
     const wasAuto = !cur || Object.values(DEFAULT_STRUCTURE).includes(firstPart);
     if (wasAuto) localStoryCfg.structure = DEFAULT_STRUCTURE[localStoryCfg.story_length] || 'three_act';
+  }
+
+  function onStructureChange(e) {
+    if (e && e.detail) localStoryCfg.structure = String(e.detail.value || '').trim();
   }
 
   // AI section generation (based on the story parameters currently in the form)
@@ -1989,6 +2009,285 @@ function randomizeStoryParams() {
             />
           </div>
           -->
+          <!-- UI-reorder: GenreCascadeFields now sits directly under the
+               Subgenre-modifiers textarea; the segmented content fields come
+               next, then the Length/Target-words and Structure/Language rows,
+               then Title/Author. Length & Structure render here (not inside
+               the cascade block) using its exported option lists/handlers. -->
+          <GenreCascadeFields
+            flat={true}
+            showTone={false}
+            dividerBeforeSettings={true}
+            paramsPayload={novelParamsPayload}
+              genreKeys={selectedGenreKeys}
+              bind:cfg={localStoryCfg}
+              disabled={$taskRunning}
+              otherLabel={$t('config.story.other')}
+              placeholderGenre={$t('config.story.type.placeholder')}
+              placeholderSub={$t('config.story.subgenre.placeholder')}
+              placeholderConflict={$t('config.story.conflict.placeholder')}
+              placeholderProtag={$t('config.story.protagonist.placeholder')}
+              emptyLabel={$t('config.story.auto')}
+              clearLabel={$t('config.story.clear')}
+              hints={SUBGENRE_HINTS}
+              tips={{
+                genre: $t('config.tip.genre'),
+                subgenre: $t('config.tip.subgenre'),
+                conflict: $t('config.tip.conflict'),
+                protagonist: $t('config.tip.protagonist'),
+                specificSettings: $t('config.tip.specificSettings'),
+                tone: $t('config.tip.tone'),
+                length: $t('config.tip.length'),
+                structure: $t('config.tip.structure'),
+              }}
+              labels={{
+                sectionTitle: $t('config.story.genreFilteredSection'),
+                genre: $t('config.story.type'),
+                subgenre: $t('config.story.subgenre'),
+                conflict: $t('config.story.conflict'),
+                protagonist: $t('config.story.protagonist'),
+                settings: $t('config.story.specificSettings'),
+                settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
+                modifiers: $t('config.story.modifiers'),
+                pickGenre: $t('config.settings.pickGenre'),
+                pickSubgenre: $t('config.settings.pickSubgenre'),
+                tone: $t('config.story.tone'),
+                tonePlaceholder: $t('config.story.tone.placeholder'),
+                length: $t('config.story.length'),
+                lengthNone: $t('config.story.length.none'),
+                structure: $t('config.story.structure'),
+                structurePlaceholder: $t('config.story.structure.placeholder'),
+                fromSubgenre: $t('config.story.fromSubgenre'),
+                fromGenres: $t('config.story.fromGenres'),
+              }}
+              on:genreChange={(e) => {
+                // Keep the derived legacy state in sync when the NEW block
+                // changes the genre selection (cfg.type is already written by
+                // the component; this only refreshes selectedGenreKeys so the
+                // info box / randomize stay coherent).
+                const keys = (e.detail.keys || []).filter(Boolean);
+                selectedGenreKeys = keys.length ? keys : [];
+                lastGenreText = localStoryCfg.type;
+                initGenreCascade();
+              }}
+              on:subChange={onSubgenrePickerChange}
+              on:settingsChange={() => refreshCheckedSettings()}
+            />
+
+          <div class="divider col-span-2 my-0 py-6 h-px"></div>
+
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.targetAudience')}</span>
+            <!-- Revolut-style segmented control (same chrome as Gore Level):
+                 6 segments + external Auto button. The stored value keeps the
+                 SAME vocabulary as before — kid / middle_grade / ya /
+                 new_adult / adult / all_ages — so the backend contract is
+                 untouched; '' (unset) renders as auto mode. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'kid', label: $t('config.story.targetAudience.kid'), description: $t('config.story.targetAudience.desc.kid') },
+                { value: 'middle_grade', label: $t('config.story.targetAudience.middle_grade'), description: $t('config.story.targetAudience.desc.middle_grade') },
+                { value: 'ya', label: $t('config.story.targetAudience.ya'), description: $t('config.story.targetAudience.desc.ya') },
+                { value: 'new_adult', label: $t('config.story.targetAudience.new_adult'), description: $t('config.story.targetAudience.desc.new_adult') },
+                { value: 'adult', label: $t('config.story.targetAudience.adult'), description: $t('config.story.targetAudience.desc.adult') },
+                { value: 'all_ages', label: $t('config.story.targetAudience.all_ages'), description: $t('config.story.targetAudience.desc.all_ages') },
+              ]}
+              autoValue=""
+              emptyLabel={$t('config.story.targetAudience.none')}
+              disabled={$taskRunning}
+              title={$t('config.tip.targetAudience')}
+              ariaLabel={$t('config.story.targetAudience')}
+              width="100%"
+              bind:value={localStoryCfg.target_audience}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.worldDarkness')}</span>
+            <!-- Segmented control (no SmartSelect header inside the cell: the
+                 component no longer renders its own label, so this is the only
+                 one). 'random' maps to the external Auto button and
+                 idyllic/temperate/gritty/grim/abyssal become the segments —
+                 same stored values as before. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'].map((d) => ({ value: d, label: $t('config.story.worldDarkness.' + d) }))}
+              autoValue=""
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.worldDarkness')}
+              ariaLabel={$t('config.story.worldDarkness')}
+              width="100%"
+              bind:value={localStoryCfg.world_darkness}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.genderBias')}</span>
+            <!-- Sin opción vacía explícita: el género siempre mantiene un valor
+                 (el backend normaliza '' → 'random'), así que 'random' es el
+                 valor del botón Auto externo y balanced/male/female son los
+                 segmentos — mismos valores guardados que antes. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={['random', 'balanced', 'male', 'female'].map((g) => ({ value: g, label: $t('config.story.genderBias.' + g) }))}
+              autoValue="random"
+              emptyLabel={$t('config.story.genderBias.random')}
+              disabled={$taskRunning}
+              title={$t('config.tip.genderBias')}
+              ariaLabel={$t('config.story.genderBias')}
+              width="80%"
+              bind:value={localStoryCfg.gender_bias}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.romanceLevel')}</span>
+            <!-- Segmented control; 'random' maps to the external Auto button
+               and the remaining levels (none/subplot/moderate/central) become
+               the segments — same stored values as before. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'random', label: $t('config.story.romanceLevel.random') },
+                { value: 'none', label: $t('config.story.romanceLevel.none') },
+                { value: 'subplot', label: $t('config.story.romanceLevel.subplot') },
+                { value: 'moderate', label: $t('config.story.romanceLevel.moderate') },
+                { value: 'central', label: $t('config.story.romanceLevel.central') },
+              ]}
+              autoValue="random"
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.romanceLevel')}
+              ariaLabel={$t('config.story.romanceLevel')}
+              width="80%"
+              bind:value={localStoryCfg.romance_level}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.sexualContent')}</span>
+            <!-- Segmented control; 'random' maps to the external Auto button
+               and clean/fade_to_black/explicit become the segments — same
+               stored values as before. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'random', label: $t('config.story.sexualContent.random') },
+                { value: 'clean', label: $t('config.story.sexualContent.clean') },
+                { value: 'fade_to_black', label: $t('config.story.sexualContent.fade_to_black') },
+                { value: 'explicit', label: $t('config.story.sexualContent.explicit') },
+              ]}
+              autoValue="random"
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.sexualContent')}
+              ariaLabel={$t('config.story.sexualContent')}
+              width="60%"
+              bind:value={localStoryCfg.sexual_content}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.goreLevel')}</span>
+            <!-- Revolut-style segmented control (ported from the Alpine
+                 prototype): 3 segments + external Auto button. The stored
+                 value keeps the SAME vocabulary as before — random / none /
+                 mid / explicit — so the backend contract is untouched; the
+                 Auto button maps to 'random' and the header shows the
+                 current selection name. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'none', label: $t('config.story.goreLevel.none'), description: '[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.' },
+                { value: 'mid', label: $t('config.story.goreLevel.mid'), description: '[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.' },
+                { value: 'explicit', label: $t('config.story.goreLevel.explicit'), description: '[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.' },
+              ]}
+              autoValue="random"
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.goreLevel')}
+              ariaLabel={$t('config.story.goreLevel')}
+              width="60%"
+              bind:value={localStoryCfg.gore_level}
+            />
+          </div>
+
+          <div class="divider col-span-2 my-0 py-6 h-px"></div>
+
+          <!-- UI-reorder: Story length | Target words per chapter -->
+          <div>
+            <span class="field-label flex items-center gap-1">
+              {$t('config.story.length')}
+            </span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={lengthOpts}
+              allowCustom={false}
+              placeholder={$t('config.story.length.none')}
+              emptyLabel={$t('config.story.length.none')}
+              disabled={$taskRunning}
+              title={$t('config.tip.length')}
+              ariaLabel={$t('config.story.length')}
+              bind:value={localStoryCfg.story_length}
+              on:change={onLengthChange}
+            />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.targetWords')}</span>
+            <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} disabled={$taskRunning} />
+          </div>
+
+          <!-- UI-reorder: Story structure | Story language -->
+          <div>
+            <span class="field-label flex items-center gap-1">
+              {$t('config.story.structure')}
+            </span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={structureOpts}
+              allowCustom={true}
+              otherLabel={$t('config.story.other')}
+              placeholder={$t('config.story.structure.placeholder')}
+              emptyLabel={$t('config.story.auto')}
+              disabled={$taskRunning}
+              title={$t('config.tip.structure')}
+              ariaLabel={$t('config.story.structure')}
+              bind:value={localStoryCfg.structure}
+              on:change={onStructureChange}
+            />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.language')}</span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={[
+                { value: 'en', label: 'EN — ' + $t('config.story.language.en') },
+                { value: 'es', label: 'ES — ' + $t('config.story.language.es') },
+              ]}
+              allowCustom={false}
+              emptyLabel={$t('config.story.language.auto')}
+              disabled={$taskRunning}
+              title={$t('config.tip.language')}
+              ariaLabel={$t('config.story.language')}
+              bind:value={localStoryCfg.output_language}
+            />
+          </div>
+
+          <div>
+            <span class="field-label">{$t('config.story.titleField')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder={$t('config.story.title.placeholder')} disabled={$taskRunning} />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.author')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
+          </div>
+          <!-- LEGACY TONE FIELD (round 23 — replaced by the tone input + chips
+               inside GenreCascadeFields):
+          <div>
+            <span class="field-label">{$t('config.story.titleField')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder={$t('config.story.title.placeholder')} disabled={$taskRunning} />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.author')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
+          </div>
           <!-- LEGACY SUBGENRE FIELD (round 23 — replaced by GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.subgenre')}<InfoTip text={fieldTip('subgenre')} label={$t('config.story.subgenre')} /></span>
@@ -2051,148 +2350,9 @@ function randomizeStoryParams() {
                 </div>
               </details>
             {/if}
-            <textarea class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
+            <textarea class="textarea textarea-sm w-full text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
           </div>
           -->
-          <!-- Round 29: the "genre-filtered" block is no longer nested inside
-               its own bordered card — it renders flat (no wrapper divs, no
-               section header) so its fields sit at the same level as the rest
-               of the "Story parameters" grid content. -->
-          <GenreCascadeFields
-            flat={true}
-            paramsPayload={novelParamsPayload}
-              genreKeys={selectedGenreKeys}
-              bind:cfg={localStoryCfg}
-              disabled={$taskRunning}
-              otherLabel={$t('config.story.other')}
-              placeholderGenre={$t('config.story.type.placeholder')}
-              placeholderSub={$t('config.story.subgenre.placeholder')}
-              placeholderConflict={$t('config.story.conflict.placeholder')}
-              placeholderProtag={$t('config.story.protagonist.placeholder')}
-              emptyLabel={$t('config.story.auto')}
-              clearLabel={$t('config.story.clear')}
-              hints={SUBGENRE_HINTS}
-              tips={{
-                genre: $t('config.tip.genre'),
-                subgenre: $t('config.tip.subgenre'),
-                conflict: $t('config.tip.conflict'),
-                protagonist: $t('config.tip.protagonist'),
-                specificSettings: $t('config.tip.specificSettings'),
-                tone: $t('config.tip.tone'),
-                length: $t('config.tip.length'),
-                structure: $t('config.tip.structure'),
-              }}
-              labels={{
-                sectionTitle: $t('config.story.genreFilteredSection'),
-                genre: $t('config.story.type'),
-                subgenre: $t('config.story.subgenre'),
-                conflict: $t('config.story.conflict'),
-                protagonist: $t('config.story.protagonist'),
-                settings: $t('config.story.specificSettings'),
-                settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
-                modifiers: $t('config.story.modifiers'),
-                pickGenre: $t('config.settings.pickGenre'),
-                pickSubgenre: $t('config.settings.pickSubgenre'),
-                tone: $t('config.story.tone'),
-                tonePlaceholder: $t('config.story.tone.placeholder'),
-                length: $t('config.story.length'),
-                lengthNone: $t('config.story.length.none'),
-                structure: $t('config.story.structure'),
-                structurePlaceholder: $t('config.story.structure.placeholder'),
-                fromSubgenre: $t('config.story.fromSubgenre'),
-                fromGenres: $t('config.story.fromGenres'),
-              }}
-              on:genreChange={(e) => {
-                // Keep the derived legacy state in sync when the NEW block
-                // changes the genre selection (cfg.type is already written by
-                // the component; this only refreshes selectedGenreKeys so the
-                // info box / randomize stay coherent).
-                const keys = (e.detail.keys || []).filter(Boolean);
-                selectedGenreKeys = keys.length ? keys : [];
-                lastGenreText = localStoryCfg.type;
-                initGenreCascade();
-              }}
-              on:subChange={onSubgenrePickerChange}
-              on:settingsChange={() => refreshCheckedSettings()}
-            />
-          <div>
-            <span class="field-label">{$t('config.story.titleField')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder={$t('config.story.title.placeholder')} disabled={$taskRunning} />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.author')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.language')}</span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={[
-                { value: 'en', label: 'EN — ' + $t('config.story.language.en') },
-                { value: 'es', label: 'ES — ' + $t('config.story.language.es') },
-              ]}
-              allowCustom={false}
-              emptyLabel={$t('config.story.language.auto')}
-              disabled={$taskRunning}
-              title={$t('config.tip.language')}
-              ariaLabel={$t('config.story.language')}
-              bind:value={localStoryCfg.output_language}
-            />
-          </div>
-          <!-- LEGACY TONE FIELD (round 23 — replaced by the tone input + chips
-               inside GenreCascadeFields):
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.tone')}</span>
-            <input type="text" class="input input-sm w-full mb-1" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
-            {#if toneOpts.length}
-              <div class="flex flex-wrap gap-x-3 gap-y-1">
-                {#each toneOpts as t}
-                  <label class="flex items-center gap-1.5 text-xs cursor-pointer" >
-                    <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={$taskRunning} />
-                    {t}
-                  </label>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          -->
-          <!-- LEGACY LENGTH / STRUCTURE / CONFLICT / PROTAGONIST COMBOBOXES
-               (round 23 — replaced by the filtered comboboxes inside
-               GenreCascadeFields; target-words stays editable below):
-          <div>
-            <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.length')}<InfoTip text={fieldTip('length')} label={$t('config.story.length')} /></span>
-            <ComboSelect
-              options={lengthComboOpts}
-              allowOther={false}
-              placeholder={$t('config.story.length.none')}
-              emptyLabel={$t('config.story.length.none')}
-              clearLabel={$t('config.story.clear')}
-              disabled={$taskRunning}
-              title={$t('config.tip.length')}
-              bind:value={localStoryCfg.story_length}
-              on:change={onLengthChange}
-            />
-          </div>
-          <div>
-            <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.structure')}<InfoTip text={fieldTip('structure')} label={$t('config.story.structure')} /></span>
-            <ComboSelect
-              options={structureComboOpts}
-              allowOther={true}
-              otherLabel={$t('config.story.other')}
-              placeholder={$t('config.story.structure.placeholder')}
-              emptyLabel={$t('config.story.auto')}
-              clearLabel={$t('config.story.clear')}
-              disabled={$taskRunning}
-              title={fieldTip('structure')}
-              bind:value={localStoryCfg.structure}
-              on:change={onStructureComboChange}
-            />
-          </div>
-          -->
-          <div>
-            <span class="field-label">{$t('config.story.targetWords')}</span>
-            <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} disabled={$taskRunning} />
-          </div>
           <!-- LEGACY CONFLICT / PROTAGONIST (round 23 — now inside GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.conflict')}<InfoTip text={fieldTip('conflict')} label={$t('config.story.conflict')} /></span>
@@ -2225,132 +2385,6 @@ function randomizeStoryParams() {
             />
           </div>
           -->
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.targetAudience')}</span>
-            <!-- Revolut-style segmented control (same chrome as Gore Level):
-                 6 segments + external Auto button. The stored value keeps the
-                 SAME vocabulary as before — kid / middle_grade / ya /
-                 new_adult / adult / all_ages — so the backend contract is
-                 untouched; '' (unset) renders as auto mode. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SegmentedControl
-              options={[
-                { value: 'kid', label: $t('config.story.targetAudience.kid'), description: $t('config.story.targetAudience.desc.kid') },
-                { value: 'middle_grade', label: $t('config.story.targetAudience.middle_grade'), description: $t('config.story.targetAudience.desc.middle_grade') },
-                { value: 'ya', label: $t('config.story.targetAudience.ya'), description: $t('config.story.targetAudience.desc.ya') },
-                { value: 'new_adult', label: $t('config.story.targetAudience.new_adult'), description: $t('config.story.targetAudience.desc.new_adult') },
-                { value: 'adult', label: $t('config.story.targetAudience.adult'), description: $t('config.story.targetAudience.desc.adult') },
-                { value: 'all_ages', label: $t('config.story.targetAudience.all_ages'), description: $t('config.story.targetAudience.desc.all_ages') },
-              ]}
-              autoValue=""
-              emptyLabel={$t('config.story.targetAudience.none')}
-              disabled={$taskRunning}
-              title={$t('config.tip.targetAudience')}
-              ariaLabel={$t('config.story.targetAudience')}
-              bind:value={localStoryCfg.target_audience}
-            />
-          </div>
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.romanceLevel')}</span>
-            <!-- Segmented control; 'random' maps to the external Auto button
-               and the remaining levels (none/subplot/moderate/central) become
-               the segments — same stored values as before. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SegmentedControl
-              options={[
-                { value: 'random', label: $t('config.story.romanceLevel.random') },
-                { value: 'none', label: $t('config.story.romanceLevel.none') },
-                { value: 'subplot', label: $t('config.story.romanceLevel.subplot') },
-                { value: 'moderate', label: $t('config.story.romanceLevel.moderate') },
-                { value: 'central', label: $t('config.story.romanceLevel.central') },
-              ]}
-              autoValue="random"
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.romanceLevel')}
-              ariaLabel={$t('config.story.romanceLevel')}
-              bind:value={localStoryCfg.romance_level}
-            />
-          </div>
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.sexualContent')}</span>
-            <!-- Segmented control; 'random' maps to the external Auto button
-               and clean/fade_to_black/explicit become the segments — same
-               stored values as before. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SegmentedControl
-              options={[
-                { value: 'random', label: $t('config.story.sexualContent.random') },
-                { value: 'clean', label: $t('config.story.sexualContent.clean') },
-                { value: 'fade_to_black', label: $t('config.story.sexualContent.fade_to_black') },
-                { value: 'explicit', label: $t('config.story.sexualContent.explicit') },
-              ]}
-              autoValue="random"
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.sexualContent')}
-              ariaLabel={$t('config.story.sexualContent')}
-              bind:value={localStoryCfg.sexual_content}
-            />
-          </div>
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.goreLevel')}</span>
-            <!-- Revolut-style segmented control (ported from the Alpine
-                 prototype): 3 segments + external Auto button. The stored
-                 value keeps the SAME vocabulary as before — random / none /
-                 mid / explicit — so the backend contract is untouched; the
-                 Auto button maps to 'random' and the header shows the
-                 current selection name. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SegmentedControl
-              options={[
-                { value: 'none', label: $t('config.story.goreLevel.none'), description: '[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.' },
-                { value: 'mid', label: $t('config.story.goreLevel.mid'), description: '[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.' },
-                { value: 'explicit', label: $t('config.story.goreLevel.explicit'), description: '[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.' },
-              ]}
-              autoValue="random"
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.goreLevel')}
-              ariaLabel={$t('config.story.goreLevel')}
-              bind:value={localStoryCfg.gore_level}
-            />
-          </div>
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.worldDarkness')}</span>
-            <!-- Segmented control (no SmartSelect header inside the cell: the
-                 component no longer renders its own label, so this is the only
-                 one). 'random' maps to the external Auto button and
-                 idyllic/temperate/gritty/grim/abyssal become the segments —
-                 same stored values as before. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SegmentedControl
-              options={['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'].map((d) => ({ value: d, label: $t('config.story.worldDarkness.' + d) }))}
-              autoValue=""
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.worldDarkness')}
-              ariaLabel={$t('config.story.worldDarkness')}
-              bind:value={localStoryCfg.world_darkness}
-            />
-          </div>
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.genderBias')}</span>
-            <!-- Sin opción vacía explícita: el género siempre mantiene un valor
-                 (el backend normaliza '' → 'random'), así que 'random' es el
-                 valor del botón Auto externo y balanced/male/female son los
-                 segmentos — mismos valores guardados que antes. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SegmentedControl
-              options={['random', 'balanced', 'male', 'female'].map((g) => ({ value: g, label: $t('config.story.genderBias.' + g) }))}
-              autoValue="random"
-              emptyLabel={$t('config.story.genderBias.random')}
-              disabled={$taskRunning}
-              title={$t('config.tip.genderBias')}
-              ariaLabel={$t('config.story.genderBias')}
-              bind:value={localStoryCfg.gender_bias}
-            />
-          </div>
         </div>
         <label class="flex items-center gap-2 text-sm cursor-pointer" title={$t('config.tip.locationsEnabled')}>
           <input type="checkbox" class="toggle toggle-sm toggle-primary" bind:checked={localStoryCfg.locations_enabled} disabled={$taskRunning} />
@@ -2391,13 +2425,27 @@ function randomizeStoryParams() {
       <div class="space-y-1.5">
         <div>
           <span class="field-label">{$t('config.story.theme')}</span>
-          <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} title={$t('config.theme.hint')}></textarea>
+          <textarea class="textarea textarea-sm w-full text-sm" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} title={$t('config.theme.hint')}></textarea>
         </div>
         <div>
           <span class="field-label">{$t('config.motif.title')}</span>
-          <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
+          <textarea class="textarea textarea-sm w-full text-sm" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
         </div>
-        <div class="divider my-0.5 py-0 h-px"></div>
+        <div>
+          <span class="field-label flex items-center gap-1">{$t('config.story.tone')}<InfoTip text={fieldTip('tone')} label={$t('config.story.tone')} /></span>
+          <input type="text" class="input input-sm w-full mb-1" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
+          {#if toneOpts.length}
+            <div class="flex flex-wrap gap-x-3 gap-y-1">
+              {#each toneOpts as tname}
+                <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+                  <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(tname)} on:change={() => toggleTone(tname)} disabled={$taskRunning} />
+                  {tname}
+                </label>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        <div class="divider my-0 py-6 h-px"></div>
         <div class="flex items-center justify-between gap-2 flex-wrap">
           <span class="text-xs text-base-content/65">{$t('config.inspiration.title')}</span>
           <div class="flex items-center gap-1.5">
@@ -2410,11 +2458,11 @@ function randomizeStoryParams() {
             <button {...undoBtnProps('inspirational_pieces')} on:click={undoClick('inspirational_pieces')}>↩ {$t('common.undo')}</button>
           </div>
         </div>
-        <textarea class="textarea textarea-sm w-full h-20 text-xs" bind:value={localStoryCfg.inspirational_pieces}
+        <textarea class="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.inspirational_pieces}
           placeholder={$t('config.inspiration.placeholder')} disabled={$taskRunning} title={$t('config.tip.inspiration')}></textarea>
         <div class="text-xs opacity-60">{$t('config.inspiration.hint')}</div>
       </div>
-      <div class="divider my-0.5 py-0 h-px"></div>
+      <div class="divider my-0 py-6 h-px"></div>
       <div class="flex items-center justify-between gap-2 flex-wrap">
         <span class="text-xs text-base-content/65">{$t('config.audience.profileTitle')}</span>
         <div class="flex items-center gap-1.5">
@@ -2427,7 +2475,7 @@ function randomizeStoryParams() {
           <button {...undoBtnProps('audience_profile')} on:click={undoClick('audience_profile')}>↩ {$t('common.undo')}</button>
         </div>
       </div>
-      <textarea class="textarea textarea-sm w-full h-16 text-xs" bind:value={localStoryCfg.audience_profile}
+      <textarea class="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.audience_profile}
         placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
       <div class="text-xs opacity-60">{$t('config.theme.hint')}</div>
       <div class="flex justify-end">
@@ -2444,7 +2492,7 @@ function randomizeStoryParams() {
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.story_idea.title')}</h3>
       </div>
-      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
+      <textarea class="textarea w-full text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
       <div class="text-xs opacity-60">{$t('config.story_idea.hint')}</div>
       <div class="flex justify-end gap-1.5">
         <button {...genBtnProps('story_idea')} on:click={genClick('story_idea')}>
@@ -2465,11 +2513,11 @@ function randomizeStoryParams() {
       </div>
       <div>
         <span class="field-label">{$t('config.style.label')}</span>
-        <textarea class="textarea w-full h-28 text-base" bind:value={localStoryCfg.writing_style} placeholder={$t('config.style.placeholder')} disabled={$taskRunning}></textarea>
+        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.writing_style} placeholder={$t('config.style.placeholder')} disabled={$taskRunning}></textarea>
       </div>
       <div>
         <span class="field-label">{$t('config.pov.label')}</span>
-        <textarea class="textarea w-full h-20 text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}></textarea>
+        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}></textarea>
       </div>
       <div class="flex justify-end gap-1.5">
         <button {...genBtnProps('style')} on:click={genClick('style')}>
@@ -2502,7 +2550,7 @@ function randomizeStoryParams() {
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.char.empty')}</p>
           {:else}
             {#each chars as c}
-              <div class="flex items-start gap-2.5 bg-base-300 rounded-lg p-2.5 group">
+              <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
                 <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold shrink-0">{stripNameMarks(c.name)[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{stripNameMarks(c.name)}</div>
@@ -2518,7 +2566,7 @@ function randomizeStoryParams() {
         </div>
 
         {#if showCharForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.char.name')}</span>
@@ -2532,27 +2580,27 @@ function randomizeStoryParams() {
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.char.appearance')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charAppearance} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charAppearance} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.personality')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charPersonality} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charPersonality} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.background')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charBackground} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charBackground} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.motivation')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charMotivation} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charMotivation} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.abilities')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charAbilities} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charAbilities} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.notes')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charNotes} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charNotes} disabled={$taskRunning}></textarea>
               </div>
             </div>
             <div class="flex gap-1.5">
@@ -2591,7 +2639,7 @@ function randomizeStoryParams() {
         </div>
       </div>
       
-        <div class="tabs tabs-box tabs-xs bg-base-300 w-fit">
+        <div class="tabs tabs-box tabs-xs bg-base-100 w-fit">
           {#each wvTabs as [cat, label]}
             <button class="tab tab-xs {$wvFilter === cat ? 'tab-active' : ''}" on:click={() => wvFilter.set(cat)}>
               {label}
@@ -2604,7 +2652,7 @@ function randomizeStoryParams() {
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.wv.empty')}</p>
           {:else}
             {#each filteredWvs as w}
-              <div class="flex items-start gap-2.5 bg-base-300 rounded-lg p-2.5 group">
+              <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
                 <div class="w-8 h-8 rounded-lg bg-accent/20 text-accent flex items-center justify-center text-xs font-bold shrink-0">{w.name[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{w.name} <span class="text-xs font-normal text-base-content/30">[{catLabels[w.category] || w.category}]</span></div>
@@ -2620,7 +2668,7 @@ function randomizeStoryParams() {
         </div>
 
         {#if showWvForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.wv.name')}</span>
@@ -2641,7 +2689,7 @@ function randomizeStoryParams() {
             </div>
             <div>
               <span class="field-label">{$t('config.wv.description')}</span>
-              <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={wvDescription} disabled={$taskRunning}></textarea>
+              <textarea class="textarea textarea-sm w-full text-sm" bind:value={wvDescription} disabled={$taskRunning}></textarea>
             </div>
             <div>
               <span class="field-label">{$t('config.wv.tags')}</span>
@@ -2684,7 +2732,7 @@ function randomizeStoryParams() {
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.org.empty')}</p>
           {:else}
             {#each orgs as o}
-              <div class="flex items-start gap-2.5 bg-base-300 rounded-lg p-2.5 group">
+              <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
                 <div class="w-8 h-8 rounded-lg bg-warning/20 text-warning flex items-center justify-center text-xs font-bold shrink-0">{o.name[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{o.name} {#if o.type}<span class="text-xs font-normal text-base-content/30">[{o.type}]</span>{/if}</div>
@@ -2703,7 +2751,7 @@ function randomizeStoryParams() {
         </div>
 
         {#if showOrgForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.org.name')}</span>
@@ -2716,7 +2764,7 @@ function randomizeStoryParams() {
             </div>
             <div>
               <span class="field-label">{$t('config.org.description')}</span>
-              <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={orgDescription} disabled={$taskRunning}></textarea>
+              <textarea class="textarea textarea-sm w-full text-sm" bind:value={orgDescription} disabled={$taskRunning}></textarea>
             </div>
             {#if chars.length > 0}
               <div>
@@ -2767,7 +2815,7 @@ function randomizeStoryParams() {
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.rel.empty')}</p>
           {:else}
             {#each rels as r}
-              <div class="flex items-center gap-2 bg-base-300 rounded-lg p-2.5 group">
+              <div class="flex items-center gap-2 bg-base-100 rounded-lg p-2.5 group">
                 <div class="flex-1 min-w-0 text-sm">
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="font-medium">{entityIcons[r.source_type] || ''} {nameById[r.source_id] || r.source_id}</span>
@@ -2786,7 +2834,7 @@ function randomizeStoryParams() {
         </div>
 
         {#if showRelForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
               <div>
                 <span class="field-label">{$t('config.rel.source')}</span>
