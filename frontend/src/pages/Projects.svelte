@@ -203,7 +203,7 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <div
                 id="ProjectItem_{p.name}"
-                class="flex items-center gap-3 bg-base-300 rounded-lg p-3 transition-colors group {p.compatibility === 'supported' ? 'cursor-pointer hover:bg-base-300/80' : 'opacity-60'}"
+                class="flex items-center gap-3 bg-base-100 rounded-lg p-3 transition-colors group {p.compatibility === 'supported' ? 'cursor-pointer hover:bg-base-100/80' : 'opacity-60'}"
                 class:ring-1={$currentProject === p.name}
                 class:ring-primary={$currentProject === p.name}
                 on:click={() => selectProject(p.name)}

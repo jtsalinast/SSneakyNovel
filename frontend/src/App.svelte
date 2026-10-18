@@ -28,6 +28,24 @@
   let assistantOpen = false;
   let navigationButton;
   let assistantButton;
+  // Collapsible lateral bar (desktop): persisted so the choice survives reloads.
+  // Guarded for SSR / non-browser contexts.
+  function readPersistedFlag(key) {
+    try { return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1'; } catch (_) { return false; }
+  }
+  let navCollapsed = readPersistedFlag('navCollapsed');
+  function toggleNavCollapsed() {
+    navCollapsed = !navCollapsed;
+    try { localStorage.setItem('navCollapsed', navCollapsed ? '1' : '0'); } catch (_) {}
+  }
+  // Chat panel collapses into an "agent" pill docked at the bottom-right of
+  // the chat column width (desktop only). Also persisted.
+  let chatCollapsed = readPersistedFlag('chatCollapsed');
+  function toggleChatCollapsed() {
+    chatCollapsed = !chatCollapsed;
+    try { localStorage.setItem('chatCollapsed', chatCollapsed ? '1' : '0'); } catch (_) {}
+    if (chatCollapsed) assistantOpen = false;
+  }
 
   $: if ($taskRunning && !$currentProject) restoreCurrentProject();
 
@@ -204,7 +222,7 @@
 
 <svelte:window on:keydown={handleShellKeydown} />
 
-<div class="app-shell flex flex-col bg-base-300 text-base-content overflow-hidden">
+<div class="app-shell flex flex-col bg-base-100 text-base-content overflow-hidden">
   <!-- Header -->
   <header id="TopBar" class="app-header navbar bg-base-200 border-b border-base-content/10 px-3 min-h-14 shrink-0 gap-2">
     {#if $currentProject}
@@ -264,9 +282,21 @@
       {#if navigationOpen || assistantOpen}
         <button class="workspace-scrim" aria-label={$t('common.close')} on:click={() => { if (navigationOpen) closeNavigation(); if (assistantOpen) closeAssistant(); }}></button>
       {/if}
-      <!-- Left: vertical nav -->
-      <nav id="LateralBar" class:drawer-open={navigationOpen} class="app-navigation flex flex-col w-48 shrink-0 bg-base-200 border-r border-base-content/10 py-4 px-3 gap-1" aria-label={$t('app.navigation')}>
-        <button class="btn btn-ghost btn-sm mb-2 lg:hidden" on:click={closeNavigation}>{$t('common.close')}</button>
+      <!-- Left: vertical nav (collapsible on desktop) -->
+      <nav id="LateralBar" class:drawer-open={navigationOpen} class:nav-collapsed={navCollapsed} class="app-navigation flex flex-col w-48 shrink-0 bg-base-200 border-r border-base-content/10 py-4 px-3 gap-1" aria-label={$t('app.navigation')}>
+        <div class="flex items-center justify-between gap-1">
+          <button class="btn btn-ghost btn-sm mb-2 lg:hidden" on:click={closeNavigation}>{$t('common.close')}</button>
+          <span class="flex-1 lg:hidden"></span>
+          <button
+            class="nav-collapse-btn btn btn-ghost btn-xs hidden lg:inline-flex mb-2 self-start"
+            on:click={toggleNavCollapsed}
+            aria-expanded={!navCollapsed}
+            aria-controls="LateralBar"
+            title={navCollapsed ? $t('app.navigation.expand') : $t('app.navigation.collapse')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform duration-200" class:rotate-180={navCollapsed} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+          </button>
+        </div>
         {#each [
           ['config', 'nav.config'],
           ['novel-params', 'nav.novelParams'],
@@ -283,9 +313,10 @@
           <button
             class="nav-item btn btn-sm justify-start w-full px-3 text-sm {$currentPage === page ? 'btn-primary font-medium' : 'btn-ghost'}"
             aria-current={$currentPage === page ? 'page' : undefined}
+            title={$t(labelKey)}
             on:click={() => goTo(page)}
           >
-            {$t(labelKey)}
+            <span class="nav-item-label whitespace-nowrap truncate min-w-0">{$t(labelKey)}</span>
           </button>
         {/each}
       </nav>
@@ -315,10 +346,32 @@
         {/if}
       </main>
 
-      <!-- Right: Chat Panel -->
-      <aside id="AgentChat" class:drawer-open={assistantOpen} class="assistant-panel flex-1 min-w-72 max-w-md bg-base-200 overflow-hidden" aria-label={$t('app.assistant')}>
+      <!-- Right: Chat Panel (collapsible into an "agent" pill at the bottom-right) -->
+      <aside id="AgentChat" class:drawer-open={assistantOpen} class:chat-collapsed={chatCollapsed} class="assistant-panel relative flex-1 min-w-72 max-w-md bg-base-200 overflow-hidden" aria-label={$t('app.assistant')}>
         <button class="btn btn-ghost btn-sm m-2 mb-0 xl:hidden" on:click={closeAssistant}>{$t('common.close')}</button>
-        <ChatPanel bind:this={chatPanel} contextPage={$currentPage} />
+        <div class="chat-panel-body h-full">
+          <ChatPanel bind:this={chatPanel} contextPage={$currentPage} />
+        </div>
+        <button
+          id="ChatCollapsePill"
+          class="chat-pill btn btn-primary btn-sm rounded-full gap-1.5 shadow-lg absolute right-3 z-40 hidden xl:inline-flex"
+          class:bottom-3={!chatCollapsed}
+          class:fixed={chatCollapsed}
+          class:bottom-6={chatCollapsed}
+          class:right-6={chatCollapsed}
+          class:z-50={chatCollapsed}
+          on:click={toggleChatCollapsed}
+          aria-expanded={!chatCollapsed}
+          aria-controls="AgentChat"
+          title={chatCollapsed ? $t('app.assistant.expand') : $t('app.assistant.collapse')}
+        >
+          {#if chatCollapsed}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8m-8 4h5m-9 6V6a2 2 0 012-2h12a2 2 0 012 2v9a2 2 0 01-2 2H7l-4 3z" /></svg>
+          {:else}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform duration-200 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7m14-7l-7 7-7-7" /></svg>
+          {/if}
+          agent
+        </button>
       </aside>
     </div>
   {/if}
