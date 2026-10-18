@@ -21,6 +21,11 @@ type ChapterState struct {
 	Content    string                    `json:"content,omitempty"`
 	Summary    string                    `json:"summary"`
 	Status     string                    `json:"status"` // pending | writing | review | accepted
+	// ContinuityNotes records the fact-check issues that were resolved while
+	// writing this chapter (what had to be fixed so it stayed consistent). When
+	// later chapters or outline revisions are generated, these notes are fed as
+	// hard continuity constraints so the same mistakes are not repeated.
+	ContinuityNotes []string `json:"continuity_notes,omitempty"`
 	// WordCount is the prose-unit count of Content, refreshed on save so the
 	// frontend can show word counts without fetching full chapter content.
 	WordCount int `json:"word_count,omitempty"`
@@ -167,6 +172,14 @@ type NarrativeCheckpoint struct {
 	SourceHash   string `json:"source_hash,omitempty"`
 	Summary      string `json:"summary"`
 	Degraded     bool   `json:"degraded,omitempty"`
+	// Threads captures the per-storyline state at the end of this checkpoint's
+	// chapter range (e.g. "Rebelión de Alden: prófugo, oculto en el norte").
+	// Cold history compressed by chapter blocks loses track of WHICH thread is
+	// in WHAT state; when writing a later chapter that only advances one
+	// storyline, the model needs each thread's last-known position separately,
+	// not one blended recap. Optional: older checkpoints lack it and prompts
+	// fall back to Summary-only rendering.
+	Threads map[string]string `json:"threads,omitempty"`
 }
 
 const (
@@ -180,6 +193,12 @@ const (
 func LoadProgress(path string) (*Progress, error) {
 	progressStorageMu.Lock()
 	defer progressStorageMu.Unlock()
+	return loadProgressUnlocked(path)
+}
+
+// loadProgressUnlocked performs the actual load. Callers must hold
+// progressStorageMu (or call it via LoadProgress).
+func loadProgressUnlocked(path string) (*Progress, error) {
 	if err := recoverProgress(path, fsutil.WriteFileAtomic); err != nil {
 		return nil, err
 	}
@@ -189,12 +208,12 @@ func LoadProgress(path string) (*Progress, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("readwithdrawadvancedegreeitem: %w", err)
+		return nil, fmt.Errorf("leer progreso: %w", err)
 	}
 
 	var p Progress
 	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("untieadvancedegreeitem: %w", err)
+		return nil, fmt.Errorf("analizar progreso: %w", err)
 	}
 
 	if err := loadChapterContents(path, &p); err != nil {
@@ -209,6 +228,12 @@ func LoadProgress(path string) (*Progress, error) {
 func SaveProgress(path string, p *Progress) error {
 	progressStorageMu.Lock()
 	defer progressStorageMu.Unlock()
+	return saveProgressUnlocked(path, p)
+}
+
+// saveProgressUnlocked performs the actual save. Callers must hold
+// progressStorageMu (or call it via SaveProgress).
+func saveProgressUnlocked(path string, p *Progress) error {
 	if err := recoverProgress(path, fsutil.WriteFileAtomic); err != nil {
 		return err
 	}
@@ -231,11 +256,11 @@ func SaveProgress(path string, p *Progress) error {
 	}
 	data, err := json.MarshalIndent(&meta, "", "  ")
 	if err != nil {
-		return fmt.Errorf("orderrowadvancedegree: %w", err)
+		return fmt.Errorf("ordenar progreso: %w", err)
 	}
 	files = append(files, progressFile{Num: 0, Data: data})
 	if err := commitProgressFiles(path, files, fsutil.WriteFileAtomic); err != nil {
-		return fmt.Errorf("insuredepositadvancedegreeitem: %w", err)
+		return fmt.Errorf("guardar progreso: %w", err)
 	}
 	cache := cacheFor(path)
 	contentHashCache.Lock()

@@ -2,11 +2,15 @@ package story
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"showmethestory/internal/config"
 	"showmethestory/internal/i18n"
 	"showmethestory/internal/sse"
 	"strings"
+	"sync"
+	"time"
 )
 
 // OutlineBatch binds an author's synopsis to exactly one range of chapters.
@@ -82,10 +86,38 @@ func ValidateOutlineBatch(state *Progress, req OutlineBatchRequest, lang string)
 	return nil
 }
 
-func GenerateOutlineBatch(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, req OutlineBatchRequest, path string, logger *sse.LogBroadcaster) error {
+// maxEndingRequirementsRunes bounds the user-supplied ending requirements that
+// are injected verbatim into the batch prompt. An unbounded paste (e.g. a whole
+// chapter or an accidental huge text) used to blow up the prompt until the API
+// rejected it, and combined with retries this could freeze the machine.
+const maxEndingRequirementsRunes = 4000
+
+func truncateToRunes(s string, limit int) string {
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return strings.TrimSpace(string(r[:limit]))
+}
+
+func GenerateOutlineBatch(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, req OutlineBatchRequest, path string, logger *sse.LogBroadcaster, wg ...*sync.WaitGroup) (err error) {
+	// A panic during generation must not leave the HTTP task lock held forever
+	// (the UI would show the task as "running" indefinitely). Recover, log the
+	// stack for diagnosis, and surface a normal error instead.
+	defer func() {
+		if rec := recover(); rec != nil {
+			devlog := fmt.Sprintf("%v\n%s", rec, debug.Stack())
+			if logger != nil {
+				logger.ErrorKey("log.outline_batch_panic", fmt.Sprint(rec))
+			}
+			fmt.Printf("[panic] GenerateOutlineBatch: %s\n", devlog)
+			err = fmt.Errorf("internal error while generating the outline batch: %v", rec)
+		}
+	}()
 	if err := ValidateOutlineBatch(state, req, cfg.Language); err != nil {
 		return err
 	}
+	req.EndingRequirements = truncateToRunes(strings.TrimSpace(req.EndingRequirements), maxEndingRequirementsRunes)
 	if err := EnsureNarrativeCheckpoints(ctx, apiCfg, cfg, state, path, logger); err != nil {
 		return err
 	}
@@ -180,6 +212,114 @@ func GenerateOutlineBatch(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 		return err
 	}
 	*state = next
-	runOutlinePostProcessChecks(ctx, apiCfg, cfg, state, settings, path, logger)
+	// Post-process consistency checks (foreshadow + character) run AFTER the
+	// batch is saved and reported as done, with a short detached context.
+	// Previously they ran inline: two extra LLM calls delayed task completion
+	// by minutes and, when the API stalled, made the whole generation appear
+	// to hang even though the outlines were already written.
+	//
+	// The goroutine only *computes* the reports (read-only LLM calls); it does
+	// not mutate the shared state nor call SaveProgress. Persisting from a
+	// detached background task raced with the user's next action — corrupting
+	// rollback journals and writing files into directories being deleted.
+	// Instead, the resulting reports are stashed on the live state under the
+	// storage mutex and persisted by the next normal save path.
+	// Snapshot the state under the storage mutex so the goroutine owns a
+	// private copy; other readers never touch it.
+	var snapshot Progress
+	progressStorageMu.Lock()
+	errClone := cloneProgressJSON(&next, &snapshot)
+	progressStorageMu.Unlock()
+	if errClone != nil {
+		logger.WarnKey("log.outline_postprocess_skipped", errClone)
+		return nil
+	}
+	var postWG *sync.WaitGroup
+	if len(wg) > 0 {
+		postWG = wg[0]
+	}
+	if postWG != nil {
+		postWG.Add(1)
+	}
+	go func() {
+		if postWG != nil {
+			defer postWG.Done()
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				logger.WarnKey("log.outline_postprocess_panic", fmt.Errorf("%v", r))
+				debug.PrintStack()
+			}
+		}()
+		pctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		fs, cr := computeOutlinePostProcessReports(pctx, apiCfg, cfg, &snapshot, settings, logger)
+		if fs == nil && cr == nil {
+			return
+		}
+		publishOutlinePostProcessReports(path, fs, cr, logger)
+	}()
 	return nil
+}
+
+// publishOutlinePostProcessReports merges freshly computed consistency reports
+// into the persisted progress file. It re-reads from disk (under the storage
+// mutex shared with Load/SaveProgress) instead of mutating the live in-memory
+// state, so a background task can never race — or corrupt — whatever the user
+// is doing next. If the file cannot be read or saved, the reports are simply
+// dropped: they are advisory and will be regenerated on the next check.
+func publishOutlinePostProcessReports(progressPath string, fs *ForeshadowOutlineReport, cr *OutlineCharacterReport, logger *sse.LogBroadcaster) {
+	progressStorageMu.Lock()
+	defer progressStorageMu.Unlock()
+	current, err := loadProgressUnlocked(progressPath)
+	if err != nil {
+		logger.WarnKey("log.outline_postprocess_skipped", err)
+		return
+	}
+	if current == nil {
+		return
+	}
+	if fs != nil {
+		current.LastForeshadowOutlineReport = fs
+	}
+	if cr != nil {
+		current.LastOutlineCharacterReport = cr
+	}
+	if err := saveProgressUnlocked(progressPath, current); err != nil {
+		logger.WarnKey("log.outline_postprocess_skipped", err)
+	}
+}
+
+// computeOutlinePostProcessReports runs the two read-only consistency checks
+// (foreshadow placement and unregistered characters) against a private copy of
+// the state. It never mutates the copy's persisted fields nor saves anything;
+// callers decide how to publish the results. Errors are logged but tolerated:
+// a failing check simply yields a nil report.
+func computeOutlinePostProcessReports(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, stateCopy *Progress, settings *ProjectSettings, logger *sse.LogBroadcaster) (*ForeshadowOutlineReport, *OutlineCharacterReport) {
+	var fs *ForeshadowOutlineReport
+	var cr *OutlineCharacterReport
+	if report, err := CheckForeshadowOutlineConsistency(ctx, apiCfg, cfg, stateCopy, logger); err != nil {
+		logger.WarnKey("log.outline_postprocess_skipped", err)
+	} else {
+		fs = report
+	}
+	if ctx.Err() != nil {
+		return fs, cr
+	}
+	if report, err := CheckOutlineCharacterConsistency(ctx, apiCfg, cfg, stateCopy, settings, logger); err != nil {
+		logger.WarnKey("log.outline_postprocess_skipped", err)
+	} else {
+		cr = report
+	}
+	return fs, cr
+}
+
+// cloneProgressJSON makes a deep copy of Progress through its JSON encoding,
+// so background tasks can own their snapshot without racing the live state.
+func cloneProgressJSON(src, dst *Progress) error {
+	data, err := json.Marshal(src)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, dst)
 }

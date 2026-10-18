@@ -97,12 +97,12 @@ func LoadProjectSettings(path string) (*ProjectSettings, error) {
 		if os.IsNotExist(err) {
 			return &ProjectSettings{}, nil
 		}
-		return nil, fmt.Errorf("readwithdrawitem: %w", err)
+		return nil, fmt.Errorf("leer entrada: %w", err)
 	}
 
 	var ps ProjectSettings
 	if err := json.Unmarshal(data, &ps); err != nil {
-		return nil, fmt.Errorf("untieitem: %w", err)
+		return nil, fmt.Errorf("analizar entrada: %w", err)
 	}
 
 	return &ps, nil

@@ -101,7 +101,7 @@ func factProtection(state *Progress, num int, lang string) string {
 	data, _ := json.Marshal(facts)
 	s := "\nPreserve these linked consistency facts unless the author explicitly authorizes changing them. Do not silently alter related passages.\n"
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		s = "\nexceptmakebright, thenwhiskerinsurestaybylowercloseunion one, not quietwriteitshecloseunionparagraphpassage. \n"
+		s = "\nSalvo autorización explícita del autor, conserva estos hechos de consistencia vinculados y no alteres en silencio los pasajes relacionados.\n"
 	}
 	return chapterEnding(state, num, lang) + s + string(data)
 }

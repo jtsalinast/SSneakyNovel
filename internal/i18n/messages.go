@@ -278,6 +278,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_conflict": {
 
 		LangEN: "Chapter %d outline conflicts with story: %s"},
+	"log.outline_revision_rejected": {
+
+		LangEN: "Proposed outline revision for chapter %d was rejected (it dropped detail or named entities); keeping the approved outline"},
 	"log.chapter_modifying": {
 
 		LangEN: "Revising chapter %d \"%s\"..."},
@@ -365,6 +368,12 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_character_check_failed": {
 
 		LangEN: "Outline character check failed: %v"},
+	"log.outline_postprocess_skipped": {
+
+		LangEN: "Post-batch consistency checks skipped (state snapshot failed): %v"},
+	"log.outline_postprocess_panic": {
+
+		LangEN: "Post-batch consistency check crashed and was recovered: %v"},
 	"log.outline_character_report_save_failed": {
 
 		LangEN: "Failed to save outline character check report: %v"},

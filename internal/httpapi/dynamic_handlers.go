@@ -65,8 +65,8 @@ func (h *Handlers) PostPlanningReview(w http.ResponseWriter, r *http.Request) {
 		}
 		history := story.BuildPlanningHistory(h.state, h.state.LongTermDirection, h.cfg.Language)
 		prompt := "Review the accepted novel chapters below. Summarize plot and character state, identify consistency or pacing risks and active foreshadows, then propose several optional directions for the next planning batch. Do not decide for the author.\n\n" + history
-		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
-			prompt = "platebyloweralreadychaptersection: andposture, point outone, sectionwindriskandalive, andproposenumberloweronebatchsquaredirectionmake, not want tomakemake. \n\n" + history
+		if i18n.NormalizeLanguage(h.cfg.Language) != i18n.LangEN {
+			prompt = "Revisa los capítulos aceptados de la novela indicados a continuación. Resume la trama y el estado de los personajes, identifica riesgos de coherencia o de ritmo y las promesas narrativas activas, y luego propone varias direcciones opcionales para el siguiente lote de planificación. No tomes la decisión por el autor.\n\n" + history
 		}
 		content := llm.CallAPIWithRetryLog(h.taskCtx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger)
 		if strings.TrimSpace(content) == "" {

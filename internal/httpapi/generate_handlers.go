@@ -676,15 +676,15 @@ func lengthLabelEN(length string) string {
 }
 
 var structureLabels = map[string][2]string{ // key -> {zh, en}
-	"three_act":            {"three", "3-Act Structure"},
-	"six_act":              {"six", "6-Act Structure"},
-	"fichtean":             {"thread", "Fichtean Curve"},
-	"freytag":              {"gridgoldcharacter-count", "Freytag's Pyramid"},
-	"seven_point":          {"sevendot", "Seven-Point Structure"},
-	"heros_journey":        {"of", "Hero's Journey"},
-	"heros_journey_simple": {"of()", "Hero's Journey (Simplified)"},
-	"save_the_cat":         {"cat(Save the Cat!)", "Save the Cat!"},
-	"episodic":             {"billyuan", "Episodic Structure"},
+	"three_act":            {"Tres actos", "3-Act Structure"},
+	"six_act":              {"Seis actos", "6-Act Structure"},
+	"fichtean":             {"Curva de Fichtean", "Fichtean Curve"},
+	"freytag":              {"Pirámide de Freytag", "Freytag's Pyramid"},
+	"seven_point":          {"Estructura de siete puntos", "Seven-Point Structure"},
+	"heros_journey":        {"El viaje del héroe", "Hero's Journey"},
+	"heros_journey_simple": {"El viaje del héroe (simplificado)", "Hero's Journey (Simplified)"},
+	"save_the_cat":         {"Save the Cat!", "Save the Cat!"},
+	"episodic":             {"Estructura episódica", "Episodic Structure"},
 }
 
 func structureLabel(structure, lang string) string {
@@ -1036,7 +1036,7 @@ func (h *Handlers) generateOrganizations(ctx context.Context, sc *config.StoryCo
 	}
 	if len(charLines) > 0 {
 		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
-			prompt += "\n[canusehorn]\n" + strings.Join(charLines, ", ") + "\nmembers character-countparagraphonlycanmakeuseupperhorn. "
+			prompt += "\n[NOMBRES DE PERSONAJES DISPONIBLES]\n" + strings.Join(charLines, ", ") + "\nEl campo members solo puede referenciar nombres de esta lista."
 		} else {
 			prompt += "\n[AVAILABLE CHARACTER NAMES]\n" + strings.Join(charLines, ", ") + "\nThe members field may only reference names from this list."
 		}

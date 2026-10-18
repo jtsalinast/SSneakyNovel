@@ -171,7 +171,7 @@ func InsertBlockAfter(ch *ChapterState, blockID int, text string) (int, error) {
 func ReviseBlockAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, chapterNum, blockID int, feedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
 	chapterIdx := FindChapterIdx(state, chapterNum)
 	if chapterIdx < 0 {
-		return fmt.Errorf("# %d chapternot depositin", chapterNum)
+		return fmt.Errorf("el capítulo #%d no existe", chapterNum)
 	}
 	ch := &state.Chapters[chapterIdx]
 	bi := FindBlockIdx(ch, blockID)
@@ -225,7 +225,7 @@ func ReviseBlockAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("insuredepositadvancedegree: %w", err)
+		return fmt.Errorf("guardar progreso: %w", err)
 	}
 	logger.SuccessKey("log.block_revised", ch.Num, blockID)
 	return nil

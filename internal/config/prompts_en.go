@@ -14,7 +14,7 @@ var DefaultPromptsEN = PromptsConfig{
 [Story-so-far (rolling recap of recent chapters — continue from this state strictly)]
 {{.HistorySummary}}
 
-{{.PreviousEnding}}{{.Foreshadows}}{{.Memory}}{{.OutlineConstraints}}[Task for this chapter]
+{{.PreviousEnding}}{{.Foreshadows}}{{.Memory}}{{.VoiceSamples}}{{.OutlineConstraints}}[Task for this chapter]
 Chapter title: "{{.ChapterTitle}}"
 Outline: {{.ChapterOutline}}
 
@@ -594,6 +594,8 @@ Return new facts and existing facts mentioned again in this chapter. Return {"ne
 Return JSON only, nothing else.`,
 
 	HistoryCompression: `Compress the following novel history into a compact checkpoint for future continuation. Preserve current character states, relationship changes, unresolved promises, key items and locations, timeline facts, one-time events that already happened, and unresolved foreshadows. Merge duplicates, do not imitate the prose, and invent nothing. Return only the summary, at most {{.MaxRunes}} characters.
+
+After the summary paragraph(s), add a final section on its own line exactly titled "THREADS:" followed by one line per open storyline in the form "- <storyline name>: <current state>". Include every thread that is still unresolved (plots, relationships, mysteries, quests); do not include threads fully resolved inside this range. If no thread is open, write "THREADS:" then "- none".
 
 {{.History}}`,
 

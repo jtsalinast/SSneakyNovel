@@ -102,14 +102,14 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 	var messages []llm.Message
 	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 
-	toolResultLabel := "[toolfruit]"
+	toolResultLabel := "[Resultado de herramienta]"
 	if projectLang(ctx) == i18n.LangEN {
 		toolResultLabel = "[Tool result]"
 	}
 
-	// tomostlaterone user cord(i.e.whenfrontrounduse), useingoheavy.
-	// handlers.go in agent loop enablemovefrontthenBAwhenfrontusechaseto session.Messages,
-	// so history middlemostlateronestrip user and userMessage , jumppassheavy.
+	// The newest user turn is carried by userMessage itself; the history slice
+	// (which httpapi persists with the last user message appended at the end)
+	// must not re-emit it, or the prompt would contain the same request twice.
 	lastUserIdx := -1
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Role == "user" {
@@ -187,7 +187,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			for _, m := range messages {
 				roleSeq = append(roleSeq, fmt.Sprintf("%s(%d)", m.Role, len([]rune(m.Content))))
 			}
-			ctx.logger().Info(fmt.Sprintf("[Agent] %d/%d: %d strip: %v", step+1, maxSteps, len(messages), roleSeq))
+			ctx.logger().Info(fmt.Sprintf("[Agent] paso %d/%d: %d mensajes: %v", step+1, maxSteps, len(messages), roleSeq))
 		}
 
 		fullResp := ""
@@ -196,7 +196,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 		})
 		if err != nil {
 			if ctx.Logger != nil {
-				ctx.logger().Error(fmt.Sprintf("[Agent] %d: API use: %v", step+1, err))
+				ctx.logger().Error(fmt.Sprintf("[Agent] paso %d: fallo la llamada a la API: %v", step+1, err))
 			}
 			if forcedCall != nil {
 				// Tagged turn: the generate_section tool already ran. Give the
@@ -255,18 +255,19 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 				if len([]rune(preview)) > 200 {
 					preview = string([]rune(preview)[:200]) + "..."
 				}
-				ctx.logger().Info(fmt.Sprintf("[Agent] %d: not yettotooluse, makeformostreturnreturn. insidebrowse: %s", step+1, preview))
+				ctx.logger().Info(fmt.Sprintf("[Agent] paso %d: no se detectó uso de herramientas; devolviendo texto final. Vista previa: %s", step+1, preview))
 			}
 			history = append(history, AgentStep{Role: "assistant", Content: fullResp})
 			return fullResp, history, nil
 		}
 
 		if ctx.Logger != nil {
-			ctx.logger().Info(fmt.Sprintf("[Agent] %d: totooluse → %s", step+1, toolCall.Name))
+			ctx.logger().Info(fmt.Sprintf("[Agent] paso %d: se detectó uso de herramienta → %s", step+1, toolCall.Name))
 		}
 
-		// insuredeposittohour, leave <tool_call> metric, onlyinsurestaytooluse.
-		// fronthourfrom m.tool_calls and m.content heavy.
+		// Para no duplicar el texto en la UI, el historial conserva solo el
+		// contenido visible: se retira la etiqueta <tool_call> y se mantiene
+		// únicamente el uso de herramienta parseado (m.tool_calls y m.content).
 		strippedContent := stripToolCallTags(fullResp)
 		history = append(history, AgentStep{Role: "assistant", Content: strippedContent, ToolCall: toolCall})
 
@@ -281,7 +282,7 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			if len([]rune(resultPreview)) > 100 {
 				resultPreview = string([]rune(resultPreview)[:100]) + "..."
 			}
-			ctx.logger().Info(fmt.Sprintf("[Agent] %d: tool %s travel, fruit: %s", step+1, toolCall.Name, resultPreview))
+			ctx.logger().Info(fmt.Sprintf("[Agent] %d: tool %s finished, result: %s", step+1, toolCall.Name, resultPreview))
 		}
 
 		history = append(history, AgentStep{
@@ -373,8 +374,8 @@ func forcedSectionName(call *ToolCall) string {
 }
 
 func callAgentAPI(ctx context.Context, apiCfg *config.APIConfig, messages []llm.Message, onChunk func(string)) (finishReason string, err error) {
-	// The agent must output tool calls as JSON tokens.
-	// such asfruitusenot yetplaceorplacepasslow, makeuse 8192 makeforlower.
+	// The agent must emit tool calls as complete JSON; short caps truncate the
+	// <tool_call> block mid-stream, so enforce a minimum max_tokens here.
 	agentCfg := *apiCfg
 	agentCfg.MaxTokens = agentEffectiveMaxTokens(apiCfg)
 
@@ -382,20 +383,16 @@ func callAgentAPI(ctx context.Context, apiCfg *config.APIConfig, messages []llm.
 	if err == nil {
 		return result.FinishReason, nil
 	}
+	// Never double-call after a partial stream: chunks were already forwarded to
+	// the caller and appending a second reply would corrupt the message.
 	if ctx.Err() != nil || result.Content != "" {
 		return "", err
 	}
-	syncResult, err2 := llm.CallAPIMessagesSync(ctx, &agentCfg, messages)
-	if err2 != nil {
-		return "", err
-	}
-	if syncResult.Content == "" {
-		return "", fmt.Errorf("API returned empty response: %v", err)
-	}
-	if onChunk != nil {
-		onChunk(syncResult.Content)
-	}
-	return syncResult.FinishReason, nil
+	// No synchronous fallback here: CallAPIStreamMessages already parses
+	// non-SSE JSON responses in-place, and re-sending the whole prompt used to
+	// double the request load (and re-trigger generation side effects) during
+	// error storms. Fail fast; the loop retries or falls back deterministically.
+	return "", err
 }
 
 // agentEffectiveMaxTokens returns the max_tokens floor used for Agent API calls.
@@ -664,17 +661,17 @@ func parseToolCall(content string) *ToolCall {
 
 	inner := strings.TrimSpace(content[idx+len("<tool_call>") : idx+endIdx])
 
-	// firsttasteconnect JSON untie
+	// First try parsing the inner block as JSON.
 	if tc := parseToolCallFromJSON(inner); tc != nil {
 		return tc
 	}
 
-	// taste XML griduntie(<name>...</name> + <arguments>...</arguments>)
+	// Then try the XML format (<name>...</name> + <arguments>...</arguments>).
 	if tc := parseToolCallFromXML(inner); tc != nil {
 		return tc
 	}
 
-	// metricinsideuntie, fallback: in </tool_call> oflatercord JSON
+	// Last-resort fallback: a JSON record following the closing tag.
 	remaining := content[idx+endIdx+len("</tool_call>"):]
 	if tc := parseToolCallJSON(remaining); tc != nil {
 		return tc
@@ -869,8 +866,8 @@ func getBuiltinTools() []Tool {
 	return []Tool{
 		{
 			Name:        "read_characters",
-			Description: "withdrawhornrowtable, canby pass",
-			Parameters:  `{"filter": "can, by pass"}`,
+			Description: "List all characters; optional filter by name substring",
+			Parameters:  `{"filter": "optional name filter"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Filter string `json:"filter"`
@@ -886,15 +883,15 @@ func getBuiltinTools() []Tool {
 					if params.Filter != "" && !strings.Contains(c.Name, params.Filter) {
 						continue
 					}
-					result.WriteString(fmt.Sprintf("[%s](ID:%s)\n", c.Name, c.ID))
+					result.WriteString(fmt.Sprintf("%s (ID:%s)\n", c.Name, c.ID))
 					if c.Age != "" {
-						result.WriteString(fmt.Sprintf(" year: %s\n", c.Age))
+						result.WriteString(fmt.Sprintf("Age: %s\n", c.Age))
 					}
 					if c.Personality != "" {
-						result.WriteString(fmt.Sprintf(" grid: %s\n", c.Personality))
+						result.WriteString(fmt.Sprintf("Personality: %s\n", c.Personality))
 					}
 					if c.Background != "" {
-						result.WriteString(fmt.Sprintf(" back: %s\n", c.Background))
+						result.WriteString(fmt.Sprintf("Background: %s\n", c.Background))
 					}
 					result.WriteString("\n")
 				}
@@ -907,8 +904,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_character",
-			Description: "withdrawbillhorn, passIDor",
-			Parameters:  `{"id": "hornIDor"}`,
+			Description: "Read the full profile of one character by ID or name",
+			Parameters:  `{"id": "character ID or name"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -930,8 +927,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_worldview",
-			Description: "Remove a worldview entry by ID; optionally filter by category",
-			Parameters:  `{"category": "candivideclass: geography/faction/rule/history/other"}`,
+			Description: "List worldview entries; optionally filter by category",
+			Parameters:  `{"category": "optional category filter: geography/faction/rule/history/other"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Category string `json:"category"`
@@ -947,7 +944,7 @@ func getBuiltinTools() []Tool {
 					if params.Category != "" && w.Category != params.Category {
 						continue
 					}
-					result.WriteString(fmt.Sprintf("[%s](%s)\n %s\n\n", w.Name, w.Category, w.Description))
+					result.WriteString(fmt.Sprintf("%s (%s):\n%s\n\n", w.Name, w.Category, w.Description))
 				}
 
 				if result.Len() == 0 {
@@ -958,7 +955,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_organizations",
-			Description: "Remove an organization from its roster",
+			Description: "List all organizations and their members",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.Settings == nil || len(ctx.Settings.Organizations) == 0 {
@@ -967,9 +964,9 @@ func getBuiltinTools() []Tool {
 
 				var result strings.Builder
 				for _, o := range ctx.Settings.Organizations {
-					result.WriteString(fmt.Sprintf("[%s](ID:%s, class:%s)\n %s\n", o.Name, o.ID, o.Type, o.Description))
+					result.WriteString(fmt.Sprintf("%s (ID:%s, type:%s)\n%s\n", o.Name, o.ID, o.Type, o.Description))
 					if len(o.Members) > 0 {
-						result.WriteString(fmt.Sprintf(" IDs: %s\n", strings.Join(o.Members, ", ")))
+						result.WriteString(fmt.Sprintf("Member IDs: %s\n", strings.Join(o.Members, ", ")))
 					}
 					result.WriteString("\n")
 				}
@@ -978,7 +975,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_chapter",
-			Description: "withdrawfingerchaptersectioninside",
+			Description: "Read a chapter: outline, summary and written content",
 			Parameters:  `{"num": 1}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -991,17 +988,17 @@ func getBuiltinTools() []Tool {
 						var result strings.Builder
 						facts, _ := json.Marshal(story.FactsForChapter(ctx.State, ch.Num, 0))
 						fmt.Fprintf(&result, "content_rev: %s\nfacts: %s\n", story.ChapterRevision(ch), facts)
-						result.WriteString(fmt.Sprintf("#%dchapter<%s>[%s]\n\n", ch.Num, ch.Title, ch.Status))
+						result.WriteString(fmt.Sprintf("Chapter #%d <%s> [%s]\n\n", ch.Num, ch.Title, ch.Status))
 						if ch.Outline != "" {
-							result.WriteString(fmt.Sprintf("big: %s\n\n", ch.Outline))
+							result.WriteString(fmt.Sprintf("Outline: %s\n\n", ch.Outline))
 						}
 						if ch.Summary != "" {
-							result.WriteString(fmt.Sprintf("want to: %s\n\n", ch.Summary))
+							result.WriteString(fmt.Sprintf("Summary: %s\n\n", ch.Summary))
 						}
 						if ch.Content != "" {
 							result.WriteString(ch.Content)
 						} else {
-							result.WriteString("(not yetlifeinside)")
+							result.WriteString("(not yet written)")
 						}
 						return result.String(), nil
 					}
@@ -1011,7 +1008,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_outline",
-			Description: "withdrawbig",
+			Description: "Read the full chapter outline list with statuses",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if len(ctx.State.Chapters) == 0 {
@@ -1020,7 +1017,7 @@ func getBuiltinTools() []Tool {
 
 				var result strings.Builder
 				result.WriteString(story.BatchSynopses(ctx.State, ctx.safeCfg().Language))
-				result.WriteString(fmt.Sprintf("<%s>\n\n", ctx.State.Title))
+				result.WriteString(fmt.Sprintf("# %s\n\n", ctx.State.Title))
 				for _, ch := range ctx.State.Chapters {
 					status := ""
 					switch ch.Status {
@@ -1031,14 +1028,14 @@ func getBuiltinTools() []Tool {
 					case story.StatusWriting:
 						status = "⏳"
 					}
-					result.WriteString(fmt.Sprintf("#%dchapter %s<%s>: %s\n", ch.Num, status, ch.Title, ch.Outline))
+					result.WriteString(fmt.Sprintf("Chapter #%d %s<%s>: %s\n", ch.Num, status, ch.Title, ch.Outline))
 				}
 				return result.String(), nil
 			},
 		},
 		{
 			Name:        "read_foreshadows",
-			Description: "withdrawrowtable",
+			Description: "Read all foreshadowing entries and their status",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if len(ctx.State.Foreshadows) == 0 {
@@ -1048,20 +1045,20 @@ func getBuiltinTools() []Tool {
 				var result strings.Builder
 				for _, fs := range ctx.State.Foreshadows {
 					result.WriteString(fmt.Sprintf("#%d [%s] %s\n", fs.ID, story.ForeshadowStatusLabel(fs.Status), fs.Name))
-					result.WriteString(fmt.Sprintf(" : %s\n", fs.Description))
-					result.WriteString(fmt.Sprintf(" : #%dchapter", fs.PlantChapter))
+					result.WriteString(fmt.Sprintf("Description: %s\n", fs.Description))
+					result.WriteString(fmt.Sprintf("Planted in: chapter #%d", fs.PlantChapter))
 					if fs.TargetChapter > 0 {
-						result.WriteString(fmt.Sprintf(" → countreturncollect: #%dchapter", fs.TargetChapter))
+						result.WriteString(fmt.Sprintf(" -> planned payoff: chapter #%d", fs.TargetChapter))
 					}
 					result.WriteString("\n")
 					if len(fs.Events) > 0 {
-						result.WriteString(" advance:\n")
+						result.WriteString("Progress:\n")
 						for _, ev := range fs.Events {
-							result.WriteString(fmt.Sprintf(" - #%dchapter: %s\n", ev.Chapter, ev.Note))
+							result.WriteString(fmt.Sprintf(" - chapter #%d: %s\n", ev.Chapter, ev.Note))
 						}
 					}
 					if fs.Resolution != "" {
-						result.WriteString(fmt.Sprintf(" returncollectsquare: %s\n", fs.Resolution))
+						result.WriteString(fmt.Sprintf("Resolution: %s\n", fs.Resolution))
 					}
 					result.WriteString("\n")
 				}
@@ -1070,8 +1067,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "search_project",
-			Description: "corditemnumberreceipt(horn, observe, bigetc)",
-			Parameters:  `{"query": "cordclosekeyword"}`,
+			Description: "Search the project (characters, worldview entries, chapter outlines)",
+			Parameters:  `{"query": "search keyword"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Query string `json:"query"`
@@ -1088,19 +1085,19 @@ func getBuiltinTools() []Tool {
 				if ctx.Settings != nil {
 					for _, c := range ctx.Settings.Characters {
 						if strings.Contains(strings.ToLower(c.Name), q) || strings.Contains(strings.ToLower(c.Background), q) {
-							results = append(results, fmt.Sprintf("[horn] %s: %s", c.Name, story.Truncate(c.Background, 100)))
+							results = append(results, fmt.Sprintf("[character] %s: %s", c.Name, story.Truncate(c.Background, 100)))
 						}
 					}
 					for _, w := range ctx.Settings.Worldview {
 						if strings.Contains(strings.ToLower(w.Name), q) || strings.Contains(strings.ToLower(w.Description), q) {
-							results = append(results, fmt.Sprintf("[observe] %s: %s", w.Name, story.Truncate(w.Description, 100)))
+							results = append(results, fmt.Sprintf("[worldview] %s: %s", w.Name, story.Truncate(w.Description, 100)))
 						}
 					}
 				}
 
 				for _, ch := range ctx.State.Chapters {
 					if strings.Contains(strings.ToLower(ch.Title), q) || strings.Contains(strings.ToLower(ch.Outline), q) {
-						results = append(results, fmt.Sprintf("[chaptersection] #%dchapter<%s>: %s", ch.Num, ch.Title, story.Truncate(ch.Outline, 100)))
+						results = append(results, fmt.Sprintf("[chapter] #%d <%s>: %s", ch.Num, ch.Title, story.Truncate(ch.Outline, 100)))
 					}
 				}
 
@@ -1112,8 +1109,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_character",
-			Description: "newhorn",
-			Parameters:  `{"name": "character", "age": "", "appearance": "", "personality": "", "background": "", "motivation": "", "abilities": "", "notes": ""}`,
+			Description: "Create a new character",
+			Parameters:  `{"name": "character name", "age": "", "appearance": "", "personality": "", "background": "", "motivation": "", "abilities": "", "notes": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var c story.Character
 				if err := json.Unmarshal(args, &c); err != nil {
@@ -1138,8 +1135,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_character",
-			Description: "morenewhorn",
-			Parameters:  `{"id": "hornID", "name": "", "age": "", "personality": "", "background": ""}`,
+			Description: "Update an existing character by ID or name",
+			Parameters:  `{"id": "character ID", "name": "", "age": "", "personality": "", "background": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID          string `json:"id"`
@@ -1198,8 +1195,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_character",
-			Description: "excepthorn",
-			Parameters:  `{"id": "hornID"}`,
+			Description: "Delete a character by ID or name",
+			Parameters:  `{"id": "character ID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -1223,8 +1220,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_worldview",
-			Description: "worldview entry",
-			Parameters:  `{"name": "", "category": "divideclass", "description": "", "tags": ""}`,
+			Description: "Create a worldview entry",
+			Parameters:  `{"name": "", "category": "geography/faction/rule/history/other", "description": "", "tags": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var w story.WorldviewEntry
 				if err := json.Unmarshal(args, &w); err != nil {
@@ -1249,8 +1246,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_worldview",
-			Description: "update worldview entry",
-			Parameters:  `{"id": "stripID", "name": "", "category": "", "description": "", "tags": ""}`,
+			Description: "Update a worldview entry",
+			Parameters:  `{"id": "entry ID", "name": "", "category": "", "description": "", "tags": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID          string `json:"id"`
@@ -1293,8 +1290,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_worldview",
-			Description: "delete worldview entry",
-			Parameters:  `{"id": "stripID"}`,
+			Description: "Delete a worldview entry",
+			Parameters:  `{"id": "entry ID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -1318,7 +1315,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "read_project_config",
-			Description: "readwithdrawwhenfrontplace(hassmallsaynumber, , , etc)",
+			Description: "Read the current project configuration (title, genre, theme, etc.)",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				// Always read from the live config: the form (PUT /api/config) and
@@ -1330,8 +1327,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_project_config",
-			Description: "morenew intentcharacter-countparagraph: type/subgenre/title/author/theme/tone/motif/story_length/structure/story_idea/conflict_scale/conflict_other/specific_settings/protagonist_type/protagonist_other/target_audience/audience_profile/inspirational_pieces/output_language/romance_level/sexual_content/gore_level/world_darkness/gender_bias/locations_enabled/character_arcs_enabled/target_words_per_chapter/writing_style/writing_pov. story_idea isheartintent/front(Story idea), is notchaptersectionprobability; batchtimesprobabilityandchapternumberconnectgive generate_outline, not inplacewrite. coveralreadyhascharacter-countparagraph confirm_overwrite=true. ",
-			Parameters:  `{"type":"class","title":"metric","subgenre":"class","theme":"","tone":"","author":"make","story_length":"piece","structure":"","motif":"","story_idea":"think(Story idea: heartintentandfront, andchaptersection/bigprobability)","conflict_scale":"","conflict_other":"","specific_settings":"(eachtravelonestrip)","protagonist_type":"protagonist type","protagonist_other":"character","target_audience":"metricread","audience_profile":"readdraw","inspirational_pieces":"spiritualfeelmake(make, eachtravelonestrip)","output_language":"en","romance_level":"lovethread","sexual_content":"write","gore_level":"forcedegree","world_darkness":"blackdarkdegree","gender_bias":"otherdirection","locations_enabled":false,"character_arcs_enabled":false,"target_words_per_chapter":2500,"writing_style":"writing style","writing_pov":"POV","confirm_overwrite":false}`,
+			Description: "Update story-level parameters: type/subgenre/title/author/theme/tone/motif/story_length/structure/story_idea/conflict_scale/conflict_other/specific_settings/protagonist_type/protagonist_other/target_audience/audience_profile/inspirational_pieces/output_language/romance_level/sexual_content/gore_level/world_darkness/gender_bias/locations_enabled/character_arcs_enabled/target_words_per_chapter/writing_style/writing_pov. story_idea is the core premise/direction of the book (Story idea), not a per-chapter plan; chapter count and per-batch synopses belong to generate_outline, do not write them here. Set confirm_overwrite=true only when the field already has content.",
+			Parameters:  `{"type":"genre","title":"book title","subgenre":"subgenre","theme":"","tone":"","author":"pen name","story_length":"length target","structure":"","motif":"","story_idea":"core premise (Story idea: main intent and direction, what chapters/outlines should serve)","conflict_scale":"","conflict_other":"","specific_settings":"(one per line)","protagonist_type":"protagonist type","protagonist_other":"custom character","target_audience":"target reader","audience_profile":"reader profile","inspirational_pieces":"works that inspire (one per line)","output_language":"en","romance_level":"romance level","sexual_content":"explicitness","gore_level":"violence level","world_darkness":"darkness level","gender_bias":"","locations_enabled":false,"character_arcs_enabled":false,"target_words_per_chapter":2500,"writing_style":"writing style","writing_pov":"POV","confirm_overwrite":false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params map[string]json.RawMessage
 				if err := json.Unmarshal(args, &params); err != nil {
@@ -1519,7 +1516,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "confirm_outline",
-			Description: "Large step: enter the writing stage paragraphs",
+			Description: "Large step: enter the writing stage",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.State.Phase != "outline" {
@@ -1588,8 +1585,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "edit_chapter_outline",
-			Description: "compilefingerchaptersection metricandbig(pending / writing / review cancompile; alreadynot can)",
-			Parameters:  `{"num": 1, "title": "newmetric", "outline": "newbig"}`,
+			Description: "Edit a chapter's title and outline (allowed for pending / writing / review; not for accepted chapters)",
+			Parameters:  `{"num": 1, "title": "new title", "outline": "new outline"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Num     int    `json:"num"`
@@ -1611,7 +1608,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_chapter",
-			Description: "lifewhenfrontchaptersectioninside()",
+			Description: "Generate the current frontier chapter (async)",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.State.Phase != "writing" {
@@ -1624,7 +1621,7 @@ func getBuiltinTools() []Tool {
 				ctx.StartAsync("chapter_generation", func(goCtx context.Context) error {
 					err := story.GenerateChapterAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.ProgressPath, ctx.Settings, ctx.Skills, ctx.Logger)
 					if err != nil {
-						ctx.logger().Error(fmt.Sprintf("chaptersectionmake: %v", err))
+						ctx.logger().Error(fmt.Sprintf("chapter generation failed: %v", err))
 					}
 					return err
 				})
@@ -1633,7 +1630,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "confirm_chapter",
-			Description: "whenfrontchaptersection",
+			Description: "Confirm/accept the current frontier chapter",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if ctx.State.Phase != "writing" {
@@ -1649,7 +1646,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "edit_chapter_content",
-			Description: "tochaptersectionadvancetravelpartcompile(), noheavywritechapter. pay 4 seedmake: replace_lines(travel), replace_text(thispieceparagraph), insert_after_line(infingertravellaterenter), append(tailchase). joinotherparagraphpassage, , chaseetc. ",
+			Description: "Apply a targeted edit to one chapter's prose (does not rewrite the whole chapter). 4 operations: replace_lines (replace a line range), replace_text (replace one passage), insert_after_line (insert after a given line), append (add at the end). Multiple passages can be combined via separate calls.",
 			Parameters:  `{"num": 1, "operation": "replace_lines|replace_text|insert_after_line|append", "start_line": 1, "end_line": 5, "old_text": "text to find", "line": 10, "new_text": "new content", "content_rev":"version returned by read_chapter", "confirm_fact_impact":false}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var req story.EditChapterContentRequest
@@ -1707,7 +1704,7 @@ func getBuiltinTools() []Tool {
 					num = ctx.State.Chapters[ctx.State.CurrentChapterIndex].Num
 				}
 
-				// metricchaptersection
+				// Localizar el capítulo solicitado
 				var target *story.ChapterState
 				for i := range ctx.State.Chapters {
 					if ctx.State.Chapters[i].Num == num {
@@ -1722,8 +1719,8 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "chapter_content_empty")
 				}
 
-				// whenfrontmiddle chaptersectionwalk(laterbigunionmove),
-				// itshechaptersectionwalkdirectionmostsmall(zeromakeuse).
+				// Si el capítulo es el actual en escritura (borrador en revisión),
+				// la revisión se aplica directamente al borrador en curso.
 				isCurrent := ctx.State.Phase == "writing" &&
 					ctx.State.CurrentChapterIndex < len(ctx.State.Chapters) &&
 					ctx.State.Chapters[ctx.State.CurrentChapterIndex].Num == num &&
@@ -1738,7 +1735,7 @@ func getBuiltinTools() []Tool {
 						err = story.ReviseSpecificChapterAction(goCtx, ctx.APICfg, ctx.cfg(), ctx.State, ctx.ProgressPath, chNum, feedback, ctx.Settings, ctx.Logger)
 					}
 					if err != nil {
-						ctx.logger().Error(fmt.Sprintf("chaptersection: %v", err))
+						ctx.logger().Error(fmt.Sprintf("chapter revision failed: %v", err))
 					}
 					return err
 				})
@@ -1788,7 +1785,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_chapters_from",
-			Description: "[risk·not canreverse]fromfingerchaptersectiontotailclearexceptinside(insurestaybigstrip, **not fewchaptersectionnumber**). onlywhenusebrightwant tobatchmeasureexceptalreadywritehourmakeuse. not canuseinchapter, not canuseinheavynewlifebig——chapter/heavylifepleaseuse generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true). somechapterpleaseuse revise_chapter. ",
+			Description: "Delete chapters from a given chapter number to the end, keeping earlier chapters. Use only when the user wants to bulk-remove drafted chapters. Cannot be used to edit a single chapter or to regenerate the book — for regeneration use generate_outline(mode=replace_last, batch_id, chapter_count, outline_synopsis, confirm=true). For one chapter use revise_chapter.",
 			Parameters:  `{"num": 6, "confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1842,8 +1839,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_organization",
-			Description: "organization",
-			Parameters:  `{"name": "organization", "type": "class", "description": "", "members": ["ID"]}`,
+			Description: "Create an organization",
+			Parameters:  `{"name": "organization name", "type": "category", "description": "", "members": ["character ID"]}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var o story.Organization
 				if err := json.Unmarshal(args, &o); err != nil {
@@ -1865,8 +1862,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_organization",
-			Description: "update organization",
-			Parameters:  `{"id": "organizationID", "name": "", "type": "", "description": "", "members": []}`,
+			Description: "Update an organization",
+			Parameters:  `{"id": "organization ID", "name": "", "type": "", "description": "", "members": []}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID          string   `json:"id"`
@@ -1906,7 +1903,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_organization",
-			Description: "delete organization",
+			Description: "Delete an organization",
 			Parameters:  `{"id": "organizationID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -1930,8 +1927,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_relation",
-			Description: "relationship",
-			Parameters:  `{"source_id": "ID", "source_type": "class", "target_id": "metricID", "target_type": "metricclass", "label": "closeismetric"}`,
+			Description: "Create a relationship between two entities (characters or organizations)",
+			Parameters:  `{"source_id": "ID", "source_type": "character|organization", "target_id": "target ID", "target_type": "character|organization", "label": "relationship label"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var rel story.Relation
 				if err := json.Unmarshal(args, &rel); err != nil {
@@ -1953,8 +1950,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_relation",
-			Description: "morenewcloseis",
-			Parameters:  `{"id": "closeisID", "source_id": "", "source_type": "", "target_id": "", "target_type": "", "label": ""}`,
+			Description: "Update an existing relationship",
+			Parameters:  `{"id": "relation ID", "source_id": "", "source_type": "", "target_id": "", "target_type": "", "label": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID         string `json:"id"`
@@ -1998,8 +1995,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_relation",
-			Description: "exceptcloseis",
-			Parameters:  `{"id": "closeisID"}`,
+			Description: "Delete a relationship",
+			Parameters:  `{"id": "relation ID"}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID string `json:"id"`
@@ -2022,7 +2019,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "suggest_foreshadows",
-			Description: "AI square()",
+			Description: "Suggest foreshadowing entries with AI (async)",
 			Parameters:  `{}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				if len(ctx.State.Chapters) == 0 {
@@ -2046,7 +2043,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "create_foreshadow",
-			Description: "",
+			Description: "Create a foreshadowing entry manually",
 			Parameters:  `{"name": "", "description": "", "plant_chapter": 1, "target_chapter": 5}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var req struct {
@@ -2080,7 +2077,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "update_foreshadow",
-			Description: "morenew",
+			Description: "Update a foreshadowing entry",
 			Parameters:  `{"id": 1, "name": "", "description": "", "plant_chapter": 0, "target_chapter": 0, "status": "", "resolution": ""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var req struct {
@@ -2133,7 +2130,7 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "delete_foreshadow",
-			Description: "except",
+			Description: "Delete a foreshadowing entry",
 			Parameters:  `{"id": 1}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
@@ -2175,8 +2172,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "toggle_skill",
-			Description: "enableuseorusecan",
-			Parameters:  `{"id": "canID", "enabled": true}`,
+			Description: "Enable or disable a writing skill",
+			Parameters:  `{"id": "skill ID", "enabled": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					ID      string `json:"id"`
@@ -2218,15 +2215,15 @@ func getBuiltinTools() []Tool {
 			Description: "[DANGER - irreversible] Reset all progress, clearing every chapter, outline and foreshadowing. Use only when the user explicitly asks to reset/clear the whole project progress, and always confirm with the user first.",
 			Parameters:  `{"confirm": true}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
-				if msg := requireConfirm(ctx, args, fmt.Sprintf("heavyplacepartadvancedegree( %d chapterandhas)", len(ctx.State.Chapters))); msg != "" {
+				if msg := requireConfirm(ctx, args, fmt.Sprintf("Restablecer TODO el progreso del proyecto (se borrarán %d capítulos, outlines y foreshadows)", len(ctx.State.Chapters))); msg != "" {
 					return msg, nil
 				}
 				if err := story.ResetProgressFiles(ctx.ProgressPath); err != nil {
 					return "", agentErr(ctx, "delete_progress_failed", err)
 				}
-				// plain clearempty, insurecertificate Handlers has onefinger-tooquiltheavyplace
+				// Se limpia el estado en memoria; los handlers persisten el progreso vacío automáticamente
 				*ctx.State = story.Progress{Phase: "outline"}
-				ctx.logger().Success("advancedegreealreadyheavyplace. ")
+				ctx.logger().Success("Progreso restablecido.")
 				return agentMsg(ctx, "agent.progress_reset"), nil
 			},
 		},

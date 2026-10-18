@@ -32,7 +32,7 @@ func detectProjectCompatibility(projectDir string) (string, error) {
 		if os.IsNotExist(err) {
 			return projectCompatibilityUnknown, nil
 		}
-		return "", fmt.Errorf("readwithdrawitemplace: %w", err)
+		return "", fmt.Errorf("leer directorio de proyecto: %w", err)
 	}
 	var configProbe struct {
 		ProjectFormatVersion int `json:"project_format_version"`
@@ -58,7 +58,7 @@ func detectProjectCompatibility(projectDir string) (string, error) {
 		if os.IsNotExist(err) {
 			return projectCompatibilityUnknown, nil
 		}
-		return "", fmt.Errorf("readwithdrawitemadvancedegree: %w", err)
+		return "", fmt.Errorf("leer archivo de progreso: %w", err)
 	}
 	var progressProbe struct {
 		Chapters []struct {

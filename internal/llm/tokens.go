@@ -40,6 +40,20 @@ func WithTaskTokens(ctx context.Context, logger *sse.LogBroadcaster) (context.Co
 	return context.WithValue(ctx, taskTokenCtxKey{}, usage), usage
 }
 
+// MaxTaskDuration is the hard wall-clock ceiling for a single background
+// generation task. Without it, a persistently failing or hanging API endpoint
+// could keep a task (and its retry loops) alive forever, saturating CPU,
+// connections and log channels — the root cause of machine freezes during
+// generation. Callers must invoke the returned cancel func when the task ends
+// normally so resources are released early.
+const MaxTaskDuration = 30 * time.Minute
+
+// NewTaskContext builds the root context for a background generation task:
+// cancellable on demand (manual stop) and bounded by MaxTaskDuration.
+func NewTaskContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, MaxTaskDuration)
+}
+
 func TaskTokensFromContext(ctx context.Context) *TaskTokenUsage {
 	if ctx == nil {
 		return nil

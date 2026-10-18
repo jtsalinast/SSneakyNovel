@@ -29,7 +29,7 @@ func formatRegisteredCharactersForCheck(settings *ProjectSettings, lang string) 
 		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			return "(none registered)"
 		}
-		return "(noalreadyhorn)"
+		return "(sin personajes registrados)"
 	}
 	var sb strings.Builder
 	for _, c := range settings.Characters {
@@ -111,10 +111,10 @@ func CheckOutlineCharacterConsistency(ctx context.Context, apiCfg *config.APICon
 				Summary:        "detected unregistered outline characters (heuristic scan)",
 			}, nil
 		}
-		return nil, fmt.Errorf("nountiebigfruit")
+		return nil, fmt.Errorf("no result parsed")
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &report); err != nil {
-		return nil, fmt.Errorf("untiebigJSON: %w", err)
+		return nil, fmt.Errorf("parse JSON: %w", err)
 	}
 
 	report.Suggestions = mergeOutlineCharacterSuggestions(heuristic, report.Suggestions)

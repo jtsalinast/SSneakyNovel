@@ -11,61 +11,61 @@ import (
 // structureDescriptions maps a novel-structure key to short beat descriptions,
 // adapted from NovelWriter's structure frameworks. Used to guide outline
 // generation when the user picks a story structure in the config.
-var structureDescriptions = map[string][2]string{ // [zh, en]
+var structureDescriptions = map[string][2]string{ // [es, en]
 	"three_act": {
-		"three: #1(approx25%)laymatanditem, advanceenter#two; #2(approx50%)riselevel, middledotrotate, mostlow; #3(approx25%)highand. ",
+		"Estructura en tres actos: Acto I (~25%) planteamiento e incidente incitador; Acto II (~50%) conflicto creciente, punto de giro central y punto bajo; Acto III (~25%) clímax y desenlace.",
 		"Three-act structure: Act I (~25%) setup and inciting incident; Act II (~50%) rising conflict, midpoint reversal, low point; Act III (~25%) climax and resolution.",
 	},
 	"six_act": {
-		"six: open(sun), tentaclehairitem, upperrisetravelmove(countand), /middledotrotate, highfrontmachine, . ",
+		"Estructura en seis partes: inicio (mundo ordinario), evento detonante, acción creciente, prueba/giro a mitad, crisis previa al clímax, resolución.",
 		"Six-part structure: beginning (ordinary world), trigger event, rising action, midpoint test/turn, pre-climax crisis, resolution.",
 	},
 	"fichtean": {
-		"eanfivemachine: byoneconnectnot disconnectriselevel machineadvance, eachmachinefastlaymat, Rising , disconnecthourengrave; fromhighpushcloth. ",
+		"Estructura Fichtean de cinco crisis: una cadena de crisis escalantes, cada una con planteamiento breve, conflicto creciente y momento de decisión; planifica la trama hacia atrás desde el clímax.",
 		"Fichtean five-crisis structure: a chain of escalating crises, each with brief setup, rising conflict and decision moment; plot backwards from the climax.",
 	},
 	"freytag": {
-		"goldcharacter-count(Freytag): open→upperrisemovemake→high(middle)→lowerdescendmovemake→/disaster. ",
+		"Pirámide de Freytag: exposición, acción creciente, clímax en el centro, acción descendente, desenlace/catástrofe.",
 		"Freytag's pyramid: exposition, rising action, climax at the middle, falling action, denouement/catastrophe.",
 	},
 	"seven_point": {
-		"sevendot: hook(0%)→#onerotatedot(15%)→dot(35%)→middledot(50%)→rotate(65%)→#tworotatedot(85%)→(100%). ",
+		"Estructura de siete puntos: gancho (0%), primer giro argumental (15%), presión 1 (35%), punto medio (50%), segundo giro (65%), presión 2 (85%), resolución (100%).",
 		"Seven-point structure: hook (0%), first plot turn (15%), pinch 1 (35%), midpoint (50%), plot turn 2 (65%), pinch 2 (85%), resolution (100%).",
 	},
 	"heros_journey": {
-		"of(12stepsparagraph): sun→risk→→meetsee→acrosscrossdoor→alliancefriendenemy→connectneardeep→→reward→→alive→spiritualmedicinecome. ",
+		"El viaje del héroe (12 etapas): mundo ordinario, llamada a la aventura, negativa, mentor, cruce del umbral, pruebas/aliados/enemigos, aproximación, calvario, recompensa, camino de regreso, resurrección, retorno con el elixir.",
 		"Hero's journey (12 stages): ordinary world, call to adventure, refusal, mentor, crossing the threshold, tests/allies/enemies, approach, ordeal, reward, road back, resurrection, return with the elixir.",
 	},
 	"heros_journey_simple": {
-		"of: exithair(sunand)→enable(andfeelawake)→come(andreturn), joinmiddleshortpiece. ",
+		"Viaje del héroe simplificado: partida (mundo ordinario y llamada), iniciación (pruebas y despertar), retorno (transformación y regreso a casa); adecuado para novela corta.",
 		"Simplified hero's journey: departure (ordinary world & call), initiation (trials & awakening), return (transformation & homecoming); suits novellas.",
 	},
 	"save_the_cat": {
-		"Save the Catsectiontable: opendrawnoodles→→laymat→→→advanceenter#two→B→swimhour→middledot→badeggnear→onenohas→spiritualsouldarknight→realize→high→drawnoodles. ",
+		"Beats de Save the Cat: imagen inicial, tema enunciado, planteamiento, catalizador, debate, entrada al mundo nuevo, historia B, diversión y juego, punto medio, se ciernen los villanos, todo está perdido, noche oscura del alma, clímax, imagen final.",
 		"Save the Cat beats: opening image, theme staked, setup, catalyst, debate, break into two, B story, fun and games, midpoint, bad guys close in, all is lost, dark night of the soul, finale, final image.",
 	},
 	"episodic": {
-		"chaptersection/billyuan: eachchapteroreachgroupchaptersectionforto billyuan(item/risk), onestriprun throughthreadunioncollect. ",
+		"Estructura episódica: cada capítulo (o grupo) es una unidad autocontenida (caso/aventura) unida de forma suelta por una trama general que converge con el tiempo.",
 		"Episodic structure: each chapter (or group) is a self-contained unit (case/adventure) loosely threaded by an overarching storyline that converges over time.",
 	},
 	"story_circle": {
-		"circle(Dan Harmon): you(district)→want to→advanceenterlife→should→seek→ topayexitprice→return→. eightring, billyuanandlongpieceuse. ",
+		"Círculo narrativo (Dan Harmon): tú → necesitas → entras → te adaptas → buscas → pagas el precio → regresas → cambias. Un bucle de ocho pasos que funciona igual en historias episódicas o serializadas.",
 		"Story circle (Dan Harmon): you → need → go → adapt → search → take → return → change. An eight-step loop that works for episodic and serialized stories alike.",
 	},
 	"kishotenketsu": {
-		"(fourparagraph): (enter)→(hairlay)→(intentoutsiderotate)→(collectcallshould), nostrongmanufactureto, joinsunis, lightsmallsayandshortpiece. ",
+		"Kishōtenketsu (estructura eastasiática de cuatro actos): introducción → desarrollo → giro/sorpresa → reconciliación. El conflicto es opcional; adecuado para slice-of-life, light novels y antologías.",
 		"Kishōtenketsu (four-act East-Asian structure): introduction → development → surprise/twist → reconciliation. Conflict is optional; suits slice-of-life, light novels and anthologies.",
 	},
 	"snowflake": {
-		"snowflower: fromonesentence premise layer(paragraphpassage→rowtable→→big), chaptersectionsecretdegreealong with, joinandmultithread. ",
+		"Método copo de nieve: expande una premisa de una frase por capas (párrafo → lista de escenas → personajes → outline); la densidad de capítulos crece con cada iteración, ideal para epopeyas y libros multiperspectiva.",
 		"Snowflake method: expand a one-sentence premise in layers (paragraph → scene list → characters → outline); chapter density grows with each iteration, ideal for epics and multi-POV books.",
 	},
 	"quest": {
-		"chaseseek(Quest): bright metricmovehornacrosscrossempty/stepsparagraphfrontadvance, alongmetricbacklater true, doti.e.. ",
+		"Estructura de búsqueda (Quest): un objetivo claro impulsa al protagonista a través de espacios/etapas; las pruebas en el camino revelan la verdad detrás del objetivo y alcanzarlo produce una transformación.",
 		"Quest structure: a clear goal drives the protagonist across spaces/stages; trials along the way reveal the truth behind the goal, and reaching it brings transformation.",
 	},
 	"romance_arc": {
-		"feelthread: meet/→nearanduntie→machine→divideleavelow→feelawakeand→full(or), sectionrevolve aroundcloseisadvance. ",
+		"Arco romántico: encuentro/atracción → cercanía y malentendidos → crisis de compromiso → separación y punto bajo → despertar y búsqueda → final feliz (o desenlace agridulce); los beats giran en torno a la relación.",
 		"Romance arc structure: meet/attract → closeness & misreading → commitment crisis → separation low point → awakening & pursuit → happy ending (or bittersweet release); beats turn on the relationship.",
 	},
 }
@@ -94,42 +94,42 @@ func lengthLabel(length, lang string) string {
 		if en {
 			return "flash fiction"
 		}
-		return "smallsay"
+		return "microrrelato"
 	case config.LengthShort:
 		if en {
 			return "short story"
 		}
-		return "shortpiece"
+		return "relato corto"
 	case config.LengthNovelette:
 		if en {
 			return "novelette"
 		}
-		return "shortmiddlepiece"
+		return "novelette"
 	case config.LengthNovella:
 		if en {
 			return "novella"
 		}
-		return "middlepiece"
+		return "novela corta"
 	case config.LengthLightNovel:
 		if en {
 			return "light novel"
 		}
-		return "lightsmallsay"
+		return "light novel"
 	case config.LengthAnthology:
 		if en {
 			return "anthology"
 		}
-		return "shortpiecesmallsay"
+		return "antología"
 	case config.LengthNovel:
 		if en {
 			return "novel"
 		}
-		return "longpiece"
+		return "novela"
 	case config.LengthEpic:
 		if en {
 			return "epic"
 		}
-		return "/longpiece"
+		return "novela épica"
 	}
 	if min > 0 && en {
 		return fmt.Sprintf("%s (%d-%d chapters suggested)", length, min, max)
@@ -157,47 +157,47 @@ func NovelParametersBlock(cfg *config.Config) string {
 		}
 	}
 	if m := sc.EffectiveMotif(); m != "" {
-		add("[learn]"+m+"(pleaseBAitsmakeforrun through intentelephantandthreadcord, weaveentersection, and, not want tolifehardsay)", "[LITERARY MOTIF] "+m+" (weave it as a recurring image/thematic thread through plot, characters and scenes; never heavy-handed)")
+		add("[MOTIVO LITERARIO] "+m+" (téjelo como hilo temático/imagen recurrente a lo largo de la trama, los personajes y las escenas; nunca de forma pesada)", "[LITERARY MOTIF] "+m+" (weave it as a recurring image/thematic thread through plot, characters and scenes; never heavy-handed)")
 	}
 	if b := strings.TrimSpace(sc.StoryIdea); b != "" {
 		if en {
 			lines = append(lines, "[STORY IDEA - authoritative premise]\n"+b)
 		} else {
-			lines = append(lines, "[think·front]\n"+b)
+			lines = append(lines, "[IDEA DE LA HISTORIA - premisa autorizada]\n"+b)
 		}
 	}
 	if v := strings.TrimSpace(sc.Subgenre); v != "" {
 		// Multi-select support: the stored value may be a comma-separated list
 		// ("Cozy Mystery, Noir"); every entry is surfaced to the AI.
 		for _, part := range config.SplitSubgenreList(v) {
-			add("[class]"+part, "[SUBGENRE] "+part)
+			add("[SUBGÉNERO] "+part, "[SUBGENRE] "+part)
 		}
 	}
 	if v := strings.TrimSpace(sc.Theme); v != "" {
-		add("[]"+v, "[THEME] "+v)
+		add("[TEMÁTICA] "+v, "[THEME] "+v)
 	}
 	if v := strings.TrimSpace(sc.Tone); v != "" {
-		add("[]"+v, "[TONE] "+v)
+		add("[TONO] "+v, "[TONE] "+v)
 	}
 	if v := strings.TrimSpace(sc.InspirationalPieces); v != "" {
-		add("[spiritualfeelmake]"+v+"(makeforwindgrid, andhandupper sitmetric: borrowitsqiand, butnot want toperitssection, orhas)",
+		add("[OBRAS DE INSPIRACIÓN] "+v+" (úsalas como referencia de estilo/atmósfera/oficio: toma su tono y técnicas, pero nunca copies sus tramas, personajes ni configuraciones propias)",
 			"[INSPIRATIONAL PIECES] "+v+" (use them as style/atmosphere/craft reference points: borrow their tone and techniques, never copy their plots, characters or proprietary settings)")
 	}
 	if v := strings.TrimSpace(sc.Author); v != "" {
-		add("[make]"+v, "[AUTHOR] "+v)
+		add("[AUTOR/AUTORÍA] "+v, "[AUTHOR] "+v)
 	}
 	if v := strings.TrimSpace(sc.StoryLength); v != "" {
 		min, max := config.SuggestedChaptersByLength(v)
 		lbl := lengthLabel(v, cfg.Language)
 		if min > 0 {
 			if en {
-				add(fmt.Sprintf("[piece]%s(chapternumberapprox %d-%d chapter)", lbl, min, max),
+				add(fmt.Sprintf("[EXTENSIÓN] %s (total sugerido: ~%d-%d capítulos)", lbl, min, max),
 					fmt.Sprintf("[LENGTH] %s (suggested total: ~%d-%d chapters)", lbl, min, max))
 			} else {
-				add(fmt.Sprintf("[piece]%s(chapternumberapprox %d-%d chapter)", lbl, min, max), "")
+				add(fmt.Sprintf("[EXTENSIÓN] %s (total sugerido: ~%d-%d capítulos)", lbl, min, max), "")
 			}
 		} else {
-			add("[piece]"+lbl, "[LENGTH] "+lbl)
+			add("[EXTENSIÓN] "+lbl, "[LENGTH] "+lbl)
 		}
 	}
 	if desc := structureDescription(sc.Structure, cfg.Language); desc != "" {
@@ -205,17 +205,17 @@ func NovelParametersBlock(cfg *config.Config) string {
 		if en {
 			lines = append(lines, "[STRUCTURE] "+lbl+": "+desc)
 		} else {
-			lines = append(lines, "[]"+lbl+": "+desc)
+			lines = append(lines, "[ESTRUCTURA] "+lbl+": "+desc)
 		}
 	}
 	if v := strings.TrimSpace(sc.EffectiveConflict()); v != "" {
-		add("[]"+v+"(squaredirection, not strongmanufacture)", "[CONFLICT SCALE] "+v+" (a suggestion, not a constraint)")
+		add("[ESCALA DEL CONFLICTO] "+v+" (una sugerencia, no una restricción)", "[CONFLICT SCALE] "+v+" (a suggestion, not a constraint)")
 	}
 	if v := strings.TrimSpace(sc.EffectiveProtagonist()); v != "" {
-		add("[hornclass]"+v+"(squaredirection, not strongmanufacture)", "[PROTAGONIST TYPE] "+v+" (a suggestion, not a constraint)")
+		add("[TIPO DE PROTAGONISTA] "+v+" (una sugerencia, no una restricción)", "[PROTAGONIST TYPE] "+v+" (a suggestion, not a constraint)")
 	}
 	if v := strings.TrimSpace(sc.SpecificSettings); v != "" {
-		add("[]\n"+v, "[SPECIFIC SETTINGS]\n"+v)
+		add("[AJUSTES ESPECÍFICOS]\n"+v, "[SPECIFIC SETTINGS]\n"+v)
 	}
 	if v := config.AudienceGuidance(sc.TargetAudience, cfg.Language); v != "" {
 		lines = append(lines, v)
@@ -228,7 +228,7 @@ func NovelParametersBlock(cfg *config.Config) string {
 		if en {
 			lines = append(lines, "[GENRE MODIFIER] This story uses the \""+mod+"\" anime/manhwa/game convention set: honor its signature tropes, pacing and reader expectations (a suggestion, not a constraint).")
 		} else {
-			lines = append(lines, "[classaccessory]thismakebelthas\""+mod+"\" move/draw/swimisproportion: pleasebodyitsmetricambitionbridgeparagraph, sectionandreadexpect(squaredirection, not strongmanufacture). ")
+			lines = append(lines, "[MODIFICADOR DE GÉNERO] Esta historia usa el conjunto de convenciones anime/manhwa/juego \""+mod+"\": respeta sus tropos característicos, su ritmo y las expectativas del lector (una sugerencia, no una restricción).")
 		}
 	}
 	// Genre/subgenre flavor: derived from the free-form Type/Subgenre so it also
@@ -236,27 +236,27 @@ func NovelParametersBlock(cfg *config.Config) string {
 	if g := strings.TrimSpace(sc.Type); g != "" || strings.TrimSpace(sc.Subgenre) != "" {
 		flavor := strings.TrimSpace(g + " " + sc.Subgenre)
 		if flavor != "" {
-			add("[classwindflavor]thismakebelongs toin\""+flavor+"\": pleaseusetheclass/class proportion, readexpectandmetricambitionyuanplain(squaredirection, not strongmanufacture). ",
+			add("[SABOR DE GÉNERO] Este libro es "+flavor+": respeta las convenciones típicas, las expectativas del lector y los elementos característicos de ese género/subgénero (una sugerencia, no una restricción).",
 				"[GENRE FLAVOR] This book is "+flavor+": honor the typical conventions, reader expectations and signature elements of that genre/subgenre (a suggestion, not a constraint).")
 		}
 	}
 	switch bias := strings.TrimSpace(sc.GenderBias); bias {
 	case "", "random":
-		add("[other]along withmachinei.e.can, not want toengraveintentdirectionhowother. ",
+		add("[GÉNERO DE PERSONAJES] Déjalo al azar; no te inclines deliberadamente hacia ningún género.",
 			"[CHARACTER GENDER] Leave it to chance; do not deliberately skew toward any gender.")
 	case "male":
-		add("[other]want tohorndirectionfor. ", "[CHARACTER GENDER] Skew main characters toward male.")
+		add("[GÉNERO DE PERSONAJES] Inclina a los personajes principales hacia el masculino.", "[CHARACTER GENDER] Skew main characters toward male.")
 	case "female":
-		add("[other]want tohorndirectionfor. ", "[CHARACTER GENDER] Skew main characters toward female.")
+		add("[GÉNERO DE PERSONAJES] Inclina a los personajes principales hacia el femenino.", "[CHARACTER GENDER] Skew main characters toward female.")
 	case "balanced":
-		add("[other]want tohornalldividecloth. ", "[CHARACTER GENDER] Keep main characters gender-balanced.")
+		add("[GÉNERO DE PERSONAJES] Mantén un reparto principal equilibrado en género.", "[CHARACTER GENDER] Keep main characters gender-balanced.")
 	}
 	if len(lines) == 0 {
 		return ""
 	}
 	block := "NOVEL PARAMETERS (plan the whole book accordingly):\n" + strings.Join(lines, "\n")
 	if !en {
-		block = "smallsaynumber(bodywhiskerfollow): \n" + strings.Join(lines, "\n")
+		block = "PARÁMETROS DE LA NOVELA (planifica todo el libro según ellos):\n" + strings.Join(lines, "\n")
 	}
 	// Story output language (EN/ES): when the author pins a generation language
 	// in "Story parameters", every AI text must stay in it — this hard rule is
@@ -279,33 +279,33 @@ func structureLabel(structure, lang string) string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	switch key {
 	case "three_act":
-		return label(en, "three", "Three-act structure")
+		return label(en, "Estructura en tres actos", "Three-act structure")
 	case "six_act":
-		return label(en, "six", "Six-part structure")
+		return label(en, "Estructura en seis partes", "Six-part structure")
 	case "fichtean":
-		return label(en, "eanfivemachine", "Fichtean five-crisis")
+		return label(en, "Fichtean de cinco crisis", "Fichtean five-crisis")
 	case "freytag":
-		return label(en, "goldcharacter-count", "Freytag's pyramid")
+		return label(en, "Pirámide de Freytag", "Freytag's pyramid")
 	case "seven_point":
-		return label(en, "sevendot", "Seven-point structure")
+		return label(en, "Estructura de siete puntos", "Seven-point structure")
 	case "heros_journey":
-		return label(en, "of", "Hero's journey")
+		return label(en, "El viaje del héroe", "Hero's journey")
 	case "heros_journey_simple":
-		return label(en, "of", "Simplified hero's journey")
+		return label(en, "Viaje del héroe simplificado", "Simplified hero's journey")
 	case "save_the_cat":
-		return label(en, "Save the Cat sectiontable", "Save the Cat beats")
+		return label(en, "Beats de Save the Cat", "Save the Cat beats")
 	case "episodic":
-		return label(en, "chaptersection/billyuan", "Episodic")
+		return label(en, "Episódica", "Episodic")
 	case "story_circle":
-		return label(en, "circle", "Story circle")
+		return label(en, "Círculo narrativo", "Story circle")
 	case "kishotenketsu":
-		return label(en, "", "Kishōtenketsu")
+		return label(en, "Kishōtenketsu", "Kishōtenketsu")
 	case "snowflake":
-		return label(en, "snowflower", "Snowflake method")
+		return label(en, "Método copo de nieve", "Snowflake method")
 	case "quest":
-		return label(en, "chaseseek", "Quest structure")
+		return label(en, "Estructura de búsqueda", "Quest structure")
 	case "romance_arc":
-		return label(en, "feelthread", "Romance arc")
+		return label(en, "Arco romántico", "Romance arc")
 	}
 	return key
 }
