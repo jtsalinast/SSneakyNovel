@@ -1,0 +1,8 @@
+{
+  "api_key": "",
+  "base_url": "",
+  "model": "",
+  "max_tokens": 32768,
+  "http_timeout_seconds": 600,
+  "context_budget_tokens": 300000
+}

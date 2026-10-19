@@ -762,6 +762,33 @@
     }
   }
 
+  // External re-sync (Randomize): when the PARENT programmatically rewrites
+  // cfg.type / cfg.subgenre, the one-shot seeds above intentionally refuse to
+  // clobber a widget the user already touched ("the widget owns the
+  // interaction"). That is exactly why Randomize appeared dead: the new genre
+  // and subgenre never reached the visible comboboxes. bump() tells this block
+  // "an external rewrite just happened": mirror every bound value into the
+  // widgets (SmartCombobox re-parses any bound value that differs from its
+  // lastEmitted) and clear the dirty flags so the free-text settings textarea
+  // re-derives from the new cfg values instead of keeping stale drafts.
+  export let bump = () => {};
+  function resyncFromCfg() {
+    const parts = String(cfg.type || '').split(',').map((x) => x.trim()).filter(Boolean);
+    genreSmartValue = parts.join(', ');
+    genreSmartSeeded = parts.length > 0;
+    const chips = splitSubgenreText(cfg.subgenre);
+    subSmartValue = chips.join(', ');
+    subSmartSeeded = chips.length > 0;
+    protagSmartValue = splitMultiList(cfg.protagonist_type).join(', ');
+    protagSmartSeeded = !!protagSmartValue;
+    conflictSmartValue = splitMultiList(cfg.conflict_scale).join(', ');
+    conflictSmartSeeded = !!conflictSmartValue;
+    freeSettingsDirty = false;
+  }
+  // Fire whenever the parent bumps us (bump is a plain prop — its identity
+  // changes on every randomize) or the payload refreshes.
+  $: if (bump) resyncFromCfg();
+
   // —— SmartCombobox #5 — "Genre" proof of concept (NO groups) —————————————
   // All ten top-level genres as ONE flat list (grouped={false} hides the
   // accordion headers entirely). Multi-select, mirroring cfg.type with the

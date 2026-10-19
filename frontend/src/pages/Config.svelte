@@ -6,6 +6,8 @@
   import { t, uiLocale } from '../lib/i18n/index.js';
   import { resolveChatCompletionsURL } from '../lib/apiUrl.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
+  import AiGenerateButton from '../components/AiGenerateButton.svelte';
+  import RandomizeButton from '../components/RandomizeButton.svelte';
   import ComboSelect from '../lib/components/ComboSelect.svelte';
   // Interfaz unificada: los <select> nativos del formulario de historia y de
   // los formularios de lore usan SmartSelect (la variante single-select del
@@ -805,82 +807,22 @@ const cur = (localStoryCfg.specific_settings || '').split('\n').map((x) => x.tri
 if (!cur.includes(s)) localStoryCfg.specific_settings = [...cur, s].join('\n');
 }
 
-// —— Randomize (Story parameters) —
-// Fill the story-parameter fields with a coherent random combination. The
-// genre is picked FIRST because everything downstream depends on it: the
-// subgenre list comes from the chosen genre, and conflicts / protagonists /
-// tones / specific-setting suggestions come from the chosen subgenre (with a
-// genre-level fallback, mirroring the reactive option lists above).
-function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-function maybePick(arr, p = 0.75) { return (arr && arr.length && Math.random() < p) ? pick(arr) : ''; }
-
-async function fetchNovelParams() {
-try {
-const p = await api('GET', '/api/novel-params');
-if (p && p.conflict_scales) {
-for (const k of Object.keys(p.conflict_scales)) GENRE_CONFLICTS[k] = p.conflict_scales[k].filter((x) => x !== 'other');
-for (const k of Object.keys(p.protagonist_types)) GENRE_PROTAGONISTS[k] = p.protagonist_types[k].filter((x) => x !== 'other');
-if (p.specific_settings) for (const k of Object.keys(p.specific_settings)) GENRE_SETTINGS[k] = p.specific_settings[k];
-if (p.subgenre_hints) SUBGENRE_HINTS = p.subgenre_hints;
-// Round 18: authoritative single-parent taxonomy computed by the backend
-// (snake_case token -> canonical genre key). Consulted by canonicalParentFor()
-// for presets that only exist server-side.
-if (p.subgenre_parents && typeof p.subgenre_parents === 'object') SUBGENRE_PARENT_TABLE = p.subgenre_parents;
-// Backend per-subgenre catalogs (conflicts/protagonists/settings + canonical
-// parent). The UI filters everything client-side from these lists.
-if (p.subgenre_catalogs && typeof p.subgenre_catalogs === 'object') SUBGENRE_CATALOGS = p.subgenre_catalogs;
-if (p.structure_hints) STRUCTURE_HINTS = p.structure_hints;
-if (Array.isArray(p.subgenre_presets)) SUBGENRE_PRESETS = p.subgenre_presets;
-// Backend is the source of truth for length/structure catalogs and the
-// target-words-per-chapter presets applied when the length changes.
-if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
-if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
-if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
-// Round 7: cross-cutting modifier presets ("Isekai", "Wuxia", "Cozy"...) are
-// now exposed by the backend regardless of the selected genre, so the user
-// can stack them on any combination via checkboxes.
-if (p.modifier_presets) MODIFIER_PRESETS = p.modifier_presets;
-// Round 19: keep the RAW payload — the new cascade modules (subgenreTaxonomy
-// + GenreSubgenrePicker) build their merged single-parent index directly from
-// it, and re-run automatically whenever this assignment happens.
-novelParamsPayload = p;
-novelParamsTick++;
-}
-} catch (e) {}
-}
-
-// —— Modifier stacking (round 7) —
-// Subgenre-style modifiers that can be layered on top of ANY genre/subgenre
-// selection (isekai, wuxia, cyberpunk, cozy...). Filled from
-// /api/novel-params -> modifier_presets ({modifier: [setting tokens]}). The UI
-// renders each as a collapsible group of checkboxes; checking one appends its
-// settings to specific_settings (deduped), unchecking removes exactly those
-// lines again without touching custom entries.
-let MODIFIER_PRESETS = {};
-function modifierGroups() {
-return Object.keys(MODIFIER_PRESETS).sort((a, b) => a.localeCompare(b)).map((name) => ({ name, settings: MODIFIER_PRESETS[name] || [] }));
-}
-function currentSettingsList() {
-return (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
-}
-function modifierChecked(name) {
-const list = currentSettingsList();
-const s = MODIFIER_PRESETS[name] || [];
-return s.length > 0 && s.every((x) => list.includes(x));
-}
-function toggleModifier(name) {
-const s = MODIFIER_PRESETS[name] || [];
-if (!s.length) return;
-const cur = currentSettingsList();
-if (modifierChecked(name)) {
-localStoryCfg.specific_settings = cur.filter((x) => !s.includes(x)).join('\n');
-} else {
-localStoryCfg.specific_settings = [...new Set([...cur, ...s])].join('\n');
-}
-refreshCheckedSettings();
-}
+// Randomize tick: bumped whenever randomizeStoryParams() rewrites the form.
+// Passed into GenreCascadeFields as `bump` so its SmartCombobox widgets
+// (Genre/Subgenre/Conflict/Protagonist) re-sync from cfg instead of keeping
+// the value they were seeded with — without this the cascade fields never
+// visibly changed and Randomize looked dead.
+let cascadeBumpTick = 0;
+function cascadeBump() { void cascadeBumpTick; }
 
 // —— Randomize (Story parameters) —
+// Return a random element from an array (empty-safe). Used by the randomizer
+// below; without it every click threw ReferenceError and silently did nothing.
+function pick(arr) {
+  if (!Array.isArray(arr) || !arr.length) return '';
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 // Fill the story-parameter fields with a coherent random combination. The
 // genre is picked FIRST because everything downstream depends on it: the
 // subgenre list comes from the chosen genre, and conflicts / protagonists /
@@ -897,17 +839,21 @@ function randomizeStoryParams() {
   const sg = pick(g.subgenres);
   localStoryCfg.subgenre = sg;
   lastAutoSubgenre = sg;
-  // 3) Fields that depend on the chosen genre/subgenre.
+  // 3) Fields that depend on the chosen genre/subgenre. Prefer the SAME
+  //    reactive option lists the UI renders (subgenreCfg → genreUnion), so the
+  //    randomized values always exist in the visible dropdowns; fall back to
+  //    the raw static tables when a list is empty.
   const sd = SUBGENRE_DATA[sg] || null;
-  const conflicts = sd ? sd.conflicts : (GENRE_CONFLICTS[g.key] || []);
-  const protags = sd ? sd.protagonists : (GENRE_PROTAGONISTS[g.key] || []);
-  const settings = sd ? sd.settings : (GENRE_SETTINGS[g.key] || []);
+  const conflicts = (conflictOpts && conflictOpts.length) ? conflictOpts : (sd ? sd.conflicts : (GENRE_CONFLICTS[g.key] || []));
+  const protags = (protagonistOpts && protagonistOpts.length) ? protagonistOpts : (sd ? sd.protagonists : (GENRE_PROTAGONISTS[g.key] || []));
+  const settings = (settingSuggestions && settingSuggestions.length) ? settingSuggestions : (sd ? sd.settings : (GENRE_SETTINGS[g.key] || []));
   const tones = sd ? sd.tones : [];
   localStoryCfg.conflict_scale = pick(conflicts);
   localStoryCfg.conflict_other = '';
   localStoryCfg.protagonist_type = pick(protags);
   localStoryCfg.protagonist_other = '';
   localStoryCfg.specific_settings = (() => {
+    if (!settings.length) return '';
     const shuffled = [...settings].sort(() => Math.random() - 0.5);
     const n = 2 + Math.floor(Math.random() * Math.min(3, Math.max(1, shuffled.length)));
     return shuffled.slice(0, n).join('\n');
@@ -927,6 +873,10 @@ function randomizeStoryParams() {
   localStoryCfg.story_length = len;
   const structOptsForLen = structureOptions(len);
   localStoryCfg.structure = structOptsForLen.length ? pick(structOptsForLen) : DEFAULT_STRUCTURE[len];
+  // Mirror the onLengthChange side effect the user would have gotten: the
+  // target-words-per-chapter preset for the new length.
+  const wpcPreset = TARGET_WORDS_BY_LENGTH[len];
+  if (wpcPreset) localStoryCfg.target_words_per_chapter = wpcPreset;
   // 5) Independent enum selects — option values copied verbatim from the UI.
   localStoryCfg.gender_bias = pick(['random', 'balanced', 'male', 'female']);
   localStoryCfg.target_audience = pick(['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages']);
@@ -935,6 +885,10 @@ function randomizeStoryParams() {
   localStoryCfg.gore_level = pick(['random', 'none', 'mid', 'explicit']);
   localStoryCfg.world_darkness = pick(['idyllic', 'temperate', 'gritty', 'grim', 'abyssal']);
   novelParamsTick++;
+  // 6) Re-sync the GenreCascadeFields widgets with the freshly written cfg
+  //    values (they intentionally ignore external edits after their one-shot
+  //    seed unless we bump them here).
+  cascadeBumpTick++;
 }
   let testingApi = false;
 
@@ -1350,14 +1304,12 @@ function randomizeStoryParams() {
   // is NEVER wired as an event listener — that is why every Generate button
   // was a dead no-op (nothing in DevTools Network, no toast). The helpers
   // below now only return visual props; each <button> binds on:click directly.
-  function genBtnProps(section) {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy[section],
-      title: genBusy[section] ? '' : (genLastError || $t('common.generate')),
-    };
-  }
-  const genClick = (section) => (e) => { e.stopPropagation(); generateSection(section); };
+  // NOTE: do NOT call e.stopPropagation() here. The click already reaches us
+  // via Svelte component event forwarding from <AiGenerateButton>, whose inner
+  // <button> stops native propagation. Calling stopPropagation on the forwarded
+  // (non-native) event throws a TypeError, which previously made every section
+  // Generate button silently fail ("sections no longer load/generate").
+  const genClick = (section) => () => { generateSection(section); };
 
   $: resolvedChatURL = resolveChatCompletionsURL(localApiCfg.base_url, !!localApiCfg.url_strict);
 
@@ -1466,7 +1418,22 @@ function randomizeStoryParams() {
     try { apiConfig.set(await api('GET', '/api/config/api')); } catch (e) {}
     try { config.set(await api('GET', '/api/config')); } catch (e) {}
     try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
-    fetchNovelParams();
+    // Load the novel-parameter catalogs from the backend (single source of
+    // truth for subgenre hints, length/structure keys and word targets).
+    // NOTE: this call site used to reference an undefined `fetchNovelParams`,
+    // which threw a ReferenceError inside onMount and killed every handler
+    // that depends on it (including the Story-parameters randomizer).
+    try {
+      const p = await api('GET', '/api/novel-params');
+      novelParamsPayload = p;
+      novelParamsTick++;
+      if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
+      if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
+      if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
+      SUBGENRE_HINTS = p.subgenre_hints || {};
+      STRUCTURE_HINTS = p.structure_hints || {};
+      SUBGENRE_PRESETS = p.subgenre_presets || [];
+    } catch (e) { /* fall back to the local mirrors above */ }
     // A generation may still be running (it was started fire-and-forget, and
     // this component gets destroyed/recreated on every workspace-tab switch).
     // Re-adopt its busy flags, keep the global spinner honest, and make sure
@@ -1698,12 +1665,12 @@ function randomizeStoryParams() {
     await startGeneration('worldview', { entry_id: savedId }, 'wvform');
   }
 
-  function wvGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['worldview'],
-    };
-  }
+  // The per-form generate buttons now use the shared <AiGenerateButton />;
+  // these helpers just expose the right busy flag for each entry form.
+  function charGenBusy() { return !!genBusy['characters']; }
+  function wvGenBusy() { return !!genBusy['worldview']; }
+  function orgGenBusy() { return !!genBusy['organizations']; }
+  function relGenBusy() { return !!genBusy['relations']; }
 
   async function deleteWorldview(id) {
     showConfirm($t('config.wv.deleteConfirm'), async () => {
@@ -1816,25 +1783,6 @@ function randomizeStoryParams() {
     if (!savedId) return;
     captureSnapshot('relform', { type: 'pair', entityType: 'relation', srcId: s.id, tgtId: tt.id });
     await startGeneration('relations', { source_id: s.id, target_id: tt.id }, 'relform');
-  }
-
-  function charGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['characters'],
-    };
-  }
-  function orgGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['organizations'],
-    };
-  }
-  function relGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['relations'],
-    };
   }
 
   async function deleteOrganization(id) {
@@ -1989,7 +1937,9 @@ function randomizeStoryParams() {
       <div class="card-body p-4 gap-2">
         <div class="flex justify-between items-center">
           <h3 class="card-title text-base">{$t('config.story.paramsTitle')}</h3>
-          <button type="button" class="btn btn-outline btn-xs hover-target" on:click={(e) => { e.stopPropagation(); randomizeStoryParams(); }} disabled={$taskRunning} title={$t('config.story.randomize.hint')}>🎲 {$t('config.story.randomize')}</button>
+          <div class="hover-target">
+            <RandomizeButton disabled={$taskRunning} title={$t('config.story.randomize.hint')} on:click={randomizeStoryParams} />
+          </div>
         </div>
         {#if hasAccepted}
           <div class="alert alert-warning text-xs py-1.5 px-3">
@@ -2035,6 +1985,7 @@ function randomizeStoryParams() {
             dividerBeforeSettings={true}
             paramsPayload={novelParamsPayload}
               genreKeys={selectedGenreKeys}
+              bump={cascadeBump}
               bind:cfg={localStoryCfg}
               disabled={$taskRunning}
               otherLabel={$t('config.story.other')}
@@ -2431,11 +2382,7 @@ function randomizeStoryParams() {
         <div class="flex justify-between items-center">
           <h3 class="card-title text-base">{$t('config.theme.title')}</h3>
           <div class="flex items-center gap-1.5">
-            <button {...genBtnProps('motif')} on:click={genClick('motif')} class="btn btn-accent btn-xs hover-target">
-              {#if genBusy['motif']}
-                <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-              {:else}✨ {$t('common.generate')}{/if}
-            </button>
+            <AiGenerateButton hoverReveal={true} busy={!!genBusy['motif']} title={genLastError || $t('common.generate')} on:click={genClick('motif')} />
           </div>
         </div>
         <div class="space-y-1.5">
@@ -2467,12 +2414,8 @@ function randomizeStoryParams() {
           <div class="divider my-0 py-6 h-px"></div>
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <h3 class="card-title text-base">{$t('config.inspiration.title')}</h3>
-            <button class="btn btn-accent btn-xs hover-target" disabled={!!genBusy['inspirational_pieces']}
-              on:click={(e) => { e.stopPropagation(); generateSection('inspirational_pieces'); }}>
-              {#if genBusy['inspirational_pieces']}
-                <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-              {:else}✨ {$t('common.generate')}{/if}
-            </button>
+            <AiGenerateButton hoverReveal={true} busy={!!genBusy['inspirational_pieces']} title={genLastError || $t('common.generate')}
+              on:click={() => generateSection('inspirational_pieces')} />
           </div>
           <div>
             <span class="field-label">{$t('config.inspiration.subtitle')}</span>
@@ -2484,12 +2427,8 @@ function randomizeStoryParams() {
           <div class="divider my-0 py-6 h-px"></div>
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <h3 class="card-title text-base">{$t('config.audience.profileTitle')}</h3>
-            <button class="btn btn-accent btn-xs hover-target" disabled={!!genBusy['audience_profile']}
-              on:click={(e) => { e.stopPropagation(); generateSection('audience_profile'); }}>
-              {#if genBusy['audience_profile']}
-                <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-              {:else}✨ {$t('common.generate')}{/if}
-            </button>
+            <AiGenerateButton hoverReveal={true} busy={!!genBusy['audience_profile']} title={genLastError || $t('common.generate')}
+              on:click={() => generateSection('audience_profile')} />
           </div>
           <div>
             <span class="field-label">{$t('config.audience.profileSubtitle')}</span>
@@ -2510,11 +2449,7 @@ function randomizeStoryParams() {
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.story_idea.title')}</h3>
-        <button {...genBtnProps('story_idea')} on:click={genClick('story_idea')} class="btn btn-accent btn-xs hover-target">
-          {#if genBusy['story_idea']}
-            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-          {:else}✨ {$t('common.generate')}{/if}
-        </button>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['story_idea']} title={genLastError || $t('common.generate')} on:click={genClick('story_idea')} />
       </div>
       <div>
         <span class="field-label">{$t('config.story_idea.subtitle')}</span>
@@ -2531,9 +2466,7 @@ function randomizeStoryParams() {
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.style.title')}</h3>
-        <button {...genBtnProps('style')} on:click={genClick('style')} class="btn btn-accent btn-xs hover-target">
-          {#if genBusy['style']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['style']} title={genLastError || $t('common.generate')} on:click={genClick('style')} />
       </div>
       <div>
         <span class="field-label">{$t('config.style.label')}</span>
@@ -2559,9 +2492,7 @@ function randomizeStoryParams() {
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.char.title')} <span class="text-xs font-normal text-base-content/65">({chars.length})</span></h3>
-        <button {...genBtnProps('characters')} on:click={genClick('characters')} class="btn btn-accent btn-xs hover-target">
-          {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['characters']} title={genLastError || $t('common.generate')} on:click={genClick('characters')} />
       </div>
       
         <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
@@ -2624,9 +2555,7 @@ function randomizeStoryParams() {
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveCharacter} disabled={$taskRunning}>{$t('config.char.save')}</button>
-              <button {...charGenBtnProps()} on:click={() => generateCharacterEntry()}>
-                {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-              </button>
+              <AiGenerateButton busy={charGenBusy()} labelKey="common.generate" on:click={() => generateCharacterEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeCharForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2655,9 +2584,7 @@ function randomizeStoryParams() {
               <span class="field-label">{$t('config.wv.cat.' + sec.cat)} <span class="text-base-content/50">({list.length})</span></span>
               <div class="flex gap-1.5 items-center">
                 <button class="btn btn-ghost btn-xs hover-target" on:click={() => openWvFormIn(sec.cat)}>+ {$t('config.wv.create')}</button>
-                <button {...genBtnProps(sec.section)} on:click={genClick(sec.section)} class="btn btn-accent btn-xs hover-target">
-                  {#if genBusy[sec.section]}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-                </button>
+                <AiGenerateButton hoverReveal={true} busy={!!genBusy[sec.section]} title={genLastError || $t('common.generate')} on:click={genClick(sec.section)} />
               </div>
             </div>
 
@@ -2713,7 +2640,7 @@ function randomizeStoryParams() {
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveWorldview} disabled={$taskRunning}>{$t('common.save')}</button>
-              <button {...wvGenBtnProps()} on:click={() => generateWorldviewEntry()}>✨ {$t('config.generate.worldview')}</button>
+              <AiGenerateButton busy={wvGenBusy()} labelKey="config.generate.worldview" on:click={() => generateWorldviewEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeWvForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2735,9 +2662,7 @@ function randomizeStoryParams() {
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.org.title')} <span class="text-xs font-normal text-base-content/65">({orgs.length})</span></h3>
-        <button {...genBtnProps('organizations')} on:click={genClick('organizations')} class="btn btn-accent btn-xs hover-target">
-          {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['organizations']} title={genLastError || $t('common.generate')} on:click={genClick('organizations')} />
       </div>
       
         <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
@@ -2794,9 +2719,7 @@ function randomizeStoryParams() {
             {/if}
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveOrganization} disabled={$taskRunning}>{$t('config.org.save')}</button>
-              <button {...orgGenBtnProps()} on:click={() => generateOrganizationEntry()}>
-                {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-              </button>
+              <AiGenerateButton busy={orgGenBusy()} labelKey="common.generate" on:click={() => generateOrganizationEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeOrgForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2815,9 +2738,7 @@ function randomizeStoryParams() {
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.rel.title')} <span class="text-xs font-normal text-base-content/65">({rels.length})</span></h3>
-        <button {...genBtnProps('relations')} on:click={genClick('relations')} class="btn btn-accent btn-xs hover-target">
-          {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['relations']} title={genLastError || $t('common.generate')} on:click={genClick('relations')} />
       </div>
       
         <div class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2">
@@ -2882,9 +2803,7 @@ function randomizeStoryParams() {
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveRelation} disabled={$taskRunning}>{$t('config.rel.save')}</button>
-              <button {...relGenBtnProps()} on:click={() => generateRelationEntry()}>
-                {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-              </button>
+              <AiGenerateButton busy={relGenBusy()} labelKey="common.generate" on:click={() => generateRelationEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeRelForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2908,23 +2827,31 @@ function randomizeStoryParams() {
   .hover-target {
     opacity: 0;
     pointer-events: none;
-    transition: opacity 200ms ease-in-out;
+    transform: translateY(-2px);
+    transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   /* A grouped section (group/hover-section) owns its buttons exclusively:
      hovering the outer card must NOT reveal them — only hovering that
-     specific section does. */
+     specific section does. Keep this rule in sync with the base state above
+     so re-hiding also fades smoothly instead of snapping to invisible. */
   :is(.group\/card, .group\/hover-section):has(.group\/hover-section) .hover-target {
     opacity: 0;
     pointer-events: none;
+    transform: translateY(-2px);
+    transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .group\/hover-section:hover .hover-target,
   .group\/hover-section:focus-within .hover-target {
     opacity: 1;
     pointer-events: auto;
+    transform: translateY(0);
   }
   :is(.group\/card, .group\/hover-section):not(:has(.group\/hover-section)):hover .hover-target,
   :is(.group\/card, .group\/hover-section):not(:has(.group\/hover-section)):focus-within .hover-target {
     opacity: 1;
     pointer-events: auto;
+    transform: translateY(0);
   }
 </style>
