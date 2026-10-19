@@ -253,6 +253,9 @@
       // dismiss ≡ force_review on the server
       if (action === 'force_review' || action === 'dismiss') {
         addToast($t('writing.conflict.forceReview'), 'success');
+      } else if (action === 'revise_from_feedback') {
+        // Server started a detached task (202 + saved progress snapshot).
+        addToast($t('writing.conflict.reviseFromFeedbackStarted', { num: writingConflict?.chapter_num || ch?.num }), 'info');
       }
     } catch (e) {
       addToast(e.message, 'error');
@@ -496,7 +499,7 @@
     <button class="btn btn-primary btn-sm" on:click={() => window.location.hash = '#outline'}>{$t('writing.notReady.goto')}</button>
   </div>
 {:else}
-  <div class="space-y-4">
+  <div id="WritingPageContainer" class="space-y-4 mx-auto w-full" style="max-width:50rem;">
     {#if p.book_status !== 'completed' && (p.outline_batches || []).some(b => b.planned_final && chapters.find(c => c.num === b.end_ch)?.status === 'accepted')}
       <p class="alert alert-info">{$t('ending.completeHint')}</p>
     {/if}
@@ -549,6 +552,8 @@
                 <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoForeshadows}>{$t('writing.conflict.gotoForeshadows')}</button>
               {:else if action.id === 'retry'}
                 <button class="btn btn-primary btn-xs" disabled={$taskRunning} on:click={() => resolveWritingConflict('retry')}>{$t('writing.conflict.retry')}</button>
+              {:else if action.id === 'revise_from_feedback'}
+                <button class="btn btn-primary btn-xs" disabled={$taskRunning} on:click={() => resolveWritingConflict('revise_from_feedback')}>{$t('writing.conflict.reviseFromFeedback')}</button>
               {:else if action.id === 'force_review'}
                 <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={() => resolveWritingConflict('force_review')}>{$t('writing.conflict.forceReview')}</button>
               {/if}
@@ -572,8 +577,27 @@
       </div>
     {/if}
 
+    <!-- Row: chapter index (left) + foreshadow tracker (right) -->
+    <div id="WritingMetaRow" class="grid grid-cols-[minmax(0,1fr)_345px] gap-3 items-start">
+      <div id="ChapterSidebarList" class="card bg-base-200 overflow-y-auto max-h-[calc(100vh-280px)] min-w-0">
+        <ul class="menu menu-sm p-0 w-full">
+          {#each chapters as c, i}
+            <li>
+              <button class="flex gap-2 items-center {$selectedChapter === i ? 'active' : ''}" on:click={() => selectChapter(i)}>
+                <span class="w-2 h-2 rounded-full shrink-0 {statusMeta[c.status]?.dot || ''}"></span>
+                <span class="text-base-content/65 w-6 shrink-0 text-right">{c.num}</span>
+                <span class="flex-1 text-left truncate text-sm">{c.title}</span>
+                {#if i === currentIdx && c.status !== 'accepted'}
+                  <span class="badge badge-primary badge-xs shrink-0">{$t('writing.tag.current')}</span>
+                {/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+
     {#if foreshadows.length > 0}
-      <div id="CardSection_ForeshadowSummary" class="card bg-base-200">
+      <div id="CardSection_ForeshadowSummary" class="card bg-base-200 min-w-0">
         <div class="card-body p-4 gap-2">
           <div class="flex items-center justify-between gap-2">
             <h3 class="font-medium text-sm">{$t('writing.fs.title')}</h3>
@@ -597,36 +621,19 @@
         </div>
       </div>
     {:else}
-      <div id="CardSection_ForeshadowSetup" class="card bg-base-200">
+      <div id="CardSection_ForeshadowSetup" class="card bg-base-200 min-w-0">
         <div class="card-body p-4 flex items-center justify-between gap-2">
           <p class="text-sm text-base-content/65">{$t('writing.fs.none')}</p>
           <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.setup')}</button>
         </div>
       </div>
     {/if}
+    </div><!-- /WritingMetaRow -->
 
     <!-- Chapter area -->
-    <div id="WritingWorkspace" class="writing-grid grid grid-cols-[345px_minmax(0,1fr)] gap-3" style="min-height:400px">
-      <!-- Chapter list -->
-      <div id="ChapterSidebarList" class="card bg-base-200  overflow-y-auto max-h-[calc(100vh-280px)]">
-        <ul class="menu menu-sm p-0 w-full">
-          {#each chapters as c, i}
-            <li>
-              <button class="flex gap-2 items-center {$selectedChapter === i ? 'active' : ''}" on:click={() => selectChapter(i)}>
-                <span class="w-2 h-2 rounded-full shrink-0 {statusMeta[c.status]?.dot || ''}"></span>
-                <span class="text-base-content/65 w-6 shrink-0 text-right">{c.num}</span>
-                <span class="flex-1 text-left truncate text-sm">{c.title}</span>
-                {#if i === currentIdx && c.status !== 'accepted'}
-                  <span class="badge badge-primary badge-xs shrink-0">{$t('writing.tag.current')}</span>
-                {/if}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      </div>
-
+    <div id="WritingWorkspace" style="min-height:400px">
       <!-- Content area -->
-      <div id="ChapterContentArea" class="min-w-0">
+      <div id="ChapterContentArea" class="min-w-0 w-full">
         {#if ch}
           <div id="CardSection_ChapterReader" class="card bg-base-200">
             <div class="card-body p-4 gap-2">
@@ -665,7 +672,7 @@
                   </div>
                 {/if}
                 <!-- svelte-ignore a11y-no-static-element-interactions -->
-                <div id="ChapterProseViewer" bind:this={contentEl} class="bg-base-100 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto"
+                <div id="ChapterProseViewer" bind:this={contentEl} class="rounded-lg p-4 text-[15px] chapter-content min-h-[200px]"
                      on:mouseup={checkContentSelection}
                      on:scroll={hideQuotePopover}>
                   {#if isStreamingThis}
@@ -674,7 +681,7 @@
                   {:else if chapterBlocks.length > 0}
                     <div class="space-y-3">
                       {#each chapterBlocks as b (b.id)}
-                        <div id={'story-block-' + b.id} class="relative rounded -mx-2 px-2 py-1 cursor-pointer transition-colors hover:bg-base-100/40 {highlightedBlock === b.id || activeFact?.references?.some(r => !r.stale && r.chapter === ch.num && r.block_id === b.id) ? 'bg-info/20' : selectedBlockId === b.id ? 'bg-primary/10' : ''}" role="button" tabindex="0" aria-pressed={selectedBlockId===b.id} on:click={() => selectBlock(b.id)} on:keydown={(e) => { if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectBlock(b.id); } }}>
+                        <div id={'story-block-' + b.id} class="relative rounded -mx-2 px-2 py-1 cursor-pointer transition-colors hover:bg-base-100/40 {highlightedBlock === b.id || activeFact?.references?.some(r => !r.stale && r.chapter === ch.num && r.block_id === b.id) ? 'story-block-highlight' : selectedBlockId === b.id ? 'story-block-selected' : ''}" role="button" tabindex="0" aria-pressed={selectedBlockId===b.id} on:click={() => selectBlock(b.id)} on:keydown={(e) => { if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectBlock(b.id); } }}>
                           {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-2">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation={() => { activeFact = fact; highlightedBlock = b.id; knowledgeExpanded = true; }}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
                           {#if editingBlockId === b.id}
                             <textarea class="textarea textarea-sm w-full text-[15px] leading-relaxed" rows={Math.max(3, Math.ceil(b.text.length / 40))} bind:value={editingText} disabled={$taskRunning}></textarea>

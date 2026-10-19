@@ -23,6 +23,12 @@ func TestCountProseUnits(t *testing.T) {
 		{"a", 1},
 		{"#123", 1},
 		{".5", 1},
+		// Each CJK ideograph counts as one word (Word/LibreOffice "字数" convention);
+		// CJK punctuation is not counted.
+		{"你好", 2},
+		{"你好吗", 3},
+		{"他说了一句话。", 6}, // 6 hanzi; the fullwidth period is not counted
+		{"Hello 世界", 3},
 	}
 	for _, tt := range tests {
 		got := CountProseUnits(tt.in)

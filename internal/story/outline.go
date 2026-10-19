@@ -211,7 +211,48 @@ func cleanJSONResponse(s string) string {
 	if strings.HasSuffix(s, "```") {
 		s = strings.TrimSuffix(s, "```")
 	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(extractJSONObject(s))
+}
+
+// extractJSONObject narrows a model response to its outermost JSON object so
+// prose preambles or trailing commentary around the payload ("Sure! {...}")
+// do not fail json.Unmarshal outright. If no balanced object exists (e.g. a
+// truncated response), the input is returned unchanged and the caller's parse
+// error surfaces as before.
+func extractJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return s
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return s
 }
 
 func ReviseOutlineAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, progressPath, cfgPath, feedback string, logger *sse.LogBroadcaster) error {
@@ -236,12 +277,17 @@ func ReviseOutlineAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	return nil
 }
 
-func ConfirmOutlineAction(state *Progress, progressPath string) error {
+func ConfirmOutlineAction(state *Progress, progressPath string, storyCfg config.StoryConfig) error {
 	if len(state.Chapters) == 0 {
 		return fmt.Errorf("outline is empty")
 	}
 
 	state.Phase = "writing"
+	// Freeze the novel parameters at the moment writing begins. Without this
+	// snapshot, projects with a nil StoryConfigSnapshot would silently fall
+	// back to whatever cfg.Story holds at generation time (or defaults).
+	snapshot := storyCfg
+	state.StoryConfigSnapshot = &snapshot
 	return SaveProgress(progressPath, state)
 }
 

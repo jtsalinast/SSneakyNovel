@@ -194,7 +194,23 @@ func (h *Handlers) writeJSON(w http.ResponseWriter, code int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// newTaskTokenTracker builds the fresh per-task tracker and publishes it under
+// taskMu. tryStartTask calls it *before* acquiring its own lock (Go mutexes are
+// not reentrant), so the returned tracker is what /api/status snapshots and
+// what every context derived from h.taskCtx accumulates into.
+func (h *Handlers) newTaskTokenTracker() *llm.TaskTokenUsage {
+	usage := llm.NewTaskTokenUsage(h.logger)
+	h.taskMu.Lock()
+	h.taskTokens = usage
+	h.taskMu.Unlock()
+	return usage
+}
+
 func (h *Handlers) tryStartTask() bool {
+	// Fresh tracker first (its own short taskMu section): the previous run's
+	// tracker is orphaned once its context is cancelled, so /api/status must
+	// snapshot the new one.
+	tokens := h.newTaskTokenTracker()
 	h.taskMu.Lock()
 	defer h.taskMu.Unlock()
 	if h.taskRunning || h.activeWork > 0 {
@@ -210,8 +226,11 @@ func (h *Handlers) tryStartTask() bool {
 	// persistently failing API endpoint could keep retrying forever and freeze
 	// the machine. Manual stop via taskCancel still works as before.
 	ctx, cancel := llm.NewTaskContext(context.Background())
-	h.taskCtx = ctx
-	ctx, h.taskTokens = llm.WithTaskTokens(ctx, h.logger)
+	// Publish h.taskCtx WITH the tracker already attached: goroutines snapshot
+	// h.taskCtx right after tryStartTask returns, and any LLM call made through a
+	// context lacking a TaskTokenUsage reports no counts at all — the frontend
+	// badge stayed empty for those generations.
+	h.taskCtx = llm.AttachTaskTokens(ctx, tokens)
 	h.taskCancel = cancel
 	h.generationID++
 	devlog.Log("tryStartTask ok activeWork=1")
@@ -816,7 +835,7 @@ func (h *Handlers) PostOutlineConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := story.ConfirmOutlineAction(h.state, h.progressPath); err != nil {
+	if err := story.ConfirmOutlineAction(h.state, h.progressPath, h.cfg.Story); err != nil {
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "outline_confirm_failed", err)
 		return
 	}
@@ -1061,6 +1080,42 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 		}
 		h.broadcastProgress()
 		h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "retry"})
+	case "revise_from_feedback":
+		if h.state.PendingWritingConflict == nil {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "writing_conflict_none")
+			return
+		}
+		if strings.TrimSpace(h.state.Chapters[h.state.PendingWritingConflict.ChapterIndex].Content) == "" {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "conflict_chapter_no_draft")
+			return
+		}
+		if !h.tryStartTask() {
+			h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+			return
+		}
+		go func() {
+			defer h.endTask()
+			h.logger.TaskStart("chapter_revision")
+			ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterRevise, true)
+			err := story.ReviseFromConflictAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, h.logger)
+			if err != nil {
+				var wcErr *story.WritingConflictError
+				switch {
+				case ctx.Err() != nil:
+					h.logger.WarnKey("log.chapter_revise_cancelled")
+				case errors.As(err, &wcErr):
+					h.logger.WarnKey("log.chapter_write_conflict_pause")
+				default:
+					h.logger.ErrorKey("log.chapter_revise_failed", err)
+				}
+				h.logger.TaskEnd("chapter_revision", false)
+				h.broadcastProgress()
+				return
+			}
+			h.logger.TaskEnd("chapter_revision", true)
+			h.broadcastProgress()
+		}()
+		h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "revising"})
 	default:
 		h.writeErrorReq(w, r, http.StatusBadRequest, "unsupported_action", body.Action)
 	}

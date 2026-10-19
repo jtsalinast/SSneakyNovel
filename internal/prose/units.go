@@ -2,12 +2,24 @@ package prose
 
 import "unicode"
 
-// CountProseUnits counts chapter prose length: CJK runes +1 each; contiguous
-// Latin alnum tokens (with internal . , - # glue) +1 each. Punctuation and
-// whitespace break tokens and are not counted. Fullwidth alnum normalizes to halfwidth.
+// CountProseUnits counts chapter prose length in WORDS for every script:
+// Latin words +1 each (contiguous alnum tokens with internal . , - # glue);
+// Each CJK ideograph counts as one word — the standard convention used by
+// Word/LibreOffice and Chinese editors ("字数"). Punctuation and whitespace
+// break tokens and are not counted. Fullwidth alnum normalizes to halfwidth.
 func CountProseUnits(s string) int {
 	count := 0
 	inToken := false
+	cjkRun := 0
+	flushCJK := func() {
+		if cjkRun > 0 {
+			// One CJK ideograph counts as one word — the standard convention used
+			// by Word/LibreOffice and Chinese editors ("字数"). The previous
+			// heuristic (2 chars ≈ 1 word) undercounted CJK prose.
+			count += cjkRun
+			cjkRun = 0
+		}
+	}
 	for _, r := range s {
 		r = normalizeWideAlnum(r)
 		switch {
@@ -16,28 +28,33 @@ func CountProseUnits(s string) int {
 				count++
 				inToken = false
 			}
-			count++
+			cjkRun++
 		case isLatinAlnum(r):
+			flushCJK()
 			inToken = true
 		case isTokenGlue(r):
 			if inToken {
 				continue
 			}
+			flushCJK()
 		case isWhitespace(r), isBreakPunct(r):
 			if inToken {
 				count++
 				inToken = false
 			}
+			flushCJK()
 		default:
 			if inToken {
 				count++
 				inToken = false
 			}
+			flushCJK()
 		}
 	}
 	if inToken {
 		count++
 	}
+	flushCJK()
 	return count
 }
 

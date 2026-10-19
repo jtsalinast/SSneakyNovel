@@ -390,6 +390,32 @@ body {
 .alert { border: 1px solid color-mix(in oklch, currentColor 22%, transparent); }
 .chapter-content { max-width: 75ch; margin-inline: auto; }
 
+/* Textareas inside the chapter prose viewer: near-imperceptible border and
+   background. The generic form-control rules above use `:where()` (zero
+   specificity), so these id-scoped rules override them cleanly. */
+#ChapterProseViewer .textarea {
+  background-color: rgb(253 253 253 / 0.35);           /* casi igual al surface del visor */
+  border-color: rgb(229 229 229 / 0.25);               /* borde apenas perceptible        */
+}
+#ChapterProseViewer .textarea:hover:not(:disabled) {
+  background-color: rgb(253 253 253 / 0.6);
+  border-color: rgb(212 212 212 / 0.4);
+}
+#ChapterProseViewer .textarea:focus {
+  background-color: #ffffff;
+  border-color: rgb(212 212 212 / 0.7);
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 0.04);             /* ring muy tenue al enfocar */
+}
+
+/* Story blocks: fact-highlighted = info tint. The selected block keeps NO
+   background colour (only its floating action toolbar marks the selection). */
+#ChapterProseViewer .story-block-selected {
+  background-color: transparent;
+}
+#ChapterProseViewer .story-block-highlight {
+  background-color: oklch(50% 0.10 250 / 0.16);        /* info 20% → 16%           */
+}
+
 @media (max-width: 1279px) {
   .assistant-panel { position: absolute; z-index: 80; inset-block: 0; right: 0; width: min(28rem, 92vw); max-width: none; transform: translateX(100%); visibility: hidden; pointer-events: none; transition: transform 200ms ease-out; border-left: 1px solid color-mix(in oklch, var(--color-base-content) 12%, transparent); }
   .assistant-panel.drawer-open { transform: translateX(0); visibility: visible; pointer-events: auto; }
