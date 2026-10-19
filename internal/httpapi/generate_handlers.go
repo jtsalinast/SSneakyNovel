@@ -199,11 +199,15 @@ func (h *Handlers) StartDetachedPrePlanGenerate() error {
 	// tracker, so /api/status keeps reading the right numbers.
 	h.taskMu.Lock()
 	genID := h.generationID
-	if h.taskTokens != nil {
-		ctx = llm.AttachTaskTokens(ctx, h.taskTokens)
-	} else {
-		ctx, _ = llm.WithTaskTokens(ctx, h.logger)
+	// Attach the tracker that /api/status actually reads: re-use the live task's
+	// tracker when one exists (chat fast path); otherwise OWN h.taskTokens with a
+	// fresh one. The old fallback created a tracker that was never published to
+	// h.taskTokens, so this detached run's tokens went to an orphan and the badge
+	// showed no counts at all.
+	if h.taskTokens == nil {
+		h.taskTokens = llm.NewTaskTokenUsage(h.logger)
 	}
+	ctx = llm.AttachTaskTokens(ctx, h.taskTokens)
 	h.taskCtx = ctx
 	h.taskCancel = cancel
 	h.taskMu.Unlock()

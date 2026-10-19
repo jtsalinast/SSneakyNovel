@@ -251,30 +251,39 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_consistent": {
 
 		LangEN: "Chapter outline consistent with story ✓"},
+	"log.chapter_length_target": {
+
+		LangEN: "[Length] Chapter %d target: %d WORDS (accepted range %d–%d words; source: %s) — measured in words, not characters"},
 	"log.prose_done": {
 
-		LangEN: "Prose complete — %d characters"},
+		LangEN: "Prose complete — %d words"},
 	"log.chapter_length_retry": {
 
-		LangEN: "[Length] Draft is %d chars, need %d–%d — regenerating (attempt %d)..."},
+		LangEN: "[Length] Draft is %d words, need %d–%d — regenerating (attempt %d)..."},
 	"log.chapter_length_adjust": {
 
-		LangEN: "[Length] Still %d chars after rewrite (need %d–%d) — compressing/expanding draft..."},
+		LangEN: "[Length] Still %d words after rewrite (need %d–%d) — compressing/expanding draft..."},
 	"log.chapter_length_adjust_failed": {
 
 		LangEN: "[Length] Compress/expand failed: %v — keeping best draft"},
 	"log.chapter_length_soft_keep": {
 
-		LangEN: "[Length] Best draft %d chars is slightly outside %d–%d — within soft tolerance, skipping adjust"},
+		LangEN: "[Length] Best draft %d words is slightly outside %d–%d — within soft tolerance, skipping adjust"},
 	"log.chapter_length_skip_adjust": {
 
-		LangEN: "[Length] Best draft %d chars too far from %d–%d — skipping adjust"},
+		LangEN: "[Length] Best draft %d words too far from %d–%d — skipping adjust"},
 	"log.chapter_length_adjust_reverted": {
 
-		LangEN: "[Length] After adjust %d chars not better than best %d (need %d–%d) — keeping best draft"},
+		LangEN: "[Length] After adjust %d words not better than best %d (need %d–%d) — keeping best draft"},
 	"log.chapter_length_off_range": {
 
-		LangEN: "[Length] Still %d chars after adjust (need %d–%d) — please review manually; auto-confirm will continue to the next chapter"},
+		LangEN: "[Length] Still %d words after adjust (need %d–%d) — please review manually; auto-confirm will continue to the next chapter"},
+	"log.chapter_revision_short_retry": {
+
+		LangEN: "[Length] Revision is only %d words (need %d–%d) — retrying rewrite keeping all original scenes intact..."},
+	"log.chapter_revision_reverted": {
+
+		LangEN: "[Length] Revision (%d words) still shorter than original (%d words, need %d–%d) — keeping the original text"},
 	"log.summary_done": {
 
 		LangEN: "Summary extraction complete"},
@@ -313,7 +322,7 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "Revising chapter %d \"%s\"..."},
 	"log.prose_revised": {
 
-		LangEN: "Revision complete — %d characters"},
+		LangEN: "Revision complete — %d words"},
 	"log.subsequent_outline_failed": {
 
 		LangEN: "Subsequent outline revision failed: %v (current chapter unaffected)"},
@@ -325,7 +334,7 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "Targeted revision of chapter %d \"%s\" (other chapters untouched)..."},
 	"log.prose_specific_revised": {
 
-		LangEN: "Targeted revision complete — %d characters"},
+		LangEN: "Targeted revision complete — %d words"},
 	"log.block_revising": {
 
 		LangEN: "Revising chapter %d, block #%d..."},

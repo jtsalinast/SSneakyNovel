@@ -35,6 +35,13 @@ func newTaskTokenUsage(logger *sse.LogBroadcaster) *TaskTokenUsage {
 	return &TaskTokenUsage{logger: logger}
 }
 
+// NewTaskTokenUsage builds a standalone tracker (exported wrapper around the
+// private constructor) for detached runners that must own their token counts —
+// see StartDetachedPrePlanGenerate.
+func NewTaskTokenUsage(logger *sse.LogBroadcaster) *TaskTokenUsage {
+	return newTaskTokenUsage(logger)
+}
+
 func WithTaskTokens(ctx context.Context, logger *sse.LogBroadcaster) (context.Context, *TaskTokenUsage) {
 	usage := newTaskTokenUsage(logger)
 	return context.WithValue(ctx, taskTokenCtxKey{}, usage), usage

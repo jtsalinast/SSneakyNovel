@@ -24,9 +24,9 @@ Outline: {{.ChapterOutline}}
 {{.WorldviewContext}}
 Writing rules:
 1. Strictly continue from the character states, timeline, and established facts in the story-so-far. Do not contradict them.
-2. Stay inside this chapter's outline. Do not borrow material from later chapters.
-3. Do NOT preemptively introduce characters, first meetings, identity reveals, or other one-time events that the outline assigns to later chapters — and do not hint at or spoil them.
-4. One-time events already played out (first meetings, identity reveals, relationships established) must be treated as established facts and never re-enacted in this chapter.
+2. Stay inside this chapter's outline. Your chapter's outline is your ONLY source of what happens here — it fully defines where the chapter starts and ends. You do not receive later chapters' outlines; all you learn about the future is the negative constraints below (who has not debuted yet, which one-time events are reserved). Never invent scenes, characters or reveals that go beyond this chapter's outline.
+3. Hard sequencing rule: any character listed under "have NOT debuted yet" must be absent from this chapter in every form — do not name them, do not describe them, do not stage an encounter with them, and do not introduce them as an anonymous figure ("a stranger whose…", "my lord", a dropped glove, an overheard whisper) whose traits match the banned character. A disguised cameo counts as a violation. Likewise, never hint at or spoil their identity reveal; save that material for its designated chapter.
+4. One-time events (first meetings, identity reveals, relationships established, objects left behind after a first encounter) may occur EXACTLY ONCE, in the chapter that owns them per the arc block. Events already played out are established facts: reference them, never re-enact them. Events reserved for later chapters must not occur early in any form.
 5. Do not re-summarise the story-so-far. Open straight into this chapter's scene. If a previous-chapter ending is provided, your opening must seamlessly continue its setting, time, and mood without re-establishing what's already there.
 6. Each character's dialogue must match their established voice; do not let everyone sound alike.
 7. Drive the plot with concrete action, sensory detail, and dialogue. Avoid abstract, summarising narration.
@@ -58,7 +58,8 @@ Revision rules (strict):
 2. The revised chapter must remain consistent with the story-so-far and the unchanged portions (names, timeline, established facts).
 3. Do not alter the chapter's overall plot direction unless the feedback explicitly requests it.
 4. Keep the narrative POV strictly consistent: follow [Narrative POV] throughout; do not switch person or viewpoint subject unless the POV spec explicitly allows alternation.
-5. Output the full revised chapter prose (including the unchanged portions). No chapter title, chapter number, author notes, dividers, or meta lines such as "Chapter X", "(Chapter X text)", "End of chapter", "To be continued", "Here is the revised chapter", "Below is the full text". Do not add any preamble before the prose or any summary after it.`,
+5. If the feedback reports a premature introduction or a re-enacted one-time event, DELETE that material instead of moving it later in the chapter — never replace it with an anonymous stand-in ("a stranger", "a murmuring group") that hints at the same reserved debut or reveal. Cutting a beat is always better than advancing a future chapter's event.
+6. Output the full revised chapter prose (including the unchanged portions). No chapter title, chapter number, author notes, dividers, or meta lines such as "Chapter X", "(Chapter X text)", "End of chapter", "To be continued", "Here is the revised chapter", "Below is the full text". Do not add any preamble before the prose or any summary after it.`,
 
 	ChapterSegmentRevision: `You are the author of this novel. The user highlighted a passage in chapter {{.ChapterNum}} "{{.ChapterTitle}}" and gave revision feedback. Revise ONLY that passage; the rest of the chapter will be left untouched.
 
@@ -130,6 +131,9 @@ Notes:
 - Style, pacing, scene-length choices, and plot plausibility are subjective issues — always PASS them.
 - New information that neither the story-so-far nor the outline mentions is not a contradiction.
 - Only solid objective contradictions warrant FAIL. When in doubt, PASS.
+- Premature-introduction threshold (checks 5 and 6): FAIL only when the chapter actually stages the event or character — a named debut, an on-page first meeting, an identity reveal, or an anonymous stand-in whose described traits unmistakably match a banned character. A passing glance, an unexplained rumour, or an off-hand mention that does not enact the reserved event is NOT a violation; do not FAIL speculation about what a detail "clearly intends" to be. Judge ONLY against characters explicitly listed in the do-not-introduce ban list or the reserved one-time events; never infer that an unnamed background figure (a laughing couple, a murmuring group, someone at the entrance) is a banned character unless the prose unmistakably enacts their reserved debut.
+- Do not flag outline/foreshadow material: your job is to check the CHAPTER TEXT against the arc. If a planned future reference exists only in the outline or foreshadows and the prose neither names nor stages it, that is PASS — implicit references in planning data are not violations by the chapter.
+- Deduplicate by root event: if several findings describe the same premature event (e.g. one character's early debut reported from different angles), report ONE issue naming that single event and the later chapter that owns it. Never list the same underlying conflict multiple times.
 
 Return JSON only (no other text):
 {"result": "PASS", "issues": []}
@@ -428,6 +432,7 @@ Tasks:
 1. Decide whether failures come from irreconcilable contradictions among outline, foreshadows, and prior story.
 2. If reconcilable without changing outline/foreshadows: provide extra_constraints text to inject into the writing prompt so the next draft can pass fact-check.
 3. If not reconcilable: explain why and whether the user should edit the outline or adjust foreshadows.
+4. Judge only what the DRAFT actually stages (named debuts, on-page meetings, enacted reveals). Do not treat anonymous background figures, rumours, or vague allusions as premature introductions, and do not blame the chapter for implicit references that exist only in the outline or foreshadow plan — those are planning-data issues, not draft violations. When the accumulated failures collapse to a single real violation (or none), say so plainly and mark the conflict reconcilable via rewrite rather than recommending outline edits.
 
 Return JSON only (no other text):
 {
@@ -438,11 +443,12 @@ Return JSON only (no other text):
   "suggested_actions": [
     {"id": "edit_outline", "label": "Edit chapter outline", "description": "..."},
     {"id": "adjust_foreshadow", "label": "Adjust foreshadows", "description": "..."},
+    {"id": "revise_from_feedback", "label": "Rewrite from feedback", "description": "..."},
     {"id": "force_review", "label": "Keep draft for manual review", "description": "..."}
   ]
 }
 
-When reconcilable is false, leave extra_constraints empty. suggested_actions must include edit_outline, adjust_foreshadow, and force_review.`,
+When reconcilable is false, leave extra_constraints empty. suggested_actions must include edit_outline, adjust_foreshadow, revise_from_feedback, and force_review.`,
 
 	SettingsReconciliation: `You are a professional novel-consistency editor. The user changed the story settings, but some chapters are already confirmed. Check whether the new settings are consistent with the existing chapters, and auto-adjust the settings to remain compatible.
 

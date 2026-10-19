@@ -195,7 +195,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 
 		failed, issues := parseFactCheckResult(factCheckResult)
 		if failed {
-			accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues))
+			accumulatedIssues = dedupeArcIssuesWithCast(mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues)), state, i)
 			if attempt < maxFactCheckRetries {
 				logger.WarnKey("log.factcheck_retry", ch.Num, attempt+1)
 				logger.WarnKey("log.factcheck_details", issues)
@@ -228,7 +228,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 				factCheckResult = generateChapterFactCheckWithRetryLog(factCtx, apiCfg, cfg, state, i, content, historySummary, logger)
 				failed, issues = parseFactCheckResult(factCheckResult)
 				if failed {
-					accumulatedIssues = mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues))
+					accumulatedIssues = dedupeArcIssuesWithCast(mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues)), state, i)
 				} else {
 					logger.InfoKey("log.factcheck_constraint_pass")
 					resolvedIssues = mergeUniqueIssues(nil, accumulatedIssues)
@@ -349,13 +349,48 @@ func checkOutlineConsistency(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		}
 	}
 
-	userPrompt := config.RenderPrompt(cfg.Prompts.OutlineConsistencyCheck, map[string]string{
+	// The same outline also contradicts the FUTURE arc when it stages debuts
+	// or one-time events assigned to later chapters — exactly the premature-
+	// introduction failures the fact-checker keeps reporting after the prose
+	// is already written. Feed the hard debut ban into the pre-check so the
+	// outline gets fixed before writing instead of burning fact-check retries.
+	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
+	futureArc := ""
+	eventLines := buildPrematureEventLines(state, idx, lang)
+	if len(eventLines) > 0 {
+		if en {
+			futureArc = "[One-time events reserved for LATER chapters — this outline must not stage them]\n" + strings.Join(eventLines, "") + "\n\n"
+		} else {
+			futureArc = "[Eventos únicos reservados para capítulos POSTERIORES — este outline no debe representarlos]\n" + strings.Join(eventLines, "") + "\n\n"
+		}
+	}
+	hardDebut := buildHardDebutBlock(state, idx, lang)
+	if hardDebut != "" {
+		futureArc += hardDebut
+	}
+	// No structured future data at all → there is nothing the checker can
+	// verify against. A vague "may conflict with later chapters" prompt made it
+	// hallucinate conflicts (e.g. flagging a mere mention of a character whose
+	// debut is planned later even though the outline never stages the meeting).
+	// In that case pass the check deterministically: zero API cost, zero noise.
+	if eventLines == nil && hardDebut == "" {
+		return false, nil
+	}
+
+	// The checker's own template must carry {{.FutureArc}}: RenderPrompt drops
+	// data keys absent from the template, so a customized copy without the token
+	// would silently disable the future channel (premature debuts) and leave the
+	// model with only the past-checklist framing — half-blind behaviour that
+	// makes it report conflicts about events nobody actually staged.
+	userPrompt := config.RenderPrompt(withTokenFallback(cfg.Prompts.OutlineConsistencyCheck, "{{.FutureArc}}"), map[string]string{
 		"ChapterNum":     fmt.Sprintf("%d", ch.Num),
 		"ChapterTitle":   ch.Title,
 		"ChapterOutline": ch.Outline,
 		"HistorySummary": buildHistorySummaryForLang(state, idx, lang),
 		"PreviousEnding": prevEnding,
+		"FutureArc":      futureArc,
 	})
+	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.OutlineConsistencyCheck, userPrompt, "{{.FutureArc}}", futureArc)
 	systemPrompt := i18n.SystemPromptFor(lang, "outline_editor_brief_json")
 
 	rawResp := llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
@@ -473,6 +508,20 @@ func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	if err != nil {
 		return fmt.Errorf("chapter revision: %w", err)
 	}
+	// Length guard: feedback rewrites habitually compress the prose (4000-word
+	// chapters came back as ~1800 words and were accepted silently). Retry with
+	// an explicit keep-everything instruction, then revert to the original if
+	// the rewrite still destroys content.
+	origContent := ch.Content
+	targetWords, _ := resolveChapterTargetWords(state, cfg)
+	minLen, maxLen := calcChapterLengthRange(targetWords)
+	revisedContent, _, err = enforceRevisionLength(ctx, apiCfg, cfg, origContent, revisedContent, feedback, minLen, maxLen, logger,
+		func(guardedFeedback string) (string, error) {
+			return reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, guardedFeedback, settings, logger)
+		})
+	if err != nil {
+		return fmt.Errorf("chapter revision: %w", err)
+	}
 	ch.Content = revisedContent
 	logger.InfoKey("log.prose_revised", prose.CountProseUnits(revisedContent))
 
@@ -546,6 +595,18 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *config.APIConfig, 
 
 	logger.StepInfo(1, 2, "applying feedback revision...")
 	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, settings, logger)
+	if err != nil {
+		return fmt.Errorf("chapter revision: %w", err)
+	}
+	// Same length guard as ReviseChapterAction: never let a feedback rewrite
+	// silently compress the chapter far below the configured word band.
+	origContent := ch.Content
+	targetWords, _ := resolveChapterTargetWords(state, cfg)
+	minLen, maxLen := calcChapterLengthRange(targetWords)
+	revisedContent, _, err = enforceRevisionLength(ctx, apiCfg, cfg, origContent, revisedContent, feedback, minLen, maxLen, logger,
+		func(guardedFeedback string) (string, error) {
+			return reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, guardedFeedback, settings, logger)
+		})
 	if err != nil {
 		return fmt.Errorf("chapter revision: %w", err)
 	}
@@ -632,10 +693,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 
 	historySummary := buildHistorySummaryForLang(state, idx, lang)
 
-	snapshot := state.StoryConfigSnapshot
-	if snapshot == nil {
-		snapshot = &cfg.Story
-	}
+	targetWords, _ := resolveChapterTargetWords(state, cfg)
 
 	foreshadowContext := formatActiveForeshadowsForChapterLang(state.Foreshadows, ch.Num, lang)
 
@@ -644,8 +702,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 	memoryContext := buildMemoryForLang(state, idx, lang)
 	voiceSamples := buildVoiceSamplesForLang(state, idx, settings, lang)
 
-	minLen, maxLen := calcChapterLengthRange(snapshot.TargetWordsPerChapter)
-	targetWords := snapshot.TargetWordsPerChapter
+	minLen, maxLen := calcChapterLengthRange(targetWords)
 
 	userPrompt := config.RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
 		"Title":              preferUserValue(cfg.Story.Title, state.Title),
@@ -669,6 +726,10 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 		"OutlineConstraints": outlineConstraints,
 	})
 	userPrompt = finalizeChapterWritingPrompt(cfg.Prompts.ChapterWriting, userPrompt, minLen, maxLen, targetWords, lang)
+	// Customized templates that omit {{.PreviousEnding}} would silently lose the
+	// verbatim tail of the previous chapter (seamless continuation). Re-append it
+	// so continuity never depends on the template author remembering the token.
+	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.PreviousEnding}}", buildPreviousChapterTailForLang(state, idx, lang))
 	if np := NovelParametersBlock(cfg); np != "" {
 		userPrompt += "\n\n" + np
 	}
@@ -772,7 +833,10 @@ func generateChapterSummaryWithRetryLog(ctx context.Context, apiCfg *config.APIC
 func generateChapterFactCheck(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, content string, historySummary string) (string, error) {
 	ch := state.Chapters[idx]
 	lang := cfg.Language
-	outlineConstraints := buildOutlineConstraintsForLang(state, idx, lang)
+	// Reviewers get the FULL arc block (upcoming outlines included): unlike
+	// the writer, they must judge the prose against what later chapters plan,
+	// so they can flag leaked events and name their destination chapter.
+	outlineConstraints := buildArcConstraintsForReview(state, idx, lang)
 	memoryContext := buildMemoryForLang(state, idx, lang, content)
 
 	userPrompt := config.RenderPrompt(cfg.Prompts.FactCheck, map[string]string{
@@ -966,7 +1030,7 @@ func reviseChapterSegment(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 }
 
 // reviseChapterContentStream inplaindomostsmall().
-func reviseChapterContentStream(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, userFeedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) (string, error) {
+func reviseChapterContentStream(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, chapterIdx int, userFeedback string, settings *ProjectSettings, logger *sse.LogBroadcaster, extraContext ...string) (string, error) {
 	// partdividepay: useinintentseemiddleuse '> ' useplainpieceparagraphhour,
 	// onlyheavywriteusesentenceinparagraph, itsplaininsurestay; thenreturnretreattochapter.
 	if quotes, cleanFeedback := extractQuotedSentences(userFeedback); len(quotes) > 0 {
@@ -1002,6 +1066,16 @@ func reviseChapterContentStream(ctx context.Context, apiCfg *config.APIConfig, c
 		"UserFeedback":     userFeedback,
 	})
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterRevision, userPrompt, "{{.UserFeedback}}", userFeedback)
+	// extraContext carries hard sequencing constraints (debut ban list,
+	// reserved one-time events) into feedback-driven rewrites; without them a
+	// "remove the premature Edmund scene" revision risks replacing it with an
+	// equally premature substitute, since the ChapterRevision template has no
+	// OutlineConstraints placeholder of its own.
+	for _, ec := range extraContext {
+		if strings.TrimSpace(ec) != "" {
+			userPrompt += "\n\n" + strings.TrimSpace(ec)
+		}
+	}
 	userPrompt += factProtection(state, ch.Num, lang)
 
 	systemPrompt := state.CorePrompt
@@ -1094,6 +1168,19 @@ func appendIfMissingPlaceholder(template, rendered, placeholder, block string) s
 		return rendered
 	}
 	return rendered + "\n\n" + strings.TrimSpace(block)
+}
+
+// withTokenFallback guarantees a data key actually reaches the model even when
+// the user's customized template dropped the {{...}} token: RenderPrompt only
+// substitutes tokens present in the template, so silently-missing tokens used
+// to disable whole context channels (future arc, feedback). Appending the token
+// to the template lets RenderPrompt place it; appendIfMissingPlaceholder then
+// sees it as present and does nothing further.
+func withTokenFallback(template, token string) string {
+	if strings.Contains(template, token) {
+		return template
+	}
+	return template + "\n\n" + token
 }
 
 func buildHistorySummary(state *Progress, idx int) string {

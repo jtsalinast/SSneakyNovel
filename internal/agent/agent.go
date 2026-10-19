@@ -1564,7 +1564,11 @@ func getBuiltinTools() []Tool {
 				if len(ctx.State.Chapters) == 0 {
 					return "", agentErr(ctx, "outline_empty")
 				}
-				if err := story.ConfirmOutlineAction(ctx.State, ctx.ProgressPath); err != nil {
+				var storyCfgForSnapshot config.StoryConfig
+				if c := ctx.cfg(); c != nil {
+					storyCfgForSnapshot = c.Story
+				}
+				if err := story.ConfirmOutlineAction(ctx.State, ctx.ProgressPath, storyCfgForSnapshot); err != nil {
 					return "", agentErr(ctx, "outline_confirm_failed", err)
 				}
 				ctx.logger().SuccessKey("log.outline_confirmed")

@@ -302,7 +302,7 @@ func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []M
 	messages = applyPromptAddon(ctx, messages)
 	result, err := CallAPIStreamMessages(ctx, apiCfg, messages, nil)
 	if err == nil && result.Content != "" {
-		return completionText(result, nil, apiCfg.MaxTokens)
+		return completionText(result, nil, maxTokensFor(apiCfg))
 	}
 	if ctx.Err() != nil {
 		if result.Content != "" {
@@ -327,7 +327,7 @@ func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []M
 		// diagnostic instead of the original "stream unsupported" error.
 		return "", syncErr
 	}
-	return completionText(syncResult, nil, apiCfg.MaxTokens)
+	return completionText(syncResult, nil, maxTokensFor(apiCfg))
 }
 
 // CallAPIMessagesSync performs one plain (non-streaming) HTTP completion.
@@ -481,7 +481,17 @@ func CallAPIStream(ctx context.Context, apiCfg *config.APIConfig, system, user s
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}, onChunk)
-	return completionText(result, err, apiCfg.MaxTokens)
+	return completionText(result, err, maxTokensFor(apiCfg))
+}
+
+// maxTokensFor resolves the effective output cap actually sent to the API so
+// truncation diagnostics report the real limit instead of a raw 0 when the
+// project leaves MaxTokens unset (DefaultMaxTokens is applied per-request).
+func maxTokensFor(apiCfg *config.APIConfig) int {
+	if apiCfg != nil && apiCfg.MaxTokens > 0 {
+		return apiCfg.MaxTokens
+	}
+	return config.DefaultMaxTokens
 }
 
 // CallAPIStreamMessages calls the streaming API with a full message list.

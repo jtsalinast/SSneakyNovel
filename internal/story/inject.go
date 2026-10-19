@@ -40,8 +40,40 @@ func appendArcBlock(arc, block string) string {
 	if remaining <= 0 {
 		return arc
 	}
-	block = truncateRunesExact(block, remaining)
+	block = truncateAtLineBoundary(block, remaining)
 	return arc + block
+}
+
+// truncateAtLineBoundary shortens s to at most limit runes without ever
+// cutting a line mid-sentence: the previous rune-level truncation could split
+// the "already happened" channel in the middle of an event description, which
+// the model read as license to re-enact the whole event. If even the first
+// line does not fit, the block is dropped entirely rather than fed half-read.
+func truncateAtLineBoundary(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	cut := strings.LastIndexByte(truncateRunesExact(s, limit), '\n')
+	if cut <= 0 {
+		return ""
+	}
+	return s[:cut+1]
+}
+
+// appendIfBudgetOver adds a notice when truncateAtLineBoundary had to drop
+// content, so the reader of the prompt knows the block is partial instead of
+// silently treating the truncated tail as the complete set.
+func appendIfBudgetOver(full, kept string, lang string) string {
+	if kept == "" || utf8.RuneCountInString(full) <= utf8.RuneCountInString(kept) {
+		return kept
+	}
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		return kept + "[Note: this list was shortened for context budget; omitted entries follow the same rules.]\n"
+	}
+	return kept + "[Nota: esta lista se acortó por presupuesto de contexto; las entradas omitidas siguen las mismas reglas.]\n"
 }
 
 // isDraftedChapter reports whether a chapter has real written prose and its
@@ -54,12 +86,40 @@ func isDraftedChapter(ch ChapterState) bool {
 	return ch.Status == StatusAccepted || (ch.Content != "" && ch.Summary != "")
 }
 
+// arcAudience selects which channels the arc constraint block carries. The
+// writer receives ONLY the hard machine-derived constraints (debut ban list,
+// one-time-event reservations, already-introduced cast, continuity notes):
+// feeding it the verbatim upcoming outlines was proven counterproductive —
+// the model raids the future text as inspiration material even under a
+// "locked vault" warning, staging premature debuts and reveals. The direction
+// each chapter must end in belongs in its own outline instead. Reviewers
+// (fact-checker, conflict analyst) keep the full block including the upcoming
+// outlines, because they must judge prose against planned events rather than
+// be tempted to write them.
+type arcAudience int
+
+const (
+	arcWriter arcAudience = iota
+	arcReviewer
+)
+
 // buildOutlineConstraintsForLang returns the chapter-arc reverse-constraint
 // block in the requested language. It deliberately EXCLUDES the current
 // chapter's own outline: that belongs exclusively to the [Task for this
 // chapter] section of the prompt, so the model can never confuse "what to
 // write now" with "what already happened" or "what comes later".
 func buildOutlineConstraintsForLang(state *Progress, idx int, lang string) string {
+	return buildOutlineConstraintsForAudience(state, idx, lang, arcWriter)
+}
+
+// buildArcConstraintsForReview is the fact-check / conflict-analysis variant:
+// same channel layout as the writer block but WITH the upcoming-outline
+// window, so reviewers can verify nothing from later chapters leaked early.
+func buildArcConstraintsForReview(state *Progress, idx int, lang string) string {
+	return buildOutlineConstraintsForAudience(state, idx, lang, arcReviewer)
+}
+
+func buildOutlineConstraintsForAudience(state *Progress, idx int, lang string, aud arcAudience) string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	var arcHeader, upcomingHeader, happenedHeader string
 	if en {
@@ -99,13 +159,43 @@ func buildOutlineConstraintsForLang(state *Progress, idx int, lang string) strin
 		}
 	}
 	end := min(idx+1+futureOutlineWindow, len(state.Chapters))
-	for i := idx + 1; i < end; i++ {
-		ch := state.Chapters[i]
-		if strings.TrimSpace(ch.Outline) == "" {
-			continue
+	if aud == arcReviewer {
+		for i := idx + 1; i < end; i++ {
+			ch := state.Chapters[i]
+			if strings.TrimSpace(ch.Outline) == "" {
+				continue
+			}
+			futureLines = append(futureLines, formatChapterLine(ch.Num, ch.Title, ch.Outline, lang))
 		}
-		futureLines = append(futureLines, formatChapterLine(ch.Num, ch.Title, ch.Outline, lang))
 	}
+	// Tag the future channel with the one-time events (debut / first meeting)
+	// each upcoming outline owns, so reviewers can match a leaked event to its
+	// destination chapter. The writer never sees the verbatim future outlines
+	// at all — only these machine-derived reservations (see arcAudience):
+	// handing it the raw text of later chapters is what let it raid reveals
+	// (a "stranger" that is unmistakably Lord Edmund, a dropped glove) despite
+	// every warning.
+	eventLines := buildPrematureEventLines(state, idx, lang)
+	if len(eventLines) > 0 {
+		joined := strings.TrimRight(strings.Join(eventLines, ""), "\n")
+		if aud == arcReviewer && len(futureLines) > 0 {
+			futureLines = append([]string{joined}, futureLines...)
+		} else {
+			// No verbatim future material (writer audience, or reviewer with no
+			// outlines yet): the reserved events need their own labelled entry
+			// in the channel or they would be silently lost.
+			var evHead string
+			if en {
+				evHead = "- UNIQUE EVENTS reserved for LATER chapters (must NOT occur or be hinted here):\n"
+			} else {
+				evHead = "- EVENTOS ÚNICOS reservados para capítulos POSTERIORES (NO deben ocurrir ni insinuarse aquí):\n"
+			}
+			futureLines = append(futureLines, evHead+joined+"\n")
+		}
+	}
+
+	hardDebut := buildHardDebutBlock(state, idx, lang)
+	alreadyIntroduced := buildAlreadyIntroducedBlock(state, idx, lang)
 
 	hasPast := false
 	for _, l := range pastLines {
@@ -114,28 +204,50 @@ func buildOutlineConstraintsForLang(state *Progress, idx int, lang string) strin
 			break
 		}
 	}
-	if !hasPast && len(futureLines) == 0 {
+	if !hasPast && len(futureLines) == 0 && hardDebut == "" {
 		return ""
 	}
 
 	// Budget the two channels independently so long upcoming-outline windows
-	// can no longer evict the key facts of previous chapters.
+	// can no longer evict the key facts of previous chapters. The hard debut
+	// ban rides FIRST: it is the most actionable, machine-derived constraint
+	// and must never be evicted by budget trimming.
 	var sb strings.Builder
 	sb.WriteString(arcHeader)
+	if hardDebut != "" {
+		sb.WriteString(hardDebut)
+	}
 	if len(futureLines) > 0 {
-		sb.WriteString(upcomingHeader)
-		sb.WriteString(boundedHistoryFallback(futureLines, outlineArcFutureBudget))
+		header := upcomingHeader
+		if aud == arcWriter {
+			// No verbatim outlines here — this channel only carries event
+			// reservations; the vault wording below would mislead.
+			if en {
+				header = "- Reserved for later chapters — events that have NOT happened yet and must not occur or be hinted in this chapter (their destination chapter is listed):\n"
+			} else {
+				header = "- Reservado para capítulos posteriores — eventos que TODAVÍA NO han ocurrido y no deben ocurrir ni insinuarse en este capítulo (se indica su capítulo destino):\n"
+			}
+		}
+		sb.WriteString(header)
+		futureBody := boundedHistoryFallback(futureLines, outlineArcFutureBudget)
+		sb.WriteString(appendIfBudgetOver(strings.Join(futureLines, ""), futureBody, lang))
 		sb.WriteString("\n")
 	}
 	if hasPast {
 		sb.WriteString(happenedHeader)
-		sb.WriteString(boundedHistoryFallback(pastLines, outlineArcPastBudget))
+		pastBody := boundedHistoryFallback(pastLines, outlineArcPastBudget)
+		sb.WriteString(appendIfBudgetOver(strings.Join(pastLines, ""), pastBody, lang))
 		sb.WriteString("\n")
+	}
+	if alreadyIntroduced != "" {
+		sb.WriteString(alreadyIntroduced)
 	}
 	// Continuity notes ride the past channel: they are hard "already learned
 	// the hard way" constraints about what went wrong before. Appended with
 	// dedicated headroom so a full arc block can no longer evict them.
-	return appendArcBlock(truncateRunesExact(sb.String(), outlineArcTotalBudget), buildContinuityNotesForLang(state, idx, lang))
+	arcFull := sb.String()
+	arcKept := truncateAtLineBoundary(arcFull, outlineArcTotalBudget)
+	return appendArcBlock(appendIfBudgetOver(arcFull, arcKept, lang), buildContinuityNotesForLang(state, idx, lang))
 }
 
 func formatChapterLine(num int, title, outline, lang string) string {

@@ -12,34 +12,48 @@ import (
 )
 
 const (
-	chapterLengthToleranceAbsolute = 1000
-	chapterLengthTolerancePercent  = 15
-	chapterGenMaxLengthAttempts    = 1 // initial draft + one rewrite, then compress/expand
+	// A chapter is accepted only between 90% and 150% of the configured
+	// target words per chapter (Novel parameters).
+	chapterLengthAcceptMinPercent = 90
+	chapterLengthAcceptMaxPercent = 150
+	chapterGenMaxLengthAttempts   = 1 // initial draft + one rewrite, then compress/expand
 
-	chapterLengthSoftOverflowAbsolute = 200 // soft keep: within max(±200, ±5%) of bound
-	chapterLengthSoftOverflowPercent  = 5
+	chapterLengthSoftOverflowAbsolute = 200 // soft keep: within ±200 units of a hard bound
+	chapterLengthSoftOverflowPercent  = 0   // hard percentage band: no extra tolerance
 	chapterLengthAdjustMaxOverRatio   = 120 // skip compress when actual > max * 1.2
-	chapterLengthAdjustMinUnderRatio  = 80  // skip expand when actual < min * 0.8
+	// Expand only drafts that are at least ~75% of the minimum (≈67.5% of the
+	// configured target). Much shorter drafts come from truncated API output;
+	// "expanding" them invents filler instead of regenerating the scene.
+	chapterLengthAdjustMinUnderRatio = 75
 )
 
 const proseLengthOutOfRangeBase = 1_000_000
 
-// calcChapterLengthRange returns acceptable chapter prose length bounds (prose units).
-// Tolerance is max(±1000, ±15% of target). ponytail: fixed policy; tune constants if needed.
+// calcChapterLengthRange returns acceptable chapter prose length bounds in
+// WORDS (prose units): [90%, 150%] of the configured target words per chapter.
 func calcChapterLengthRange(targetWordsPerChapter int) (minLen, maxLen int) {
 	if targetWordsPerChapter < 1 {
 		targetWordsPerChapter = 2500
 	}
-	tol := chapterLengthToleranceAbsolute
-	if pct := targetWordsPerChapter * chapterLengthTolerancePercent / 100; pct > tol {
-		tol = pct
-	}
-	minLen = targetWordsPerChapter - tol
+	minLen = targetWordsPerChapter * chapterLengthAcceptMinPercent / 100
 	if minLen < 1 {
 		minLen = 1
 	}
-	maxLen = targetWordsPerChapter + tol
+	maxLen = targetWordsPerChapter * chapterLengthAcceptMaxPercent / 100
 	return minLen, maxLen
+}
+
+// resolveChapterTargetWords returns the word target actually used for a
+// chapter and where it came from (project snapshot vs live config), so logs
+// never silently fall back to a different value than the user configured.
+func resolveChapterTargetWords(state *Progress, cfg *config.Config) (target int, source string) {
+	if state != nil && state.StoryConfigSnapshot != nil && state.StoryConfigSnapshot.TargetWordsPerChapter > 0 {
+		return state.StoryConfigSnapshot.TargetWordsPerChapter, "snapshot"
+	}
+	if cfg != nil && cfg.Story.TargetWordsPerChapter > 0 {
+		return cfg.Story.TargetWordsPerChapter, "config"
+	}
+	return 2500, "default"
 }
 
 func chapterLengthInRange(content string, minLen, maxLen int) bool {
@@ -104,9 +118,9 @@ func maybeUpdateBestDraft(bestContent *string, bestScore *int, content string, m
 
 func formatChapterLengthRequirementBlock(minLen, maxLen, target int, lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return fmt.Sprintf("Chapter prose must be %d–%d words (target %d; tolerance ±%d words or ±%d%%, whichever is larger). Exceeding %d words is unacceptable — stay inside this chapter's outline only.", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
+		return fmt.Sprintf("Chapter prose must be %d–%d WORDS (target %d; accepted range is 90%%–150%% of the configured words per chapter). Below %d or above %d words is unacceptable — stay inside this chapter's outline only.", minLen, maxLen, target, minLen, maxLen)
 	}
-	return fmt.Sprintf("La prosa del capítulo debe tener entre %d y %d palabras (objetivo: %d; tolerancia ±%d palabras o ±%d%%, la que sea mayor). Superar %d palabras no es aceptable: quédate dentro del outline de este capítulo.", minLen, maxLen, target, chapterLengthToleranceAbsolute, chapterLengthTolerancePercent, maxLen)
+	return fmt.Sprintf("La prosa del capítulo debe tener entre %d y %d PALABRAS (objetivo: %d; se acepta del 90%% al 150%% de las palabras por capítulo configuradas). Por debajo de %d o por encima de %d palabras no es aceptable: quédate dentro del outline de este capítulo.", minLen, maxLen, target, minLen, maxLen)
 }
 
 func formatChapterLengthRetryFeedback(actual, minLen, maxLen int, lang string) string {
@@ -243,14 +257,61 @@ func recoverChapterLengthBest(ctx context.Context, apiCfg *config.APIConfig, cfg
 	return adjusted, nil
 }
 
-func generateChapterContentWithLengthControl(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *sse.LogBroadcaster) (string, error) {
-	snapshot := state.StoryConfigSnapshot
-	if snapshot == nil {
-		snapshot = &cfg.Story
+// enforceRevisionLength guards feedback-driven rewrites. Models habitually
+// compress prose when "applying feedback" (a 4000-word chapter came back as
+// 1868 words and was accepted silently). If the revision drops below the hard
+// minimum band, retry once with an explicit keep-everything instruction; if it
+// still undershoots, revert to whichever draft is longest so the user's word
+// target is never quietly lost. Returns the content plus whether the final
+// text is in the acceptance band.
+func enforceRevisionLength(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, original, revised, feedback string, minLen, maxLen int, logger *sse.LogBroadcaster, rerun func(string) (string, error)) (string, bool, error) {
+	originalLen := prose.CountProseUnits(original)
+	revisedLen := prose.CountProseUnits(revised)
+	if revisedLen >= minLen && revisedLen <= maxLen {
+		return revised, true, nil
 	}
-	target := snapshot.TargetWordsPerChapter
+	// A revision that is shorter than the hard minimum AND shorter than the
+	// original by more than the soft tolerance destroyed content; everything
+	// else (longer-but-still-short drafts, minor trims of already-short
+	// chapters) is left alone rather than ping-ponging the model.
+	destruction := revisedLen < minLen && originalLen >= minLen && !isSoftLengthDeviation(revisedLen, minLen, maxLen)
+	if !destruction {
+		return revised, false, nil
+	}
+	if logger != nil {
+		logger.WarnKey("log.chapter_revision_short_retry", revisedLen, minLen, maxLen)
+	}
+	keepFeedback := feedback + "\n\n[LENGTH GUARD] Your previous rewrite produced only " + fmt.Sprintf("%d", revisedLen) + " words; the chapter must stay within " + fmt.Sprintf("%d-%d", minLen, maxLen) + " words. Rewrite again applying ONLY the requested changes while keeping every other scene, paragraph, dialogue and description of the original text intact. Do not summarize or compress anything else."
+	again, err := rerun(keepFeedback)
+	if err != nil {
+		return "", false, err
+	}
+	againLen := prose.CountProseUnits(again)
+	if againLen > revisedLen {
+		revised, revisedLen = again, againLen
+	}
+	if revisedLen >= minLen && revisedLen <= maxLen {
+		return revised, true, nil
+	}
+	if revisedLen < originalLen && originalLen >= minLen {
+		if logger != nil {
+			logger.WarnKey("log.chapter_revision_reverted", revisedLen, originalLen, minLen, maxLen)
+		}
+		return original, false, nil
+	}
+	if logger != nil {
+		logger.WarnKey("log.chapter_length_off_range", revisedLen, minLen, maxLen)
+	}
+	return revised, false, nil
+}
+
+func generateChapterContentWithLengthControl(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *sse.LogBroadcaster) (string, error) {
+	target, source := resolveChapterTargetWords(state, cfg)
 	minLen, maxLen := calcChapterLengthRange(target)
 	lang := cfg.Language
+	if logger != nil {
+		logger.InfoKey("log.chapter_length_target", state.Chapters[idx].Num, target, minLen, maxLen, source)
+	}
 	lengthFeedback := ""
 	var bestContent string
 	bestScore := int(^uint(0) >> 1)
