@@ -80,6 +80,21 @@ func (h *Handlers) PostOutlineAnalysisApply(w http.ResponseWriter, r *http.Reque
 		h.writeErrorReq(w, r, http.StatusConflict, "apply_failed", err)
 		return
 	}
+	// The applied batch may have reshaped chapter casts; register any brand-new
+	// characters the editor invented so the character sheet stays consistent
+	// with the outline (best-effort: a settings-save failure must not undo the
+	// outline changes that were already persisted).
+	if h.settings != nil {
+		for _, s := range h.state.OutlineAnalysis.Suggestions {
+			if s.ID != strings.TrimSpace(body.ID) {
+				continue
+			}
+			if added, regErr := story.RegisterCastCharacters(h.settings, s.Recommendations, h.settingsPath); regErr == nil && added > 0 {
+				h.logger.SettingsUpdated()
+			}
+			break
+		}
+	}
 	h.broadcastProgress()
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "applied",
@@ -173,7 +188,7 @@ func (h *Handlers) PostOutlineAnalysisPropose(w http.ResponseWriter, r *http.Req
 	defer h.endTask()
 	ctx := h.ensureTaskTokens(h.taskCtx)
 	h.logger.TaskStart("outline_analyze_propose")
-	s, err := story.ProposeOutlineReplacements(ctx, h.apiCfg, h.cfg, h.state, h.settings, strings.TrimSpace(body.ID), h.progressPath, h.logger)
+	s, err := story.ProposeOutlineReplacements(ctx, h.apiCfg, h.cfg, h.state, h.settings, strings.TrimSpace(body.ID), h.progressPath, h.settingsPath, h.logger)
 	if err != nil {
 		h.logger.ErrorKey("log.outline_analyze_failed", err)
 		h.logger.TaskEnd("outline_analyze_propose", false)

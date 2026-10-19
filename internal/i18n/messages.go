@@ -45,6 +45,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_analyze_running": {
 
 		LangEN: "Running bestseller-editor analysis over the full outline..."},
+	"log.outline_analyze_unchanged": {
+
+		LangEN: "Outline unchanged since the last editorial pass — scores reused, no new analysis needed"},
 	"log.outline_analyze_cancelled": {
 
 		LangEN: "Outline analysis cancelled"},

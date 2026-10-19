@@ -4,6 +4,7 @@
   import { t } from '../lib/i18n/index.js';
   import { onMount, tick } from 'svelte';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
+  import AiGenerateButton from '../components/AiGenerateButton.svelte';
   // Interfaz unificada: los <select> nativos del panel de pre-planificación
   // usan SmartSelect (single-select con búsqueda y popover ⓘ igual que el
   // resto de la app). allowClear={false}: son campos obligatorios sin opción
@@ -188,6 +189,7 @@
 
   // --- Bestseller-editor outline analysis ---
   $: outlineAnalysis = p?.outline_analysis || null;
+  $: analysisHasProposals = (outlineAnalysis?.suggestions || []).some(s => (s.recommendations || []).length > 0);
   let applyingSuggestionId = '';
   let proposingSuggestionId = '';
 
@@ -501,10 +503,7 @@
           {#if prePlan}
             <button class="btn btn-sm btn-ghost" on:click={deletePrePlan}>{$t('outline.preplan.clear')}</button>
           {/if}
-          <button class="btn btn-sm btn-primary" on:click={generatePrePlan} disabled={prePlanBusy}>
-            {#if prePlanBusy}<span class="loading loading-spinner loading-xs"></span>{/if}
-            {prePlan ? $t('outline.preplan.regenerate') : $t('outline.preplan.generate')}
-          </button>
+          <AiGenerateButton busy={prePlanBusy} disabled={prePlanBusy} text={prePlan ? $t('outline.preplan.regenerate') : $t('outline.preplan.generate')} title={prePlan ? $t('outline.preplan.regenerate') : $t('outline.preplan.generate')} on:click={generatePrePlan} />
         </div>
       </div>
       <p class="text-xs text-base-content/70">{$t('outline.preplan.help')}</p>
@@ -895,15 +894,21 @@
                     {#if s.recommendations?.length}
                       <div class="space-y-2">
                         {#each s.recommendations as rec (rec.chapter_num)}
-                          <div class="bg-base-100 rounded p-2.5 text-xs space-y-1.5">
-                            <div class="font-semibold">Ch. {rec.chapter_num}{chapterTitleOf(rec.chapter_num) ? ' — ' + chapterTitleOf(rec.chapter_num) : ''}</div>
+                          <!-- Accordion collapsed by default: the author opens each
+                               proposed replacement on purpose before applying. -->
+                          <details class="bg-base-100 rounded p-2.5 text-xs">
+                            <summary class="cursor-pointer font-semibold select-none">
+                              Ch. {rec.chapter_num}{chapterTitleOf(rec.chapter_num) ? ' — ' + chapterTitleOf(rec.chapter_num) : ''}
+                              {#if rec.cast?.length}<span class="badge badge-outline badge-xs ml-1 normal-case">{$t('outline.analysis.castBadge')}: {rec.cast.map(c => c.name).join(', ')}</span>{/if}
+                            </summary>
+                            <div class="space-y-1.5 pt-1.5">
                             {#if rec.new_title}
                               <div><span class="text-base-content/60">{$t('outline.analysis.replacePreview')} Title:</span> <span class="line-through opacity-60">{chapterTitleOf(rec.chapter_num)}</span></div>
                               <div><span class="text-base-content/60">{$t('outline.analysis.with')}</span> <span class="font-medium">{rec.new_title}</span></div>
                             {/if}
                             {#if rec.new_outline}
-                              <details open>
-                                <summary class="cursor-pointer text-base-content/60">{$t('outline.analysis.replacePreview')} Outline</summary>
+                              <div>
+                                <div class="text-base-content/60">{$t('outline.analysis.replacePreview')} Outline</div>
                                 <!-- Editable before applying: the user can tweak the
                                      editor's proposed chapter plan; edits are saved to
                                      the backend (debounced) and flushed on Apply. -->
@@ -917,9 +922,29 @@
                                   placeholder={$t('outline.analysis.editableHint')}
                                 ></textarea>
                                 <p class="text-[10px] text-base-content/45">{$t('outline.analysis.editableHint')}</p>
-                              </details>
+                              </div>
                             {/if}
-                          </div>
+                            {#if rec.cast?.length}
+                              {@const currentCast = (chapters.find(c => c.num === rec.chapter_num)?.characters || []).map(c => c.name)}
+                              <div>
+                                <div class="text-base-content/60">{$t('outline.analysis.replacePreview')} {$t('outline.analysis.castTitle')}</div>
+                                {#if currentCast.length}
+                                  <div class="line-through opacity-60">{currentCast.join('; ')}</div>
+                                {/if}
+                                <ul class="mt-1 space-y-0.5">
+                                  {#each rec.cast as cc (cc.name)}
+                                    <li>
+                                      <span class="font-medium">{cc.name}</span>
+                                      {#if cc.first_appearance}<span class="badge badge-info badge-xs ml-1 normal-case">{$t('outline.analysis.castDebut')}</span>{/if}
+                                      {#if cc.note}<span class="text-base-content/55"> — {cc.note}</span>{/if}
+                                    </li>
+                                  {/each}
+                                </ul>
+                                <p class="text-[10px] text-base-content/45 mt-0.5">{$t('outline.analysis.castNote')}</p>
+                              </div>
+                            {/if}
+                            </div>
+                          </details>
                         {/each}
                       </div>
                       {#if s.status !== 'applied'}
@@ -939,7 +964,9 @@
                       {/if}
                     {:else if s.status !== 'applied'}
                       <div class="space-y-2">
-                        <p class="text-xs text-base-content/50">{$t('outline.analysis.noApply')}</p>
+                        <p class="text-xs text-base-content/50">
+                          {$t(analysisHasProposals ? 'outline.analysis.noApply' : 'outline.analysis.adviceOnly')}
+                        </p>
                         <div class="flex justify-end">
                           <button class="btn btn-outline btn-xs" on:click={() => proposeForSuggestion(s)} disabled={$taskRunning || proposingSuggestionId === s.id}>
                             {#if proposingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}

@@ -2,6 +2,8 @@ package story
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -17,11 +19,35 @@ import (
 // outline produced by the bestseller-editor analysis. When Present is true,
 // applying the recommendation swaps that chapter's title and/or outline text
 // (accepted chapters are never touched).
+//
+// Proposed marks a recommendation drafted on demand by the "Propose outline
+// changes" action (as opposed to the ones bundled with the initial editorial
+// pass). The frontend only surfaces proposed replacements — and keeps their
+// accordions collapsed — until the author explicitly requests them, so no
+// section silently rewrites the outline before that point.
+//
+// Cast carries the chapter's REPLACED cast when the editor proposes adding or
+// removing characters from the chapter plan; nil means "keep the current cast".
 type OutlineRecommendation struct {
-	ChapterNum int    `json:"chapter_num"`
-	Present    bool   `json:"present"`
-	NewTitle   string `json:"new_title,omitempty"`
-	NewOutline string `json:"new_outline,omitempty"`
+	ChapterNum int                       `json:"chapter_num"`
+	Present    bool                      `json:"present"`
+	NewTitle   string                    `json:"new_title,omitempty"`
+	NewOutline string                    `json:"new_outline,omitempty"`
+	Cast       []OutlineChapterCharacter `json:"cast,omitempty"`
+	Proposed   bool                      `json:"proposed,omitempty"`
+}
+
+// CastSummary renders the proposed chapter cast as a short human-readable line
+// ("A; B; C") for the accordion, so the author can see at a glance whether a
+// proposal touches the cast. Empty means "the current cast is kept".
+func (r OutlineRecommendation) CastSummary() string {
+	names := make([]string, 0, len(r.Cast))
+	for _, c := range r.Cast {
+		if n := strings.TrimSpace(c.Name); n != "" {
+			names = append(names, n)
+		}
+	}
+	return strings.Join(names, "; ")
 }
 
 // OutlineSuggestion is one point of the editor's feedback: what works / what
@@ -66,13 +92,38 @@ type OutlineAnalysisReport struct {
 	OverallScore     int                 `json:"overall_score,omitempty"`
 	PillarScores     []PillarAssessment  `json:"pillar_scores,omitempty"`
 	Suggestions      []OutlineSuggestion `json:"suggestions"`
+	// OutlineFingerprint identifies the exact outline state (editable chapter
+	// titles + synopses) the scores above were computed from. Re-analyzing an
+	// UNCHANGED outline reuses the previous scores instead of paying for a new
+	// LLM call; once the outline changes (e.g. suggestions are applied) the
+	// fingerprint mismatches and the next pass genuinely re-scores everything.
+	OutlineFingerprint string `json:"outline_fingerprint,omitempty"`
+}
+
+// outlineFingerprint builds a stable hash over the chapters the editor
+// actually grades: every editable (non-accepted) chapter's number, title and
+// outline text. Accepted chapters are excluded on purpose — they are locked
+// and out of scope for scoring, so drafting or accepting prose must not
+// invalidate the cached scores.
+func outlineFingerprint(state *Progress) string {
+	var b strings.Builder
+	for _, ch := range state.Chapters {
+		if ch.Status == StatusAccepted {
+			continue
+		}
+		fmt.Fprintf(&b, "%d\x00%s\x00%s\x01", ch.Num, strings.TrimSpace(ch.Title), strings.TrimSpace(ch.Outline))
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 // buildOutlineEditorPrompt assembles the single LLM prompt for the full
 // editorial pass. It deliberately centers the four author-facing pillars the
 // product exposes: Ideal reader profile, Inspirational pieces, Tone and Story
 // structure — plus theme/motif and the writing style as supporting context —
-// and asks for strict JSON with per-chapter replacement recommendations.
+// and asks for strict JSON with advice only: concrete per-chapter replacements
+// are drafted later, on demand, via ProposeOutlineReplacements ("Propose
+// outline changes"), so the initial pass never suggests silent rewrites.
 func buildOutlineEditorPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string) string {
 	sc := cfg.Story
 	var meta strings.Builder
@@ -132,12 +183,12 @@ func buildOutlineEditorPrompt(cfg *config.Config, state *Progress, settings *Pro
 
 	structureName := structureLabel(sc.Structure, lang)
 
-	return fmt.Sprintf(`You are %s, a world-famous literary editor whose lists have produced multiple global bestsellers. Your job: give the author a constructive, point-by-point editorial pass over the FULL OUTLINE (synopsis plan) below, aimed at maximizing its commercial and artistic potential for its ideal reader.
+	return fmt.Sprintf(`You are %s, a world-famous literary editor whose lists have produced multiple global bestsellers. Your job: give the author a constructive, point-by-point editorial pass over the FULL OUTLINE (synopsis plan) below, with ONE clear goal: turn this plan into a global bestseller — every point you make must serve that bar, not mere competence.
 
 CRITICAL CONTEXT — WHAT YOU ARE REVIEWING:
 - You are reviewing an OUTLINE ONLY: per-chapter planning notes / synopses written BEFORE the book is drafted. The prose does not exist yet. No actual scenes, dialogue, sentences or style are available to you.
 - Judge it as an outline: premise strength, structural beats, pacing plan, character arcs and stakes AS PLANNED. Never critique prose quality, sentence-level style, dialogue, "show don't tell", word choice or voice — those cannot be assessed from an outline. Phrase every point in terms of what the PLAN shows or lacks (e.g. "chapter 7's planned beat leaves...", not "the writing of chapter 7 feels...").
-- Your suggested rewrites must also be outline-level: replacement chapter plans (beats/synopses), not manuscript pages.
+- This pass is ADVICE ONLY: do NOT draft replacement chapter plans here. The author requests concrete rewrites per point later, explicitly, via a "Propose outline changes" action — so nothing gets rewritten before they choose to act on a specific point.
 
 NOVEL PARAMETERS (the author's contract with the reader):
 %s
@@ -145,6 +196,8 @@ STORY STRUCTURE FRAMEWORK IN USE: %s
 
 OUTLINE — planning synopses only, not drafted prose (%d chapter(s) shown; accepted chapters are locked and already drafted — do not propose replacements for them):
 %s
+
+YOUR MISSION: do not just list flaws — reverse-engineer what makes books in this genre hit #1 (an irresistible hook, relentless pacing, arcs that pay off, stakes that escalate, a tone readers can feel on the cover) and grade THIS plan against that blueprint. Every suggestion you return must be a concrete step that measurably moves the outline toward bestseller level on its pillar, so that applying your top points in a few iterations raises the scores substantially.
 
 Analyze the outline against ALL of the parameters above, giving special weight to these four pillars:
 1. Ideal reader profile — does every planned beat deliver what this reader came for? Promises kept? Genre expectations met without cliché?
@@ -155,7 +208,7 @@ Analyze the outline against ALL of the parameters above, giving special weight t
 Also weigh: premise hook & marketability, protagonist agency & arc, antagonist/stakes escalation, subplots, endings/payoff, chapter-level titles & blurbs (are they compelling back-cover lines?).
 
 Return STRICT JSON only (no markdown fences, no prose):
-{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":72,"pillar_scores":[{"key":"reader_profile","score":68,"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":61,"note":"..."},{"key":"tone","score":74,"note":"..."},{"key":"story_structure","score":55,"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","title":"short imperative headline","detail":"what the outline currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and how","applies_to_chapters":[3,4],"recommendations":[{"chapter_num":3,"present":true,"new_title":"a sharper chapter title","new_outline":"the COMPLETE replacement outline text for this chapter, same language as the outline, matching the original length +/-30%%"}]}]}
+{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":72,"pillar_scores":[{"key":"reader_profile","score":68,"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":61,"note":"..."},{"key":"tone","score":74,"note":"..."},{"key":"story_structure","score":55,"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","title":"short imperative headline","detail":"what the outline currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and how","applies_to_chapters":[3,4]}]}
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
 - Score each of the four pillars 0-100 against BESTSELLER level, not against "competent debut". 90+ means the PLAN is genuinely strong as-is: you would sign it without touching that pillar. Reserve 90+ for truly exceptional planning; most outlines land 55-80. Grade hard: dead beats, vague stakes, generic hooks or an inconsistent tonal plan all cap scores below 85.
@@ -165,11 +218,12 @@ Grading standard (you are ruthless — your reputation rests on books that hit #
 
 Rules:
 - 5 to 12 suggestions, ordered most impactful first. Every pillar above must be considered; include a suggestion only when there is something real to improve.
-- For each suggestion where a concrete rewrite would fix it, add one recommendation per affected editable chapter with present=true and BOTH new_title and new_outline fully written out (drop the recommendation if you cannot write a complete replacement). Never touch locked/accepted chapters.
-- new_outline must be a ready-to-paste replacement chapter PLAN (beats/synopsis), consistent with surrounding chapters, the registered cast and the story structure — not a note about what to change and not drafted prose.
-- Write summary, titles, details, actions and replacements in the SAME language as the outline text above.
-- If the outline is genuinely strong, say so in the summary and return fewer, higher-value suggestions; recommendations may be empty overall.`,
-		editorPersona(lang), meta.String(), structureName, written, outlineText, structureName, lang, lang, lang)
+- DO NOT include replacement chapter plans in this pass: return every suggestion WITHOUT a "recommendations" array (or with it empty). Concrete ready-to-apply replacements are generated later, ONLY after the author clicks "Propose outline changes" on a specific point — drafting them up front for every point risks inconsistent rewrites across sections.
+- applies_to_chapters may still name the editable chapters (never locked/accepted ones) most affected by each point.
+- action must describe WHAT to change and HOW at the outline level (beats/synopsis), so the author understands the advice before requesting concrete replacements.
+- Write summary, titles, details and actions in the SAME language as the outline text above.
+- If the outline is genuinely strong, say so in the summary and return fewer, higher-value suggestions.`,
+		editorPersona(lang), meta.String(), structureName, written, outlineText, structureName, lang, lang)
 }
 
 func editorPersona(lang string) string {
@@ -199,9 +253,21 @@ func keptSuggestionsForPillar(suggestions []OutlineSuggestion, categories []stri
 
 // AnalyzeFullOutline runs the bestseller-editor pass over the whole outline in
 // ONE LLM call and stores the report on state. Callers persist progress.
+//
+// Scoring is always recomputed against the CURRENT outline: before calling the
+// model we store the fingerprint of the outline being graded, so re-analyzing
+// after applying suggestions can never reuse stale scores (the fingerprint
+// mismatch forces a fresh grading). As an optimization, if the outline has not
+// changed at all since the previous pass, the existing report is kept verbatim
+// and no LLM call is made — same input plan, same verdict.
 func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
 	if len(state.Chapters) == 0 {
 		return fmt.Errorf("outline_empty")
+	}
+	fingerprint := outlineFingerprint(state)
+	if prev := state.OutlineAnalysis; prev != nil && prev.OutlineFingerprint != "" && prev.OutlineFingerprint == fingerprint {
+		logger.InfoKey("log.outline_analyze_unchanged")
+		return nil
 	}
 	lang := cfg.Language
 	settingsForPrompt := settings
@@ -234,8 +300,10 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
 	}
 
-	// Sanitize: drop empty suggestions, invalid categories, and any
-	// recommendation targeting locked/accepted or unknown chapters.
+	// Sanitize: drop empty suggestions and invalid categories. Any
+	// recommendation bundled with the initial pass is discarded (replacements
+	// only exist after an explicit "Propose outline changes"), but chapters
+	// named in applies_to_chapters are still validated against the editable set.
 	editable := map[int]bool{}
 	for _, ch := range state.Chapters {
 		if ch.Status != StatusAccepted {
@@ -254,19 +322,13 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		if s.Title == "" && s.Detail == "" {
 			continue
 		}
-		cleanRecs := make([]OutlineRecommendation, 0, len(s.Recommendations))
-		for _, r := range s.Recommendations {
-			if !r.Present || !editable[r.ChapterNum] {
-				continue
-			}
-			r.NewTitle = strings.TrimSpace(r.NewTitle)
-			r.NewOutline = strings.TrimSpace(r.NewOutline)
-			if r.NewTitle == "" && r.NewOutline == "" {
-				continue
-			}
-			cleanRecs = append(cleanRecs, r)
-		}
-		s.Recommendations = cleanRecs
+		// The initial editorial pass is advice-only: replacements are drafted
+		// exclusively when the author clicks "Propose outline changes" on a
+		// specific point (see ProposeOutlineReplacements). Any recommendation
+		// the model returns anyway is dropped here so no section can silently
+		// suggest — or apply — rewrites before that explicit action, which
+		// would risk inconsistencies between sections.
+		s.Recommendations = nil
 		cleanApps := make([]int, 0, len(s.AppliesToChapters))
 		seenApp := map[int]bool{}
 		for _, n := range s.AppliesToChapters {
@@ -291,10 +353,10 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	// conservative score so "No changes needed" never shows without proof).
 	validPillar := map[string]bool{"reader_profile": true, "inspirational_pieces": true, "tone": true, "story_structure": true}
 	pillarDownstream := map[string][]string{
-		"reader_profile":        {"market"},
-		"inspirational_pieces":  {"other", "hook"},
-		"tone":                  {"tone"},
-		"story_structure":       {"structure", "pacing"},
+		"reader_profile":       {"market"},
+		"inspirational_pieces": {"other", "hook"},
+		"tone":                 {"tone"},
+		"story_structure":      {"structure", "pacing"},
 	}
 	cleanPillars := make([]PillarAssessment, 0, 4)
 	seenPillar := map[string]bool{}
@@ -325,6 +387,11 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	result.Suggestions = kept
 	result.GeneratedAt = time.Now().Format(time.RFC3339)
 	result.BasedOnStructure = structureLabel(cfg.Story.Structure, lang)
+	// Record WHICH outline state these scores were computed from. Any later
+	// change to an editable chapter (e.g. applying suggestions or editing by
+	// hand) alters the fingerprint, so the next re-analysis is guaranteed to
+	// re-score against the new outline instead of looking cached/stale.
+	result.OutlineFingerprint = fingerprint
 	state.OutlineAnalysis = &result
 	return nil
 }
@@ -373,7 +440,14 @@ func ApplyOutlineSuggestion(state *Progress, suggestionID string, progressPath s
 			if strings.TrimSpace(outline) != "" {
 				newOutline = outline
 			}
-			if err := EditChapterOutline(state, ch.Num, newTitle, newOutline, nil); err == nil {
+			// A recommendation may carry a REPLACED cast for the chapter; nil
+			// (len == 0) means "keep the current cast untouched".
+			var cast *[]OutlineChapterCharacter
+			if len(r.Cast) > 0 {
+				c := normalizeOutlineCharacters(r.Cast)
+				cast = &c
+			}
+			if err := EditChapterOutline(state, ch.Num, newTitle, newOutline, cast); err == nil {
 				changed++
 				appliedChapters[ch.Num] = true
 			}
@@ -407,10 +481,18 @@ func ApplyOutlineSuggestion(state *Progress, suggestionID string, progressPath s
 // back WITHOUT automatic replacements ("No automatic replacements proposed"):
 // it asks the editor to translate its advice into concrete outline-level
 // suggestions — WHAT to add/change and in WHICH chapters — and then drafts a
-// ready-to-apply replacement title/outline for one chosen editable chapter.
-// The generated recommendations are stored on the suggestion itself, so the
-// regular Apply button can write them into the outline.
-func ProposeOutlineReplacements(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, suggestionID string, progressPath string, logger *sse.LogBroadcaster) (*OutlineSuggestion, error) {
+// ready-to-apply replacement title/outline (and, when useful, a replacement
+// CAST) for the chosen editable chapters. The generated recommendations are
+// stored on the suggestion itself, so the regular Apply button can write them
+// into the outline.
+//
+// The goal of the drafted replacements is NOT merely to obey the advice: they
+// must push the chapter toward BESTSELLER level on the pillar the point
+// belongs to (a stronger hook, better-placed beats, sharper stakes...), while
+// staying consistent with neighboring chapters, the structure framework and
+// the cast. Cast changes may introduce brand-new characters; those get
+// registered in the character sheet on apply (see registerCastCharacters).
+func ProposeOutlineReplacements(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, suggestionID string, progressPath string, settingsPath string, logger *sse.LogBroadcaster) (*OutlineSuggestion, error) {
 	rep := state.OutlineAnalysis
 	if rep == nil {
 		return nil, fmt.Errorf("no_outline_analysis")
@@ -436,7 +518,26 @@ func ProposeOutlineReplacements(ctx context.Context, apiCfg *config.APIConfig, c
 		if ch.Status == StatusAccepted {
 			mark = "LOCKED/accepted"
 		}
-		fmt.Fprintf(&chapBuf, "- Chapter #%d [%s] | %s | %s\n", ch.Num, mark, ch.Title, strings.TrimSpace(ch.Outline))
+		castLine := "none listed"
+		if len(ch.Characters) > 0 {
+			names := make([]string, 0, len(ch.Characters))
+			for _, oc := range ch.Characters {
+				names = append(names, oc.Name)
+			}
+			castLine = strings.Join(names, ", ")
+		}
+		fmt.Fprintf(&chapBuf, "- Chapter #%d [%s] | %s | %s | cast: %s\n", ch.Num, mark, ch.Title, strings.TrimSpace(ch.Outline), castLine)
+	}
+	// Registered character sheet so cast proposals reuse canonical names.
+	var castSheet strings.Builder
+	if settings != nil {
+		for _, c := range settings.Characters {
+			line := c.Name
+			if role := strings.TrimSpace(c.Background); role != "" {
+				line += " — " + Truncate(role, 140)
+			}
+			castSheet.WriteString(line + "; ")
+		}
 	}
 	sc := cfg.Story
 	prompt := fmt.Sprintf(`You are %s. You previously gave the author this editorial point about their novel OUTLINE (a planning synopsis per chapter — the prose is NOT drafted yet, so never critique sentences, dialogue or writing style):
@@ -450,16 +551,20 @@ NOVEL PARAMETERS: Tone: %s | Theme: %s | Structure framework: %s | Ideal reader:
 FULL OUTLINE (chapter plans only):
 %s
 
-This point currently has NO concrete replacement proposals. Produce them at the OUTLINE level:
+REGISTERED CHARACTERS (the canonical character sheet — reuse these names verbatim when a registered character belongs in a chapter's cast):
+%s
+
+This point currently has NO concrete replacement proposals. Your goal is NOT merely to obey the advice: every replacement you draft must measurably push these chapters toward GLOBAL BESTSELLER level on the pillar this point belongs to (irresistible hook, better-placed beats, sharper escalating stakes, a tonal plan readers can feel...) while staying consistent with neighboring chapters, the structure framework and the cast — so that applying this batch makes a real difference in a few iterations. Produce the changes at the OUTLINE level:
 1. Decide which 1-3 EDITABLE chapters would benefit most from applying this point (never locked/accepted ones).
 2. For EACH chosen chapter, write a complete replacement: a sharper chapter title and the FULL new outline text (same language as the outline, same length +/-30%%, consistent with neighboring chapters, the cast and the structure framework). It must be a ready-to-paste chapter PLAN (beats/synopsis), not drafted prose and not a note about what to change. Incorporate concretely what your advice asks for (e.g. add a beat, raise stakes, plant a foreshadow).
+3. You may also reshape each chosen chapter's CAST to serve the bestseller goal — add a character who raises stakes or conflict, remove one who adds nothing, mark first_appearance:true when a character debuts here. Prefer REGISTERED CHARACTERS above; you may invent brand-new characters when the improvement demands it (give them a one-line role in "note"). Only return "cast" for chapters whose cast should CHANGE; omit it to keep the current cast.
 
-Return STRICT JSON only (no markdown fences): {"recommendations":[{"chapter_num":3,"present":true,"new_title":"...","new_outline":"..."}]}
+Return STRICT JSON only (no markdown fences): {"recommendations":[{"chapter_num":3,"present":true,"new_title":"...","new_outline":"...","cast":[{"name":"...","first_appearance":true,"note":"one-line role"}]}]}
 Only include chapters that exist and are marked editable.`,
 		editorPersona(cfg.Language), s.Title, s.Detail, s.Action,
 		sc.Tone, sc.Theme, structureLabel(sc.Structure, cfg.Language), sc.AudienceProfile, sc.InspirationalPieces,
-		chapBuf.String())
-	system := "You are a world-famous literary editor turning feedback into concrete OUTLINE (chapter-plan) rewrites — never manuscript prose. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
+		chapBuf.String(), castSheetOrNone(settings))
+	system := "You are a world-famous literary editor turning feedback into concrete OUTLINE (chapter-plan) rewrites — never manuscript prose. You rewrite chapter plans with one clear goal: make the book a global bestseller on the pillar under discussion, not just fix the complaint. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.outline_analyze_proposing")
 	type proposal struct {
@@ -486,9 +591,16 @@ Only include chapters that exist and are marked editable.`,
 			for _, r := range p.Recommendations {
 				r.NewTitle = strings.TrimSpace(r.NewTitle)
 				r.NewOutline = strings.TrimSpace(r.NewOutline)
+				// Sanitize a proposed replacement cast (if any): canonical names,
+				// deduped; an empty list means "keep the current cast".
+				r.Cast = normalizeOutlineCharacters(r.Cast)
 				if !r.Present || !editable[r.ChapterNum] || (r.NewTitle == "" && r.NewOutline == "") {
 					continue
 				}
+				// Mark as drafted on demand: the frontend only surfaces these
+				// replacements — inside collapsed accordions — after this explicit
+				// "Propose outline changes" action.
+				r.Proposed = true
 				recs = append(recs, r)
 			}
 			break
@@ -512,7 +624,7 @@ Only include chapters that exist and are marked editable.`,
 	}
 	merged = append(merged, recs...)
 	for _, old := range rep.Suggestions[idx].Recommendations {
-		if !chosen[old.ChapterNum] {
+		if !chosen[old.ChapterNum] && old.Proposed {
 			merged = append(merged, old)
 		}
 	}
@@ -532,6 +644,61 @@ Only include chapters that exist and are marked editable.`,
 		return &out, nil // proposals are in memory; persistence retried on next save
 	}
 	return &out, nil
+}
+
+// castSheetOrNone renders the registered character sheet for the proposal
+// prompt (name — one-line role), or a placeholder when none are registered.
+func castSheetOrNone(settings *ProjectSettings) string {
+	if settings == nil || len(settings.Characters) == 0 {
+		return "(none registered yet)"
+	}
+	var b strings.Builder
+	for _, c := range settings.Characters {
+		line := c.Name
+		if role := strings.TrimSpace(c.Background); role != "" {
+			line += " — " + Truncate(role, 140)
+		}
+		b.WriteString(line + "; ")
+	}
+	return b.String()
+}
+
+// RegisterCastCharacters adds to the project character sheet every character
+// that appears in an applied recommendation's proposed cast but is not yet
+// registered (the editor may invent brand-new characters when reshaping a
+// chapter). Debut notes become the character's background so later generation
+// steps know the intended role. Returns how many characters were added.
+func RegisterCastCharacters(settings *ProjectSettings, recs []OutlineRecommendation, settingsPath string) (int, error) {
+	if settings == nil || len(recs) == 0 {
+		return 0, nil
+	}
+	added := 0
+	existing := RegisteredCharacterNameSet(settings)
+	for _, r := range recs {
+		if !r.Present {
+			continue
+		}
+		for _, c := range normalizeOutlineCharacters(r.Cast) {
+			if existing[c.Name] {
+				continue
+			}
+			settings.Characters = append(settings.Characters, Character{
+				ID:         settings.NextCharacterID(),
+				Name:       c.Name,
+				Background: c.Note,
+				Notes:      fmt.Sprintf("Added by bestseller-editor outline proposal (chapter %d)", r.ChapterNum),
+			})
+			existing[c.Name] = true
+			added++
+		}
+	}
+	if added == 0 {
+		return 0, nil
+	}
+	if err := SaveProjectSettings(settingsPath, settings); err != nil {
+		return added, err
+	}
+	return added, nil
 }
 
 // collectAllOutlines concatenates chapter outlines for retrieval queries.
