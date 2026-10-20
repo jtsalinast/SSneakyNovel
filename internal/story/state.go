@@ -107,6 +107,11 @@ type WritingConflict struct {
 	RootCause        string                 `json:"root_cause"`
 	Reconcilable     bool                   `json:"reconcilable"`
 	SuggestedActions []ConflictActionOption `json:"suggested_actions"`
+	// SceneTargets locates the (scene position, trope-unit index) owning each
+	// entry of Issues (-1,-1 when unlocatable). The UI offers a surgical
+	// "edit only this trope" repair per located target, so single-unit
+	// contradictions no longer force full-chapter rewrites.
+	SceneTargets [][2]int `json:"scene_targets,omitempty"`
 }
 
 type MemoryEntry struct {

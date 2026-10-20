@@ -77,13 +77,36 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "Chapter writing cancelled"},
 	// Distinguishes a hard stop (user cancel / task deadline) from a step
 	// failure whose prose was already checkpointed as a resumable draft.
+	// The task hit its MaxTaskDuration wall-clock ceiling (NOT a user Stop —
+	// those are reported as log.chapter_write_cancelled via TaskStoppedByUser).
+	"log.chapter_write_aborted_deadline": {
+
+		LangEN: "Chapter writing stopped: the task reached its time limit — prose is saved as a resumable draft; use Resume, Fact-check or Reset on the chapter"},
 	"log.chapter_write_aborted": {
 
-		LangEN: "Chapter generation stopped before finishing — progress saved; use Resume, Fact-check or Reset on the chapter"},
+		LangEN: "Chapter writing aborted: %s — prose is saved as a resumable draft; use Resume, Fact-check or Reset on the chapter"},
 	// Emitted by abortChapterWithDraftCheckpoint when the draft checkpoint save succeeds.
 	"log.chapter_draft_saved": {
 
 		LangEN: "Chapter %d kept as resumable draft (summary/verification step failed) — use Resume, Fact-check or Reset in the sidebar"},
+	// GenerateChapterAction found a DraftSavedAt checkpoint from an interrupted
+	// run and continues from the saved prose instead of regenerating it.
+	"log.chapter_draft_resumed": {
+
+		LangEN: "Chapter %d draft found from a previous interrupted run (%d prose units) — continuing without rewriting the prose"},
+	// finalizeChapterSummary fallbacks when the LLM summary step fails but the
+	// pipeline must still get a non-empty summary for the history sync.
+	"log.summary_fallback_previous": {
+
+		LangEN: "AI summary step failed (%s) — keeping the chapter's previous summary so the history sync can continue"},
+	"log.summary_fallback_placeholder": {
+
+		LangEN: "AI summary step failed (%s) — using a deterministic opening excerpt as placeholder summary; regenerate it later with Fact-check/Resume"},
+	// generateChapterSummaryWithRetryLog gives up because the task hit its
+	// wall-clock deadline while retrying the summary.
+	"log.summary_fail_timeout_detail": {
+
+		LangEN: "Summary step stopped by the task time limit: %v"},
 	"log.chapter_draft_checkpoint_failed": {
 
 		LangEN: "Could not persist the draft checkpoint for this chapter: %v"},
@@ -497,6 +520,15 @@ var messageCatalog = map[string]map[string]string{
 	"log.factcheck_pass": {
 
 		LangEN: "[Fact-check] Passed ✓"},
+	"log.surgical_trope_start": {
+
+		LangEN: "[Surgical repair] Rewriting chapter %d · scene %d (\"%s\") · trope unit %d only — the rest of the chapter stays untouched..."},
+	"log.surgical_trope_failed": {
+
+		LangEN: "[Surgical repair] Failed: %v — the chapter keeps its current text; try again or choose another option"},
+	"log.surgical_trope_done": {
+
+		LangEN: "[Surgical repair] Chapter %d trope unit rewritten and re-verified ✓"},
 	"log.chapter_write_complete": {
 
 		LangEN: "Chapter %d writing complete!"},

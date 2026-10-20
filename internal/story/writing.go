@@ -317,6 +317,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 			conflict := buildWritingConflict(state, i, accumulatedIssues, analysis)
 			lang := cfg.Language
 			conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, lang)
+			finalizeConflict(state, i, conflict, lang)
 			state.PendingWritingConflict = conflict
 			if err := SaveProgress(progressPath, state); err != nil {
 				return err
@@ -431,6 +432,7 @@ func ResumeChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 		ch.Content = criticContent
 		conflict := buildWritingConflict(state, idx, leftover, nil)
 		conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, cfg.Language)
+		finalizeConflict(state, idx, conflict, cfg.Language)
 		state.PendingWritingConflict = conflict
 		if err := SaveProgress(progressPath, state); err != nil {
 			return err
@@ -493,7 +495,12 @@ func FactCheckChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *
 		return fmt.Errorf("chapter #%d cannot be fact-checked in status %q", chapterNum, ch.Status)
 	}
 	if idx != state.CurrentChapterIndex {
-		return fmt.Errorf("chapter #%d is not the current chapter; only the current chapter can be verified", chapterNum)
+		// The sidebar "Re-run critic/fact-check" button targets any
+		// writing/review chapter, not only the frontier one. Promote it to
+		// current so the verification pass can run on it (the previous
+		// frontier keeps its own status), mirroring what the generate and
+		// resume endpoints do for their target chapter.
+		state.CurrentChapterIndex = idx
 	}
 
 	logger.InfoKey("log.chapter_factcheck_rerun", chapterNum)
@@ -509,6 +516,7 @@ func FactCheckChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *
 	if len(leftover) > 0 {
 		conflict := buildWritingConflict(state, idx, leftover, nil)
 		conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, cfg.Language)
+		finalizeConflict(state, idx, conflict, cfg.Language)
 		state.PendingWritingConflict = conflict
 		if err := SaveProgress(progressPath, state); err != nil {
 			return err
@@ -598,23 +606,85 @@ func abortChapterWithDraftCheckpoint(state *Progress, progressPath string, idx i
 	return cause
 }
 
-// finalizeChapterSummary generates the chapter summary and, when that fails,
-// checkpoints the current prose as a resumable draft instead of letting the
-// caller abort the whole chapter. On success it also refreshes the persisted
-// markdown (blocks + content) so a crash right after this point still keeps
-// the finished prose. Returns the summary, or a draft-checkpointed error.
+// summaryFailureReason classifies why the LLM summary step returned nothing,
+// so logs tell the user WHICH condition stopped the step instead of a bare
+// "failed": explicit stop/cancel, task deadline, API outage, or empty answers.
+type summaryFailureReason string
+
+const (
+	summaryFailNone      summaryFailureReason = ""
+	summaryFailCancelled summaryFailureReason = "cancelled"
+	summaryFailTimeout   summaryFailureReason = "timeout"
+	summaryFailAPI       summaryFailureReason = "api_error"
+	summaryFailEmpty     summaryFailureReason = "empty_responses"
+)
+
+// finalizeChapterSummary guarantees the chapter ends up with a NON-EMPTY
+// summary — the history sync downstream depends on it — while never throwing
+// away the expensive prose. Strategy, in order:
+//  1. ask the model for a real summary (with retries);
+//  2. keep the previous summary when regenerating after a critic repair;
+//  3. degrade to a deterministic excerpt of the opening prose.
+//
+// Only a genuine cancellation/stop returns an error (draft checkpointed, so
+// Resume re-runs exactly this step plus verification without rewriting prose).
+// Every other failure logs its precise reason and continues with a fallback.
 func finalizeChapterSummary(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, progressPath string, logger *sse.LogBroadcaster, content string) (string, error) {
-	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
-	if strings.TrimSpace(summary) == "" {
-		return "", abortChapterWithDraftCheckpoint(state, progressPath, idx, logger, "log.chapter_draft_saved", ErrSummaryStepFailed)
-	}
+	summary, reason := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
 	ch := &state.Chapters[idx]
+	if strings.TrimSpace(summary) == "" {
+		if ctx.Err() != nil || reason == summaryFailCancelled || reason == summaryFailTimeout {
+			// Genuine cancellation or task wall-clock deadline: checkpoint the
+			// draft so the user can resume ONLY the cheap remaining steps
+			// (summary → critic/fact-check) instead of losing the chapter.
+			return "", abortChapterWithDraftCheckpoint(state, progressPath, idx, logger, "log.chapter_draft_saved", fmt.Errorf("%w (%s)", ErrSummaryStepFailed, reason))
+		}
+		// API-side failure (fatal error, exhausted retries, empty answers):
+		// the summary MUST still happen for the history sync, so degrade
+		// instead of aborting — the precise reason was already logged by the
+		// retry loop with full API detail.
+		if prev := strings.TrimSpace(ch.Summary); prev != "" {
+			summary = prev
+			logger.WarnKey("log.summary_fallback_previous", ch.Num, string(reason))
+		} else {
+			summary = fallbackSummaryFromContent(content, cfg.Language)
+			logger.WarnKey("log.summary_fallback_placeholder", ch.Num, string(reason))
+		}
+	}
 	ch.Summary = summary
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 	if err := SaveProgress(progressPath, state); err != nil {
 		return "", err
 	}
 	return summary, nil
+}
+
+// fallbackSummaryFromContent builds a deterministic stand-in summary from the
+// first paragraphs of the chapter when the LLM summary step fails outright
+// (API outage, empty responses, exhausted retries). It keeps the history
+// channel non-empty without inventing anything: the model's own opening prose
+// is the most faithful synopsis available.
+func fallbackSummaryFromContent(content, lang string) string {
+	paras, _ := splitBlockParagraphs(content)
+	var kept []string
+	total := 0
+	for _, p := range paras {
+		n := prose.CountProseUnits(p)
+		if total+n > 120 {
+			break
+		}
+		kept = append(kept, strings.TrimSpace(p))
+		total += n
+		if len(kept) >= 3 {
+			break
+		}
+	}
+	excerpt := strings.Join(kept, " … ")
+	excerpt = Truncate(excerpt, 480)
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		return "[Automatic placeholder — the AI summary step failed. Opening of the chapter:] " + excerpt
+	}
+	return "[Marcador automático — el paso de resumen IA falló. Inicio del capítulo:] " + excerpt
 }
 
 // factVerdictFailRe matches an explicit FAIL verdict in JSON form ("result":
@@ -1168,27 +1238,51 @@ func generateChapterSummary(ctx context.Context, apiCfg *config.APIConfig, cfg *
 	return llm.CallAPI(ctx, apiCfg, systemPrompt, userPrompt)
 }
 
-func generateChapterSummaryWithRetryLog(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, content string, logger *sse.LogBroadcaster) string {
+// generateChapterSummaryWithRetryLog asks the model for the chapter summary,
+// retrying transient failures. It returns the summary (empty on failure) plus
+// a precise failure reason — cancelled / timeout / api_error / empty_responses
+// — so both the log stream and finalizeChapterSummary can tell apart "the
+// user stopped the task", "the task hit its wall-clock deadline" and "the API
+// is broken", instead of every outcome collapsing into one opaque abort.
+func generateChapterSummaryWithRetryLog(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, content string, logger *sse.LogBroadcaster) (string, summaryFailureReason) {
 	retryCount := 0
+	emptyAttempts := 0
 	for {
 		if ctx.Err() != nil {
-			return ""
+			if errors.Is(context.Cause(ctx), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", summaryFailTimeout
+			}
+			return "", summaryFailCancelled
 		}
 		summary, err := generateChapterSummary(ctx, apiCfg, cfg, content)
 		if err == nil && strings.TrimSpace(summary) != "" {
-			return summary
+			return summary, summaryFailNone
 		}
 		if err == nil {
 			err = fmt.Errorf("la API devolvió una respuesta vacía")
 		}
-		if llm.IsFatalAPIError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) {
+			return "", summaryFailCancelled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			logger.ErrorKey("log.summary_fail_timeout_detail", err)
+			return "", summaryFailTimeout
+		}
+		if llm.IsFatalAPIError(err) {
 			logger.ErrorKey("log.fatal_no_retry", err)
-			return ""
+			return "", summaryFailAPI
+		}
+		if strings.TrimSpace(summary) == "" && err != nil && err.Error() == "la API devolvió una respuesta vacía" {
+			emptyAttempts++
 		}
 		retryCount++
 		if retryCount > llm.MaxAPIRetries {
-			logger.ErrorKey("log.max_retries_exceeded", fmt.Errorf("se agotaron los %d reintentos de resumen del capítulo", llm.MaxAPIRetries))
-			return ""
+			reason := summaryFailAPI
+			if emptyAttempts > 0 && emptyAttempts >= retryCount-emptyAttempts {
+				reason = summaryFailEmpty
+			}
+			logger.ErrorKey("log.max_retries_exceeded", fmt.Errorf("se agotaron los %d reintentos de resumen del capítulo (%s)", llm.MaxAPIRetries, reason))
+			return "", reason
 		}
 
 		waitTime := llm.RetryWaitTime(retryCount)
@@ -1196,7 +1290,10 @@ func generateChapterSummaryWithRetryLog(ctx context.Context, apiCfg *config.APIC
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
-			return ""
+			if errors.Is(context.Cause(ctx), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", summaryFailTimeout
+			}
+			return "", summaryFailCancelled
 		}
 	}
 }

@@ -296,6 +296,10 @@
       } else if (action === 'revise_from_feedback') {
         // Server started a detached task (202 + saved progress snapshot).
         addToast($t('writing.conflict.reviseFromFeedbackStarted', { num: writingConflict?.chapter_num || ch?.num }), 'info');
+      } else if (action === 'surgical_trope') {
+        // Server started a detached surgical repair + re-verification task.
+        progress.set(await api('GET', '/api/progress'));
+        addToast($t('writing.conflict.surgicalTropeStarted', { num: writingConflict?.chapter_num || ch?.num }), 'info');
       }
     } catch (e) {
       addToast(e.message, 'error');
@@ -621,7 +625,9 @@
           {/if}
           <div class="flex flex-wrap gap-2">
             {#each (writingConflict.suggested_actions || []) as action}
-              {#if action.id === 'edit_outline'}
+              {#if action.id === 'surgical_trope'}
+                <button class="btn btn-success btn-xs" disabled={$taskRunning} title={action.description} on:click={() => resolveWritingConflict('surgical_trope')}>{$t('writing.conflict.surgicalTrope')}</button>
+              {:else if action.id === 'edit_outline'}
                 <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoOutlineForConflict}>{$t('writing.conflict.gotoOutline')}</button>
               {:else if action.id === 'adjust_foreshadow'}
                 <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoForeshadows}>{$t('writing.conflict.gotoForeshadows')}</button>

@@ -427,6 +427,83 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 	}
 	content = strings.Join(parts, "\n\n")
 
+	// recordFinalSceneSpans re-derives every scene's EXACT paragraph span and
+	// trope units over the FINAL joined content. It must run after any length
+	// adjustment too: when a compression/expansion pass changes the paragraph
+	// count, stale ParaStart/ParaEnd fail recordedSceneParaSpans' tiling check
+	// and the viewer silently drops back to one-block-per-paragraph — losing
+	// both the per-trope grouping and the scene chip.
+	recordFinalSceneSpans := func(finalContent string) {
+		finalParas, _ := splitBlockParagraphs(finalContent)
+		if len(finalParas) == 0 {
+			return
+		}
+		// Fast path: the accepted spans still tile the final content exactly
+		// (no length adjustment changed the paragraph count). Only refresh the
+		// trope segmentation of each scene.
+		if paraAcc > 0 && paraAcc == len(finalParas) {
+			stillTiles := true
+			for pos := range plan.Scenes {
+				sc := &plan.Scenes[pos]
+				if sc.ParaEnd <= 0 || sc.ParaStart >= sc.ParaEnd || sc.ParaEnd > len(finalParas) {
+					stillTiles = false
+					break
+				}
+				if pos > 0 && sc.ParaStart != plan.Scenes[pos-1].ParaEnd {
+					stillTiles = false
+					break
+				}
+			}
+			if stillTiles {
+				for pos := range plan.Scenes {
+					sc := &plan.Scenes[pos]
+					if sc.ParaEnd <= 0 {
+						continue
+					}
+					sceneText := strings.Join(finalParas[sc.ParaStart:sc.ParaEnd], "\n\n")
+					tropesOfScene(sceneText, sc)
+				}
+				return
+			}
+		}
+		// Slow path: a compression/expansion pass rewrote paragraphs. Re-anchor
+		// each accepted scene part inside the final content by fuzzy text match
+		// so ParaStart/ParaEnd stay exact instead of going stale. Parts that
+		// cannot be located leave their old (stale) bookkeeping; the budget
+		// fallback in sceneParaSpans then covers them safely.
+		reanchored := 0
+		cum := 0
+		for pos, part := range parts {
+			if pos >= len(plan.Scenes) {
+				break
+			}
+			partParas, _ := splitBlockParagraphs(part)
+			if len(partParas) == 0 {
+				continue
+			}
+			n := locatePartSpan(finalParas, cum, partParas)
+			if n <= 0 {
+				continue
+			}
+			sc := &plan.Scenes[pos]
+			sc.ParaStart = cum
+			sc.ParaEnd = cum + n
+			cum += n
+			reanchored++
+		}
+		if reanchored == 0 || cum == 0 {
+			return
+		}
+		for pos := range plan.Scenes {
+			sc := &plan.Scenes[pos]
+			if sc.ParaEnd <= 0 || sc.ParaEnd > len(finalParas) || sc.ParaStart >= sc.ParaEnd {
+				continue
+			}
+			sceneText := strings.Join(finalParas[sc.ParaStart:sc.ParaEnd], "\n\n")
+			tropesOfScene(sceneText, sc)
+		}
+	}
+
 	// Final whole-chapter verification (90%–180% of the configured target).
 	total := prose.CountProseUnits(content)
 	if logger != nil {
@@ -436,6 +513,7 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 		if logger != nil {
 			logger.SuccessKey("log.chapter_total_ok", total, minLen, maxLen)
 		}
+		recordFinalSceneSpans(content)
 		return content, true
 	}
 	if logger != nil {
@@ -448,6 +526,7 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 	if err == nil && adjusted != "" {
 		maybeUpdateBestDraft(&bestScore, &score, adjusted, minLen, maxLen, target)
 	}
+	recordFinalSceneSpans(bestScore)
 	final := prose.CountProseUnits(bestScore)
 	if final >= minLen && final <= maxLen {
 		if logger != nil {
@@ -464,4 +543,68 @@ func maxOf(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// locatePartSpan finds how many paragraphs of finalParas (searching forward
+// from hint) correspond to one accepted scene part after a whole-chapter
+// length adjustment. It matches on paragraph "shape" — the first/last few
+// words of each paragraph — so compressions that reword sentences in place
+// still align, while inserted/deleted paragraphs shift the window. Returns 0
+// when no plausible run is found (caller keeps stale bookkeeping and lets the
+// budget fallback take over).
+func locatePartSpan(finalParas []string, hint int, partParas []string) int {
+	n := len(partParas)
+	if n == 0 || hint >= len(finalParas) {
+		return 0
+	}
+	key := func(p string) string {
+		fields := strings.Fields(strings.ToLower(p))
+		if len(fields) == 0 {
+			return ""
+		}
+		head := strings.Join(fields[:min(3, len(fields))], " ")
+		tail := strings.Join(fields[max(0, len(fields)-3):], " ")
+		return head + "|" + tail
+	}
+	partKeys := make([]string, n)
+	for i, p := range partParas {
+		partKeys[i] = key(p)
+	}
+	scoreAt := func(start int) int {
+		score := 0
+		for i := 0; i < n && start+i < len(finalParas); i++ {
+			k := key(finalParas[start+i])
+			if k == partKeys[i] {
+				score += 2
+			} else if k != "" && partKeys[i] != "" && (strings.HasPrefix(k, partKeys[i][:min(len(partKeys[i]), 8)]) || strings.Contains(k, partKeys[i])) {
+				score++
+			}
+		}
+		return score
+	}
+	best, bestScore := 0, 0
+	limit := len(finalParas) - n
+	if limit < hint {
+		limit = hint
+	}
+	for s := hint; s <= limit; s++ {
+		sc := scoreAt(s)
+		if sc > bestScore {
+			bestScore, best = sc, s
+		}
+		// Exact match: stop early, no need to scan further.
+		if bestScore == 2*n {
+			break
+		}
+	}
+	if bestScore < n { // less than half the paragraphs matched → unreliable
+		return 0
+	}
+	// The located span may extend past the part's own paragraph count when the
+	// adjuster merged text; clamp it so consecutive parts keep tiling.
+	end := best + n
+	if end > len(finalParas) {
+		end = len(finalParas)
+	}
+	return end - hint
 }
