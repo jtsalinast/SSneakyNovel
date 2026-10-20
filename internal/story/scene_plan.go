@@ -54,6 +54,14 @@ type Scene struct {
 	// beat-level rewrites.
 	BlockStart int `json:"block_start,omitempty"`
 	BlockEnd   int `json:"block_end,omitempty"`
+	// ParaStart / ParaEnd are the scene's EXACT absolute content-paragraph span
+	// ([start,end) over splitBlockParagraphs(ch.Content)) recorded by the
+	// sequential writer when the scene is accepted. syncSceneBlocks prefers
+	// these spans over proportional budget guesses, so story-blocks group per
+	// trope inside each scene and the viewer renders the scene chip between
+	// scenes. Zero values mean "not recorded" (older data or unplanned writes).
+	ParaStart int `json:"para_start,omitempty"`
+	ParaEnd   int `json:"para_end,omitempty"`
 }
 
 // ScenePlan is the editable beat sheet for one chapter. Persisted on the

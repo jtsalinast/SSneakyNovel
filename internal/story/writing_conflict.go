@@ -892,6 +892,123 @@ func splitFactCheckIssues(issues string) []string {
 	return dedupeArcIssues(mergeUniqueIssues(parts))
 }
 
+// extractQuotedExcerpt returns the first quoted passage inside an issue
+// wording (single or double quotes, ≥4 chars — the critic quotes the offending
+// prose verbatim). Used to locate the owning trope unit for surgical repairs.
+var conflictQuoteRe = regexp.MustCompile("'([^']{4,})'|\u201c([^\u201d]{4,})\u201d|\"([^\"]{4,})\"")
+
+func extractQuotedExcerpt(issue string) string {
+	for _, m := range conflictQuoteRe.FindAllStringSubmatch(issue, -1) {
+		for _, g := range m[1:] {
+			if g != "" {
+				return strings.TrimSpace(g)
+			}
+		}
+	}
+	return ""
+}
+
+// attachConflictSceneTargets resolves, for every issue wording, the
+// (scene position, trope-unit index) whose prose contains the quoted excerpt.
+// Unlocatable issues get (-1,-1) so the returned slice always aligns 1:1 with
+// issues. Purely lexical — no extra LLM call.
+func attachConflictSceneTargets(state *Progress, idx int, issues []string) [][2]int {
+	out := make([][2]int, 0, len(issues))
+	if state == nil || idx < 0 || idx >= len(state.Chapters) {
+		for range issues {
+			out = append(out, [2]int{-1, -1})
+		}
+		return out
+	}
+	ch := &state.Chapters[idx]
+	for _, it := range issues {
+		q := extractQuotedExcerpt(it)
+		if q == "" || ch.ScenePlan == nil || strings.TrimSpace(ch.Content) == "" {
+			out = append(out, [2]int{-1, -1})
+			continue
+		}
+		pos, ti, ok := locateTropeUnitInContent(ch, ch.Content, q)
+		if !ok {
+			out = append(out, [2]int{-1, -1})
+			continue
+		}
+		out = append(out, [2]int{pos, ti})
+	}
+	return out
+}
+
+// ensureSurgicalAction adds the "repair only this trope unit" action as the
+// FIRST suggested option whenever the conflict carries at least one locatable
+// scene target — a single-unit fix is far cheaper than rewriting the chapter.
+func ensureSurgicalAction(actions []ConflictActionOption, targets [][2]int, lang string) []ConflictActionOption {
+	locatable := false
+	for _, t := range targets {
+		if t[0] >= 0 {
+			locatable = true
+			break
+		}
+	}
+	if !locatable {
+		return actions
+	}
+	for _, a := range actions {
+		if a.ID == "surgical_trope" {
+			return actions
+		}
+	}
+	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
+	label := "Editar solo este tropo"
+	desc := "Reescribe únicamente la unidad de tropo donde vive el problema; el resto del capítulo queda intacto"
+	if en {
+		label = "Edit only this trope"
+		desc = "Rewrite just the trope unit carrying the problem; the rest of the chapter stays untouched"
+	}
+	out := make([]ConflictActionOption, 0, len(actions)+1)
+	out = append(out, ConflictActionOption{ID: "surgical_trope", Label: label, Description: desc})
+	return append(out, actions...)
+}
+
+// finalizeConflict decorates a freshly built conflict with per-issue trope
+// locations and the surgical repair action. Callers must invoke it AFTER the
+// chapter's final content/blocks are in state (so quote→unit matching works).
+func finalizeConflict(state *Progress, idx int, c *WritingConflict, lang string) {
+	if c == nil {
+		return
+	}
+	c.SceneTargets = attachConflictSceneTargets(state, idx, c.Issues)
+	c.SuggestedActions = ensureSurgicalAction(c.SuggestedActions, c.SceneTargets, lang)
+}
+
+// SurgicalTropeRepair rewrites ONLY the trope unit (scenePos, beatIdx) of the
+// conflicted chapter via the same prompt/length-guard machinery the critic's
+// automatic repair pass uses, then re-syncs scene-aware blocks and persists
+// progress. The rest of the chapter stays byte-identical. Returns the new
+// full content.
+func SurgicalTropeRepair(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, idx int, scenePos, beatIdx int, feedback string, settings *ProjectSettings, logger *sse.LogBroadcaster) (string, error) {
+	if err := llm.ValidateConfig(apiCfg); err != nil {
+		return "", err
+	}
+	if idx < 0 || idx >= len(state.Chapters) {
+		return "", fmt.Errorf("índice de capítulo inválido")
+	}
+	ch := &state.Chapters[idx]
+	if strings.TrimSpace(ch.Content) == "" {
+		return "", fmt.Errorf("chapter %d has no generated content yet", ch.Num)
+	}
+	newContent, err := rewriteSceneTrope(ctx, apiCfg, cfg, state, idx, settings, scenePos, beatIdx, feedback, logger)
+	if err != nil {
+		return "", err
+	}
+	ch = &state.Chapters[idx]
+	ch.Content = newContent
+	SyncChapterBlocksSceneAware(ch, newContent)
+	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
+	if err := SaveProgress(progressPath, state); err != nil {
+		return "", err
+	}
+	return newContent, nil
+}
+
 // ResolveForceReviewIndex picks the chapter to promote writing→review:
 // pending conflict chapter if set, otherwise the writing frontier chapter.
 func ResolveForceReviewIndex(state *Progress) (int, error) {
@@ -1020,11 +1137,10 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 	logger.InfoKey("log.prose_revised", prose.CountProseUnits(revisedContent))
 
 	logger.StepInfo(2, 4, "Resumiendo este capítulo para el historial...")
-	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
-	if summary == "" {
-		return fmt.Errorf("summary generation failed or was canceled")
+	if _, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, idx, progressPath, logger, ch.Content); err != nil {
+		return err
 	}
-	ch.Summary = summary
+	ch = &state.Chapters[idx]
 	logger.InfoKey("log.summary_done")
 
 	logger.StepInfo(3, 4, "Verifying this chapter against established facts...")
@@ -1044,6 +1160,7 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 		}
 		conflict := buildWritingConflict(state, idx, newIssues, analysis)
 		conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, cfg.Language)
+		finalizeConflict(state, idx, conflict, cfg.Language)
 		state.PendingWritingConflict = conflict
 		if err := SaveProgress(progressPath, state); err != nil {
 			return err

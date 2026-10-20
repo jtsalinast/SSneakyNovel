@@ -296,6 +296,10 @@
       } else if (action === 'revise_from_feedback') {
         // Server started a detached task (202 + saved progress snapshot).
         addToast($t('writing.conflict.reviseFromFeedbackStarted', { num: writingConflict?.chapter_num || ch?.num }), 'info');
+      } else if (action === 'surgical_trope') {
+        // Server started a detached surgical repair + re-verification task.
+        progress.set(await api('GET', '/api/progress'));
+        addToast($t('writing.conflict.surgicalTropeStarted', { num: writingConflict?.chapter_num || ch?.num }), 'info');
       }
     } catch (e) {
       addToast(e.message, 'error');
@@ -476,6 +480,41 @@
     } catch (e) { addToast(e.message, 'error'); }
   }
 
+  // —— Draft recovery actions (resume / fact-check / reset) ————————
+  // When a chapter generation was interrupted AFTER writing its prose (the
+  // summary or critic step failed, the task deadline hit, or the user stopped
+  // it), the backend keeps the prose as a resumable draft (draft_saved_at).
+  // These buttons let the author finish, re-verify or discard that draft
+  // without regenerating the expensive prose.
+  async function doResumeDraft() {
+    if (!ch) return;
+    try {
+      await api('POST', `/api/chapters/${ch.num}/resume`);
+      addToast($t('writing.toasts.resumeStarted', { num: ch.num }), 'info');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+  async function doFactCheckRerun() {
+    if (!ch) return;
+    try {
+      await api('POST', `/api/chapters/${ch.num}/factcheck`);
+      addToast($t('writing.toasts.factcheckStarted', { num: ch.num }), 'info');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+  function doResetChapter() {
+    if (!ch) return;
+    const num = ch.num;
+    confirmModal.set({
+      message: $t('writing.chapter.resetAsk', { num }),
+      onConfirm: async () => {
+        try {
+          progress.set(await api('POST', `/api/chapters/${num}/reset`));
+          await loadChapterContent?.(num);
+          addToast($t('writing.toasts.resetDone', { num }), 'success');
+        } catch (e) { addToast(e.message, 'error'); }
+      },
+    });
+  }
+
   async function copyContent() {
     if (!chapterContent) return;
     try {
@@ -586,7 +625,9 @@
           {/if}
           <div class="flex flex-wrap gap-2">
             {#each (writingConflict.suggested_actions || []) as action}
-              {#if action.id === 'edit_outline'}
+              {#if action.id === 'surgical_trope'}
+                <button class="btn btn-success btn-xs" disabled={$taskRunning} title={action.description} on:click={() => resolveWritingConflict('surgical_trope')}>{$t('writing.conflict.surgicalTrope')}</button>
+              {:else if action.id === 'edit_outline'}
                 <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoOutlineForConflict}>{$t('writing.conflict.gotoOutline')}</button>
               {:else if action.id === 'adjust_foreshadow'}
                 <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoForeshadows}>{$t('writing.conflict.gotoForeshadows')}</button>
@@ -617,7 +658,7 @@
       </div>
     {/if}
 
-    <!-- Row: chapter index (left) + foreshadow tracker (right) -->
+    <!-- Row: chapter index (left) + scene-plan access (right) -->
     <div id="WritingMetaRow" class="grid grid-cols-[minmax(0,1fr)_345px] gap-3 items-start">
       <div id="ChapterSidebarList" class="card bg-base-200 overflow-y-auto max-h-[calc(100vh-280px)] min-w-0">
         <ul class="menu menu-sm p-0 w-full">
@@ -627,6 +668,9 @@
                 <span class="w-2 h-2 rounded-full shrink-0 {statusMeta[c.status]?.dot || ''}"></span>
                 <span class="text-base-content/65 w-6 shrink-0 text-right">{c.num}</span>
                 <span class="flex-1 text-left truncate text-sm">{c.title}</span>
+                {#if c.draft_saved_at && c.status !== 'accepted'}
+                  <span class="badge badge-warning badge-outline badge-xs shrink-0" title={$t('writing.chapter.draftBadgeTip')}>{$t('writing.chapter.draftBadge')}</span>
+                {/if}
                 {#if i === currentIdx && c.status !== 'accepted'}
                   <span class="badge badge-primary badge-xs shrink-0">{$t('writing.tag.current')}</span>
                 {/if}
@@ -636,8 +680,18 @@
         </ul>
       </div>
 
+      <div id="CardSection_ScenePlanAccess" class="card bg-base-200 min-w-0">
+        <div class="card-body p-4 gap-2">
+          <h3 class="font-medium text-sm">{$t('writing.scenePlan.accessTitle')}</h3>
+          <p class="text-xs text-base-content/65">{$t('writing.scenePlan.accessHint', { num: ch?.num ?? '-' })}</p>
+          <button class="btn btn-outline btn-xs self-start" on:click={openScenePlanEditor} disabled={$taskRunning || !ch} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
+        </div>
+      </div>
+    </div><!-- /WritingMetaRow -->
+
+    <!-- Foreshadow tracker: own row below the chapter index -->
     {#if foreshadows.length > 0}
-      <div id="CardSection_ForeshadowSummary" class="card bg-base-200 min-w-0">
+      <div id="CardSection_ForeshadowSummary" class="card bg-base-200 mt-3">
         <div class="card-body p-4 gap-2">
           <div class="flex items-center justify-between gap-2">
             <h3 class="font-medium text-sm">{$t('writing.fs.title')}</h3>
@@ -661,14 +715,13 @@
         </div>
       </div>
     {:else}
-      <div id="CardSection_ForeshadowSetup" class="card bg-base-200 min-w-0">
+      <div id="CardSection_ForeshadowSetup" class="card bg-base-200 mt-3">
         <div class="card-body p-4 flex items-center justify-between gap-2">
           <p class="text-sm text-base-content/65">{$t('writing.fs.none')}</p>
           <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.setup')}</button>
         </div>
       </div>
     {/if}
-    </div><!-- /WritingMetaRow -->
 
     <!-- Chapter area -->
     <div id="WritingWorkspace" style="min-height:400px">
@@ -724,9 +777,9 @@
                         {#if sceneMarkerBefore(chapterBlocks, bi)}
                           {@const m = sceneMarkerBefore(chapterBlocks, bi)}
                           <div class="scene-marker-row flex justify-center -my-1" aria-hidden="true">
-                            <span class="scene-marker-chip group inline-flex items-center gap-1 rounded-full bg-base-content/5 px-2 py-0.5 select-none pointer-events-auto cursor-default">
-                              <span class="scene-marker-text text-[10px] font-medium text-white/[0.07] tracking-wider uppercase select-none">{m.pos}</span>
-                              <span class="opacity-0 group-hover:opacity-100 transition-opacity"><InfoTip text={sceneMarkerTip(m)} label={$t('writing.blockSceneMarker', [m.pos])} /></span>
+                            <span class="scene-marker-chip group inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 select-none pointer-events-auto cursor-default">
+                              <span class="scene-marker-text text-[10px] font-semibold text-primary/90 tracking-wider uppercase select-none">{$t('writing.blockSceneMarker', [m.pos])}</span>
+                              <span class="opacity-60 group-hover:opacity-100 transition-opacity"><InfoTip text={sceneMarkerTip(m)} label={$t('writing.blockSceneMarker', [m.pos])} /></span>
                             </span>
                           </div>
                         {/if}
@@ -792,11 +845,16 @@
                   <button class="btn btn-primary btn-sm" on:click={doGenerate} disabled={$taskRunning}>{$t('writing.btn.generate')}</button>
                   <button class="btn btn-outline btn-sm" on:click={openScenePlanEditor} disabled={$taskRunning} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
                 {/if}
+                {#if ch.draft_saved_at && !isStreamingThis}
+                  <button class="btn btn-warning btn-sm" on:click={doResumeDraft} disabled={$taskRunning} title={$t('writing.chapter.resumeTip')}>{$t('writing.chapter.resume')}</button>
+                  <button class="btn btn-error btn-outline btn-sm" on:click={doResetChapter} disabled={$taskRunning}>{$t('writing.chapter.reset')}</button>
+                {/if}
                 {#if ch.status === 'review' && isCurrent}
                   <button class="btn btn-success btn-sm" on:click={doConfirm} disabled={$taskRunning}>{$t('writing.btn.confirm')}</button>
                 {/if}
                 {#if hasContent && ch.status !== 'writing'}
                   <button class="btn btn-outline btn-sm" on:click={() => showRevise = !showRevise} disabled={$taskRunning}>{$t('writing.btn.revise')}</button>
+                  <button class="btn btn-outline btn-sm" on:click={doFactCheckRerun} disabled={$taskRunning} title={$t('writing.chapter.factcheckTip')}>{$t('writing.chapter.factcheck')}</button>
                   <button class="btn btn-outline btn-sm" on:click={() => { showKnowledge = !showKnowledge; showRevise = true; if (!showKnowledge) selectedSettings = []; }} disabled={$taskRunning || savingKnowledge}>{$t('writing.knowledge.title')}</button>
                   {#if hasPolishSkills}
                     <button class="btn btn-outline btn-sm" on:click={doPolish} disabled={$taskRunning} title={$t('writing.btn.polish.tip')}>{$t('writing.btn.polish')}</button>

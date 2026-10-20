@@ -99,16 +99,25 @@ func paraIsDialogue(p string) bool {
 // Returns the beat texts (never empty entries) and their [start,end)
 // paragraph ranges over the scene's paragraph list.
 func splitTropes(sceneProse string) ([]string, [][2]int) {
-	paras, _ := paragraphUnits(sceneProse)
+	paras, sep := paragraphUnits(sceneProse)
+	return splitTropesFromParas(paras, sceneProse, sep)
+}
+
+// splitTropesFromParas is the paragraph-list core of splitTropes. It works on
+// an ALREADY-SPLIT paragraph slice (so callers that segmented content with a
+// different separator — e.g. single newlines — keep their own join separator)
+// and returns beat texts joined with sep plus their [start,end) paragraph
+// ranges. Break-marker paragraphs are dropped from the unit TEXT but the
+// ranges still cover them (each break marker belongs to the span that ends at
+// it, i.e. flush(i+1)) so consecutive ranges tile the whole input without
+// gaps — gaps used to make recordedSceneParaSpans reject fresh bookkeeping
+// and silently fall back to one-block-per-paragraph.
+func splitTropesFromParas(paras []string, sceneProse, sep string) ([]string, [][2]int) {
 	if len(paras) == 0 {
 		return nil, nil
 	}
-	isBreak := func(p string) bool {
-		switch strings.TrimSpace(p) {
-		case "---", "----", "***", "⁂", "* * *":
-			return true
-		}
-		return false
+	if sep == "" {
+		sep = "\n\n"
 	}
 	var beats []string
 	var ranges [][2]int
@@ -118,18 +127,26 @@ func splitTropes(sceneProse string) ([]string, [][2]int) {
 		if end <= start {
 			return
 		}
-		text := strings.Join(paras[start:end], "\n\n")
-		if strings.TrimSpace(text) == "" {
-			return
+		// Unit text excludes pure break-marker paragraphs; the span covers them.
+		var kept []string
+		for _, p := range paras[start:end] {
+			if paraIsBreak(p) {
+				continue
+			}
+			kept = append(kept, p)
 		}
-		beats = append(beats, text)
-		ranges = append(ranges, [2]int{start, end})
+		text := strings.Join(kept, sep)
+		if strings.TrimSpace(text) != "" {
+			beats = append(beats, text)
+			ranges = append(ranges, [2]int{start, end})
+		}
 		start = end
 	}
 	for i := 1; i < len(paras); i++ {
-		if isBreak(paras[i]) {
-			flush(i)
-			start = i + 1
+		if paraIsBreak(paras[i]) {
+			// Hard break: close the current beat INCLUDING the marker line in
+			// its span so no paragraph falls between units.
+			flush(i + 1)
 			if start < len(paras) {
 				mode = paraIsDialogue(paras[start])
 			}
@@ -142,37 +159,54 @@ func splitTropes(sceneProse string) ([]string, [][2]int) {
 		}
 	}
 	flush(len(paras))
-	// Merge a trailing singleton beat into its predecessor so every beat but
-	// the first holds at least two paragraphs when possible.
-	for len(beats) > 1 && paragraphCount(beats[len(beats)-1]) < tropeMinParagraphs {
+	// Merge tiny trailing beats into their predecessor so a trope unit is
+	// never a single stray paragraph when merging is possible. Merging keeps
+	// the spans contiguous (prev.lo .. last.hi), preserving the tiling.
+	for len(beats) > 1 && paragraphCountWithSep(beats[len(beats)-1], sep) < tropeMinParagraphs {
 		last := beats[len(beats)-1]
 		prev := beats[len(beats)-2]
-		beats = beats[:len(beats)-2]
-		if len(ranges) >= 2 {
-			ranges = ranges[:len(ranges)-2]
-		} else {
-			ranges = nil
-		}
-		merged := prev + "\n\n" + last
-		if len(ranges) == 0 {
-			beats = append(beats, merged)
-			ranges = append(ranges, [2]int{0, len(paras)})
-		} else {
-			r := ranges[len(ranges)-1]
-			r[1] = r[0] + paragraphCount(merged)
-			ranges[len(ranges)-1] = r
-			beats = append(beats, merged)
-		}
+		beats = append(beats[:len(beats)-2], prev+sep+last)
+		lo := ranges[len(ranges)-2][0]
+		hi := ranges[len(ranges)-1][1]
+		ranges = append(ranges[:len(ranges)-2], [2]int{lo, hi})
 	}
 	if len(beats) == 0 {
 		return []string{strings.TrimSpace(sceneProse)}, [][2]int{{0, len(paras)}}
 	}
+	if n := len(ranges); n > 0 && ranges[n-1][1] != len(paras) {
+		ranges[n-1][1] = len(paras) // absorb any skipped empty tail
+	}
 	return beats, ranges
+}
+
+// paraIsBreak reports whether a paragraph is only a scene-break marker.
+func paraIsBreak(p string) bool {
+	switch strings.TrimSpace(p) {
+	case "---", "----", "***", "⁂", "* * *":
+		return true
+	}
+	return false
 }
 
 func paragraphCount(text string) int {
 	p, _ := paragraphUnits(text)
 	return len(p)
+}
+
+func paragraphCountWithSep(text, sep string) int {
+	if sep == "" {
+		sep = "\n\n"
+	}
+	n := 1
+	for i := 0; i+len(sep) <= len(text); {
+		if strings.HasPrefix(text[i:], sep) {
+			n++
+			i += len(sep)
+			continue
+		}
+		i++
+	}
+	return n
 }
 
 // sceneRangeForBlock maps a block index to the planned scene that owns it,
@@ -273,6 +307,14 @@ func buildTropeUnits(beats []string, ranges [][2]int) []TropeUnit {
 // them on Scene.TropeUnits when the plan object is available.
 func tropesOfScene(sceneText string, sc *Scene) []TropeUnit {
 	beats, ranges := splitTropes(sceneText)
+	return applyTropeSegmentation(sc, beats, ranges)
+}
+
+// applyTropeSegmentation records a pre-computed trope segmentation (beats +
+// paragraph ranges produced by splitTropesFromParas over the scene's final
+// paragraph slice) on the scene. Same contract as tropesOfScene but avoids
+// re-splitting with a possibly different separator.
+func applyTropeSegmentation(sc *Scene, beats []string, ranges [][2]int) []TropeUnit {
 	units := buildTropeUnits(beats, ranges)
 	if sc != nil {
 		sc.TropeRanges = ranges
