@@ -1427,6 +1427,8 @@ function randomizeStoryParams() {
       const p = await api('GET', '/api/novel-params');
       novelParamsPayload = p;
       novelParamsTick++;
+      if (p.subgenre_catalogs && typeof p.subgenre_catalogs === 'object') SUBGENRE_CATALOGS = p.subgenre_catalogs;
+      if (p.subgenre_parents && typeof p.subgenre_parents === 'object') SUBGENRE_PARENT_TABLE = p.subgenre_parents;
       if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
       if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
       if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;

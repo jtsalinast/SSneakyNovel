@@ -38,6 +38,10 @@ type ChapterState struct {
 	Blocks      []Block `json:"blocks,omitempty"`
 	NextBlockID int     `json:"next_block_id,omitempty"`
 	BlockSep    string  `json:"block_sep,omitempty"`
+	// ScenePlan is the editable beat sheet generated before writing this
+	// chapter (see scene_plan.go). nil until the author (or auto mode)
+	// requests a plan. Persisted with the chapter so it survives reloads.
+	ScenePlan *ScenePlan `json:"scene_plan,omitempty"`
 }
 
 type ForeshadowStatus string
@@ -132,6 +136,17 @@ type Progress struct {
 	// OutlineAnalysis is the last bestseller-editor pass over the full outline
 	// (POST /api/outline/analyze); nil until the author runs an analysis.
 	OutlineAnalysis *OutlineAnalysisReport `json:"outline_analysis,omitempty"`
+	// AutoScenePlan enables automatic scene-plan approval: when true, chapter
+	// generation plans its scenes and proceeds to write without waiting for
+	// the author to review/edit the plan in the UI. When false (default),
+	// GenerateChapterAction pauses with ScenePlanPendingError until the plan
+	// is approved via the API.
+	AutoScenePlan bool `json:"auto_scene_plan,omitempty"`
+	// PendingScenePlanChapter is the chapter number whose scene plan awaits
+	// author review (set when GenerateChapterAction pauses with
+	// ScenePlanPendingError; cleared once writing proceeds). The UI uses it to
+	// auto-open the plan editor, surviving reloads like PendingWritingConflict.
+	PendingScenePlanChapter int `json:"pending_scene_plan_chapter,omitempty"`
 }
 
 // PrePlanning is the book-level plan generated before any outline batch: total

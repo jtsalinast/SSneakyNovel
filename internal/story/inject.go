@@ -817,10 +817,24 @@ func endingPrompt(b OutlineBatch, num int, lang string) string {
 	if b.EndingIntent == "" && !b.PlannedFinal {
 		return ""
 	}
+	// The "CLOSES THE BOOK" distribution instructions are for the FINAL chapter
+	// only. Injected verbatim into earlier chapters of the same batch they made
+	// the writer believe the book ends now — one cause of cross-chapter plot
+	// confusion (rushing resolutions or raiding later chapters' material). For
+	// non-final chapters emit a short serialization reminder instead.
+	// num == 0 means batch PLANNING (outline generation): there is no "current
+	// chapter" yet, so the full ending block must be included regardless.
+	isFinalChapter := num == 0 || num >= b.EndCh
 	requirements := truncateToRunes(strings.TrimSpace(b.EndingRequirements), maxEndingRequirementsRunes)
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		if !b.PlannedFinal {
+	serializationNote := func() string {
+		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 			return "\n[Ending control] Continue serialization. Close the local beat while leaving a natural next step; do not finish the entire book.\n"
+		}
+		return "\n[Control de final] Continúa la serialización. Cierra el conflicto local dejando un paso natural hacia el siguiente; no termines todo el libro.\n"
+	}
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		if !b.PlannedFinal || !isFinalChapter {
+			return serializationNote()
 		}
 		s := fmt.Sprintf("\n[Ending control — this batch CLOSES THE BOOK at chapter %d]\n"+
 			"Distribute the remaining narrative across exactly these chapters so the story reaches its conclusion only in chapter %d. Never resolve the main conflict earlier.\n"+
@@ -842,8 +856,8 @@ func endingPrompt(b OutlineBatch, num int, lang string) string {
 		}
 		return s
 	}
-	if !b.PlannedFinal {
-		return "\n[Control de final] Continúa la serialización. Cierra el conflicto local dejando un paso natural hacia el siguiente; no termines todo el libro.\n"
+	if !b.PlannedFinal || !isFinalChapter {
+		return serializationNote()
 	}
 	s := fmt.Sprintf("\n[Control de final — este lote CIERRA EL LIBRO en el capítulo %d]\n"+
 		"Distribuye el desenlace exactamente entre estos capítulos de modo que la historia concluya solo en el capítulo %d. Nunca resuelvas el conflicto principal antes.\n"+

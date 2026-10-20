@@ -1,9 +1,16 @@
 package story
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"showmethestory/internal/config"
 	"showmethestory/internal/prose"
+	"showmethestory/internal/sse"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -104,6 +111,153 @@ func TestMaybeUpdateBestDraft(t *testing.T) {
 
 // The hard 90% floor must reject a 1050-word draft for a 4000-word target and
 // prefer a closer-to-band draft.
+// --- continuation / truncation helpers -------------------------------------
+
+func TestIsLikelyTruncatedFragment(t *testing.T) {
+	minLen, maxLen := calcChapterLengthRange(4000) // 3600–6000
+	// A fragment well under 40% of the floor is treated as truncated output.
+	short := strings.Repeat("word ", 1200)
+	if !isLikelyTruncatedFragment(short, minLen, maxLen, 4000) {
+		t.Fatal("1200-word draft for a 4000 target must be flagged as truncated")
+	}
+	// 1500 words ≥ 40% of 3600 (1440): not a fragment, just a short draft.
+	longish := strings.Repeat("word ", 1500)
+	if isLikelyTruncatedFragment(longish, minLen, maxLen, 4000) {
+		t.Fatal("1500-word draft should not be flagged as truncated fragment")
+	}
+	// In-band drafts are never fragments.
+	ok := strings.Repeat("word ", 4000)
+	if isLikelyTruncatedFragment(ok, minLen, maxLen, 4000) {
+		t.Fatal("in-band draft must not be flagged as truncated")
+	}
+}
+
+func TestSceneAnchorFragment(t *testing.T) {
+	sc := Scene{Title: "The Market Confrontation", Description: "Kira accuses Dorian in front of the crowd"}
+	got := sceneAnchorFragment(sc)
+	if got != "the market confrontation" {
+		t.Fatalf("anchor from title = %q, want %q", got, "the market confrontation")
+	}
+	empty := Scene{Description: "A long description with many words in it about a duel at dawn"}
+	got = sceneAnchorFragment(empty)
+	if got != "a long description with many" {
+		t.Fatalf("anchor from description = %q, want first 5 words", got)
+	}
+	if sceneAnchorFragment(Scene{}) != "" {
+		t.Fatal("empty scene must produce empty anchor")
+	}
+}
+
+func TestRemainingScenesFromPlan(t *testing.T) {
+	plan := &ScenePlan{Scenes: []Scene{
+		{ID: 1, Title: "Dawn patrol", WordsBudget: 800},
+		{ID: 2, Title: "Broken signal", WordsBudget: 1200},
+		{ID: 3, Title: "The ambush", WordsBudget: 1200},
+		{ID: 4, Title: "Aftermath silence", WordsBudget: 800},
+	}}
+	// Draft covers scenes 1 and 2 only → 3 and 4 remain.
+	partial := "…dawn patrol begins here… then the broken signal reaches camp and everyone freezes…"
+	remaining := remainingScenesFromPlan(plan, partial)
+	if len(remaining) != 2 || remaining[0].ID != 3 || remaining[1].ID != 4 {
+		t.Fatalf("remaining = %+v, want scenes 3 and 4", remaining)
+	}
+	// Draft covers everything → nothing remains.
+	full := partial + "…the ambush unfolds violently… aftermath silence falls over the ridge…"
+	if rem := remainingScenesFromPlan(plan, full); rem != nil {
+		t.Fatalf("expected no remaining scenes, got %+v", rem)
+	}
+	// Anchors mostly missing (>2/3) → assume everything after scene 1 remains.
+	nolinks := "some unrelated prose that matches none of the anchors at all"
+	if rem := remainingScenesFromPlan(plan, nolinks); len(rem) != 3 || rem[0].ID != 2 {
+		t.Fatalf("fallback remaining = %+v, want scenes 2..4", rem)
+	}
+	// Single-scene or nil plans cannot drive continuation.
+	if rem := remainingScenesFromPlan(&ScenePlan{Scenes: []Scene{{ID: 1}}}, partial); rem != nil {
+		t.Fatal("one-scene plan must return nil")
+	}
+	if rem := remainingScenesFromPlan(nil, partial); rem != nil {
+		t.Fatal("nil plan must return nil")
+	}
+}
+
+func TestFormatSceneContinuationBlock(t *testing.T) {
+	remaining := []Scene{
+		{ID: 3, Title: "The ambush", Description: "Raiders cut off the convoy", WordsBudget: 1200},
+		{ID: 4, Title: "", Description: "Silence after the fight", WordsBudget: 800},
+	}
+	en := formatSceneContinuationBlock(1500, 2000, remaining, "en")
+	for _, want := range []string{"CONTINUATION", "~1500 words", "Scene 3 (1200 words): The ambush", "Scene 4 (800 words)", "approximately 2000 words"} {
+		if !strings.Contains(en, want) {
+			t.Fatalf("EN block missing %q\n---\n%s", want, en)
+		}
+	}
+	es := formatSceneContinuationBlock(1500, 2000, remaining, "es")
+	for _, want := range []string{"CONTINUACIÓN", "Escena 3 (1200 palabras)", "Escena 4 (800 palabras)"} {
+		if !strings.Contains(es, want) {
+			t.Fatalf("ES block missing %q\n---\n%s", want, es)
+		}
+	}
+}
+
+func TestContentOverlapRatio(t *testing.T) {
+	lineA := "The rain hammered the tin roof while Mara counted the seconds aloud."
+	lineB := "She had promised him she would wait until the very last bell rang out."
+	existing := lineA + "\n\nSome other prose entirely about the harbor lights flickering on."
+	// Fresh segment: zero overlap.
+	if r := contentOverlapRatio(existing, lineB); r != 0 {
+		t.Fatalf("overlap for fresh text = %v, want 0", r)
+	}
+	// Exact restatement: full overlap.
+	if r := contentOverlapRatio(existing, lineA); r < 0.99 {
+		t.Fatalf("overlap for duplicated line = %v, want ~1", r)
+	}
+	// Short lines (<30 runes) are ignored as evidence.
+	if r := contentOverlapRatio("yes yes yes", "yes"); r != 0 {
+		t.Fatalf("short-line overlap = %v, want 0", r)
+	}
+	// Mixed: half duplicated.
+	mixed := lineA + "\n" + lineB
+	if r := contentOverlapRatio(existing, mixed); r < 0.4 || r > 0.6 {
+		t.Fatalf("mixed overlap = %v, want ~0.5", r)
+	}
+}
+
+func TestPerSceneWordCountsAndBudgetLines(t *testing.T) {
+	plan := &ScenePlan{Scenes: []Scene{
+		{ID: 1, Title: "Dawn patrol", WordsBudget: 800},
+		{ID: 2, Title: "Broken signal", WordsBudget: 1200},
+	}}
+	content := "dawn patrol starts with cold coffee and wet boots " +
+		strings.Repeat("filler ", 100) +
+		"broken signal arrives crackling through the static " +
+		strings.Repeat("more ", 50)
+	counts := perSceneWordCounts(plan, content)
+	if counts == nil {
+		t.Fatal("both anchors present: split must succeed")
+	}
+	if counts[0] <= counts[1] {
+		t.Fatalf("scene 1 (%d) should have more words than scene 2 (%d)", counts[0], counts[1])
+	}
+	block := scenePlanBudgetLines(plan, content, "en")
+	if !strings.Contains(block, "[Scene plan budgets]") ||
+		!strings.Contains(block, "Dawn patrol (~800 words budget") ||
+		!strings.Contains(block, "Broken signal (~1200 words budget") {
+		t.Fatalf("budget block malformed:\n%s", block)
+	}
+	// Unreliable split (no anchors found) → plain budget list without counts.
+	orphan := &ScenePlan{Scenes: []Scene{
+		{ID: 1, Title: "Zeta protocol", WordsBudget: 700},
+		{ID: 2, Title: "Yawl rescue", WordsBudget: 900},
+	}}
+	block = scenePlanBudgetLines(orphan, "totally unrelated prose here", "es")
+	if !strings.Contains(block, "[Presupuesto del plan de escenas]") || !strings.Contains(block, "(~700 palabras)") {
+		t.Fatalf("ES fallback block malformed:\n%s", block)
+	}
+	if scenePlanBudgetLines(nil, content, "en") != "" {
+		t.Fatal("nil plan must render empty block")
+	}
+}
+
 func TestHardBandRejectsVeryShortDraft(t *testing.T) {
 	minLen, maxLen := calcChapterLengthRange(4000) // 3600–6000
 	if minLen != 3600 || maxLen != 6000 {
@@ -122,5 +276,149 @@ func TestHardBandRejectsVeryShortDraft(t *testing.T) {
 	maybeUpdateBestDraft(&best, &score, strings.Repeat("palabra ", 3800), minLen, maxLen, 4000)
 	if prose.CountProseUnits(best) != 3800 {
 		t.Fatalf("best draft = %d units, want 3800", prose.CountProseUnits(best))
+	}
+}
+
+// --- continueTruncatedChapter orchestration ---------------------------------
+
+// streamAPI serves SSE completions whose content/finish_reason come from a
+// per-request-index function, recording each prompt for assertions.
+func streamAPI(t *testing.T, answer func(reqIndex int, prompt string) (content, finishReason string)) (*config.APIConfig, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	prompts := &[]string{}
+	count := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			http.Error(w, "bad request", 400)
+			return
+		}
+		prompt := request.Messages[len(request.Messages)-1].Content
+		mu.Lock()
+		idx := count
+		count++
+		*prompts = append(*prompts, prompt)
+		mu.Unlock()
+		content, fr := answer(idx, prompt)
+		payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": content}, "finish_reason": fr}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload)
+	}))
+	t.Cleanup(server.Close)
+	return &config.APIConfig{BaseURL: server.URL, APIKey: "test", Model: "test"}, prompts
+}
+
+func newContinuationFixture() (*config.Config, *Progress) {
+	cfg := config.DefaultConfig()
+	cfg.Language = "en"
+	state := &Progress{
+		Phase:               "writing",
+		CurrentChapterIndex: 0,
+		Chapters: []ChapterState{{
+			Num:     1,
+			Title:   "The Gate",
+			Outline: "Ka reaches the gate with Rin; an ambush splits the party; Ka holds the line alone.",
+			Status:  StatusPending,
+			ScenePlan: &ScenePlan{Approved: true, TargetWords: 3000, Scenes: []Scene{
+				{ID: 1, Title: "Road to the gate", Description: "Ka and Rin walk the salt road toward the gate", WordsBudget: 1000},
+				{ID: 2, Title: "Ambush at dusk", Description: "Masked riders spring the ambush at dusk", WordsBudget: 1000},
+				{ID: 3, Title: "Holding the line", Description: "Ka holds the collapsing line alone", WordsBudget: 1000},
+			}},
+		}},
+	}
+	return cfg, state
+}
+
+func TestContinueTruncatedChapterAppendsRemainingScenes(t *testing.T) {
+	api, prompts := streamAPI(t, func(idx int, prompt string) (string, string) {
+		switch idx {
+		case 0: // writes scene 2, still cut off by the cap
+			return strings.Repeat("rider ", 500) + "ambush at dusk erupts along the ridge line ", "length"
+		default: // finishes scene 3 cleanly
+			return strings.Repeat("shield ", 500) + "holding the line costs Ka everything ", "stop"
+		}
+	})
+	cfg, state := newContinuationFixture()
+	partial := strings.Repeat("salt ", 300) + "road to the gate stretches ahead of them " + strings.Repeat("dust ", 300)
+
+	content, complete := continueTruncatedChapter(context.Background(), api, cfg, state, 0, &ProjectSettings{}, "", partial, sse.NewLogBroadcaster())
+
+	if !complete {
+		t.Fatal("clean final round must mark the chapter as completed")
+	}
+	if !strings.Contains(content, "ambush at dusk") || !strings.Contains(content, "holding the line") {
+		t.Fatal("both continuation segments must be appended to the partial draft")
+	}
+	if prose.CountProseUnits(content) <= prose.CountProseUnits(partial) {
+		t.Fatal("continuation must grow the chapter")
+	}
+	if len(*prompts) != 2 {
+		t.Fatalf("expected 2 continuation rounds, got %d", len(*prompts))
+	}
+	// The continuation prompt must carry the [CONTINUATION] block AND list only
+	// the scenes missing from the partial draft (2 and 3, not 1).
+	first := (*prompts)[0]
+	if !strings.Contains(first, "[CONTINUATION") || !strings.Contains(first, "Ambush at dusk") || !strings.Contains(first, "Holding the line") {
+		t.Fatalf("first continuation prompt missing block/scenes:\n%.400s", first)
+	}
+	if strings.Contains(first, "Road to the gate (") {
+		t.Fatal("already-written scene 1 must not be listed as remaining")
+	}
+}
+
+func TestContinueTruncatedChapterStopsOnDuplicateSegment(t *testing.T) {
+	restated := strings.Repeat("salt ", 300) + "road to the gate stretches ahead of them " + strings.Repeat("dust ", 300)
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		return restated, "stop" // model ignores instructions and copies the draft
+	})
+	cfg, state := newContinuationFixture()
+	partial := restated
+
+	content, complete := continueTruncatedChapter(context.Background(), api, cfg, state, 0, &ProjectSettings{}, "", partial, sse.NewLogBroadcaster())
+
+	if complete {
+		t.Fatal("duplicate-guarded stop must report an incomplete chapter")
+	}
+	if content != partial {
+		t.Fatal("duplicated segment must NOT be appended")
+	}
+}
+
+func TestContinueTruncatedChapterStopsOnDegenerateSegment(t *testing.T) {
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		return "too short to matter", "stop"
+	})
+	cfg, state := newContinuationFixture()
+	partial := strings.Repeat("salt ", 300) + "road to the gate stretches ahead of them "
+
+	content, _ := continueTruncatedChapter(context.Background(), api, cfg, state, 0, &ProjectSettings{}, "", partial, sse.NewLogBroadcaster())
+
+	if content != partial {
+		t.Fatal("degenerate (<80 words) continuation must be discarded")
+	}
+}
+
+func TestContinueTruncatedChapterStopsWhenAllScenesCovered(t *testing.T) {
+	called := false
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		called = true
+		return "should never be requested", "stop"
+	})
+	cfg, state := newContinuationFixture()
+	partial := "road to the gate stretches on... ambush at dusk breaks out... holding the line until dawn..."
+
+	content, _ := continueTruncatedChapter(context.Background(), api, cfg, state, 0, &ProjectSettings{}, "", partial, sse.NewLogBroadcaster())
+
+	if called {
+		t.Fatal("no API call expected when every planned scene is already drafted")
+	}
+	if content != partial {
+		t.Fatal("content must pass through untouched")
 	}
 }

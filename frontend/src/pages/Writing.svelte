@@ -7,6 +7,7 @@
   import { countProseUnits } from '../lib/proseUnits.js';
   import TaskTokenBadge from '../components/TaskTokenBadge.svelte';
   import KnowledgePanel from '../components/KnowledgePanel.svelte';
+  import ScenePlanEditor from '../components/ScenePlanEditor.svelte';
   import { settings } from '../lib/stores.js';
   let showKnowledge = false;
   let knowledgeName = '', knowledgeDescription = '', knowledgeTags = '';
@@ -237,6 +238,23 @@
     f.target_chapter > 0 && (currentIdx + 1) >= f.target_chapter - 2 && (currentIdx + 1) <= f.target_chapter
   );
   $: writingConflict = p?.pending_writing_conflict || null;
+  // Scene-plan review gate: the backend pauses chapter generation after
+  // planning scenes (unless automation is on) and persists the pending
+  // chapter number, so the editor auto-opens even after a page reload.
+  $: scenePlanPendingNum = p?.pending_scene_plan_chapter || 0;
+  let showScenePlan = false;
+  let scenePlanChapter = null;
+  $: if (scenePlanPendingNum && !$taskRunning) {
+    if (scenePlanChapter !== scenePlanPendingNum) {
+      scenePlanChapter = scenePlanPendingNum;
+      addToast($t('writing.scenePlan.pendingToast', { num: scenePlanPendingNum }), 'info');
+    }
+    showScenePlan = true;
+  }
+  function openScenePlanEditor() {
+    scenePlanChapter = ch?.num ?? chapters[currentIdx]?.num ?? null;
+    showScenePlan = true;
+  }
   $: orphanWriting = !!(ch && isCurrent && ch.status === 'writing' && !writingConflict && !$taskRunning);
 
   async function resolveWritingConflict(action) {
@@ -741,6 +759,7 @@
               <div id="ChapterActionsBar" class="flex gap-2 flex-wrap items-center mt-1">
                 {#if ch.status === 'pending' && isCurrent}
                   <button class="btn btn-primary btn-sm" on:click={doGenerate} disabled={$taskRunning}>{$t('writing.btn.generate')}</button>
+                  <button class="btn btn-outline btn-sm" on:click={openScenePlanEditor} disabled={$taskRunning} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
                 {/if}
                 {#if ch.status === 'review' && isCurrent}
                   <button class="btn btn-success btn-sm" on:click={doConfirm} disabled={$taskRunning}>{$t('writing.btn.confirm')}</button>
@@ -813,4 +832,6 @@
       </div>
     </div>
   </div>
+
+  <ScenePlanEditor bind:open={showScenePlan} chapterNum={scenePlanChapter ?? ch?.num ?? scenePlanPendingNum} />
 {/if}

@@ -78,6 +78,48 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_write_conflict_pause": {
 
 		LangEN: "Chapter writing paused due to fact-check conflict — choose how to proceed"},
+	"log.scene_plan_generating": {
+
+		LangEN: "Chapter %d: planning scenes (beat sheet) before writing..."},
+	"log.scene_plan_ready": {
+
+		LangEN: "Scene plan ready for chapter %d: %d scenes, %d words budgeted"},
+	"log.scene_plan_pending": {
+
+		LangEN: "Chapter %d: scene plan awaiting your review — edit or approve it, then resume generation"},
+	"log.scene_plan_approved": {
+
+		LangEN: "Scene plan approved for chapter %d"},
+	"log.scene_plan_auto_approved": {
+
+		LangEN: "Chapter %d: scene plan auto-approved (automation on)"},
+	"log.scene_plan_failed": {
+
+		LangEN: "Scene plan generation failed: %v — falling back to single-pass writing"},
+	"log.scene_plan_cancelled": {
+
+		LangEN: "Scene plan generation cancelled"},
+	"log.auto_scene_plan_on": {
+
+		LangEN: "Scene-plan automation enabled: plans are generated and accepted automatically"},
+	"log.auto_scene_plan_off": {
+
+		LangEN: "Scene-plan automation disabled: you will review each plan before writing"},
+	"log.unplanned_cast_detected": {
+
+		LangEN: "Chapter %d: unplanned characters in draft: %s — judging relevance..."},
+	"log.unplanned_cast_registered": {
+
+		LangEN: "Chapter %d: registered in cast: %s"},
+	"log.unplanned_cast_skipped": {
+
+		LangEN: "Chapter %d: left unregistered (background extras): %s"},
+	"log.unplanned_cast_failed": {
+
+		LangEN: "Unplanned-cast registration failed: %v"},
+	"log.unplanned_cast_cancelled": {
+
+		LangEN: "Unplanned-cast scan cancelled"},
 	"log.chapter_write_failed": {
 
 		LangEN: "Chapter writing failed: %s"},
@@ -260,6 +302,18 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_length_retry": {
 
 		LangEN: "[Length] Draft is %d words, need %d–%d — regenerating (attempt %d)..."},
+	"log.chapter_length_retry_truncated": {
+
+		LangEN: "[Length] Draft was cut off by the output token cap at %d words (need %d–%d) — continuing the remaining scenes (attempt %d). Consider raising max_tokens in the API config."},
+	"log.chapter_length_continue": {
+
+		LangEN: "[Length] Continuation appended — chapter now at %d words (round %d)"},
+	"log.chapter_length_continue_failed": {
+
+		LangEN: "[Length] Continuation round %d failed: %v — keeping partial draft"},
+	"log.chapter_length_continue_duplicate": {
+
+		LangEN: "[Length] Continuation round %d restated already-written scenes — stopping continuation to avoid duplicates"},
 	"log.chapter_length_adjust": {
 
 		LangEN: "[Length] Still %d words after rewrite (need %d–%d) — compressing/expanding draft..."},

@@ -119,6 +119,24 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 		return fmt.Errorf("el capítulo #%d ya está aceptado; ve al capítulo actual o reinicia el avance", ch.Num)
 	}
 
+	// Scene plan gate: before writing, split this chapter's outline into an
+	// approved beat sheet with per-scene word budgets (see scene_plan.go).
+	// A single 4000-word call habitually summarizes and lands ~60% short; the
+	// plan anchors the writer scene by scene. If the author disabled auto mode
+	// and there is no approved plan yet, generate one and pause so the UI can
+	// show/edit it — resuming generation after approval continues seamlessly.
+	if err := ensureScenePlanForWriting(ctx, apiCfg, cfg, state, i, progressPath, logger); err != nil {
+		var spErr *ScenePlanPendingError
+		if errors.As(err, &spErr) {
+			// Persist the pause marker so the UI can auto-open the scene-plan
+			// editor after a reload (same pattern as PendingWritingConflict).
+			state.PendingScenePlanChapter = spErr.ChapterNum
+			_ = SaveProgress(progressPath, state)
+		}
+		return err
+	}
+	state.PendingScenePlanChapter = 0
+
 	ch.Status = StatusWriting
 	if err := SaveProgress(progressPath, state); err != nil {
 		return err
@@ -272,6 +290,14 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	logger.StepInfo(6, 6, "Syncing narrative memory...")
 	syncMemoryAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
 	// Memory sync commits a copied chapter slice, so refresh the chapter reference.
+	ch = &state.Chapters[i]
+
+	// Spontaneous debuts: if the draft introduced a character that appears in
+	// NO cast of the whole outline, judge relevance and register them so the
+	// outline stays truthful (later chapters' cast/outline remain the single
+	// source of truth for who belongs to the story). Best-effort: never fails
+	// the chapter for this.
+	AutoRegisterUnplannedCast(ctx, apiCfg, cfg, state, i, progressPath, logger)
 	ch = &state.Chapters[i]
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
@@ -687,7 +713,15 @@ func ConfirmChapterAction(state *Progress, progressPath string) error {
 	return nil
 }
 
-func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *sse.LogBroadcaster) (string, error) {
+// buildChapterWritingPrompt assembles the full writer user prompt for one
+// chapter attempt. Extracted from generateChapterContentStream so the scene
+// continuation pass (writing_length.go) can rebuild the identical context
+// blocks (scene plan, arc constraints, memory, foreshadows) instead of
+// shipping a context-free "continue" request that would drift off-outline.
+// extraWritingConstraintsOverride replaces the chapter's stored constraint
+// block when non-nil (the length controller passes merged length feedback per
+// attempt; nil keeps the legacy behaviour of using ch.ContinuityNotes).
+func buildChapterWritingPrompt(cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraintsOverride *string) (userPrompt, systemPrompt string) {
 	ch := state.Chapters[idx]
 	lang := cfg.Language
 
@@ -704,7 +738,7 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 
 	minLen, maxLen := calcChapterLengthRange(targetWords)
 
-	userPrompt := config.RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
+	userPrompt = config.RenderPrompt(withTokenFallback(cfg.Prompts.ChapterWriting, "{{.ScenePlan}}"), map[string]string{
 		"Title":              preferUserValue(cfg.Story.Title, state.Title),
 		"ChapterNum":         fmt.Sprintf("%d", ch.Num),
 		"CorePrompt":         state.CorePrompt,
@@ -724,23 +758,45 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 		"Memory":             memoryContext,
 		"VoiceSamples":       voiceSamples,
 		"OutlineConstraints": outlineConstraints,
+		// ScenePlan injects the approved beat sheet (per-scene word budgets)
+		// so the writer dramatizes each scene to its budget instead of
+		// summarizing the whole chapter in one pass. Empty when no plan was
+		// generated for this chapter.
+		"ScenePlan": renderScenePlanBlock(state.Chapters[idx].ScenePlan, lang),
 	})
 	userPrompt = finalizeChapterWritingPrompt(cfg.Prompts.ChapterWriting, userPrompt, minLen, maxLen, targetWords, lang)
 	// Customized templates that omit {{.PreviousEnding}} would silently lose the
 	// verbatim tail of the previous chapter (seamless continuation). Re-append it
 	// so continuity never depends on the template author remembering the token.
 	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.PreviousEnding}}", buildPreviousChapterTailForLang(state, idx, lang))
+	// Same safeguard for the scene plan: customized or legacy templates that
+	// predate {{.ScenePlan}} would silently drop the beat sheet, sending the
+	// writer back to one-shot summarizing (the root cause of short chapters).
+	// withTokenFallback above already re-adds the token to the template before
+	// rendering; this line covers the block being appended at the end.
+	userPrompt = appendIfMissingPlaceholder(withTokenFallback(cfg.Prompts.ChapterWriting, "{{.ScenePlan}}"), userPrompt, "{{.ScenePlan}}", renderScenePlanBlock(state.Chapters[idx].ScenePlan, lang))
 	if np := NovelParametersBlock(cfg); np != "" {
 		userPrompt += "\n\n" + np
 	}
-	if block := formatExtraWritingConstraintsBlock(extraWritingConstraints, lang); block != "" {
+	extra := strings.Join(ch.ContinuityNotes, "\n")
+	if extraWritingConstraintsOverride != nil {
+		extra = *extraWritingConstraintsOverride
+	}
+	if block := formatExtraWritingConstraintsBlock(extra, lang); block != "" {
 		userPrompt += "\n\n" + block
 	}
 
-	systemPrompt := state.CorePrompt
+	systemPrompt = state.CorePrompt
 	if systemPrompt == "" {
 		systemPrompt = i18n.SystemPromptFor(lang, "author_default")
 	}
+
+	return userPrompt, systemPrompt
+}
+
+func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *sse.LogBroadcaster) (string, error) {
+	userPrompt, systemPrompt := buildChapterWritingPrompt(cfg, state, idx, settings, &extraWritingConstraints)
+	lang := cfg.Language
 
 	onChunk := func(chunk string) {
 		logger.ContentChunk(idx, chunk)
@@ -755,27 +811,39 @@ func generateChapterContentStream(ctx context.Context, apiCfg *config.APIConfig,
 	return stripChapterMetaProse(content, lang), nil
 }
 
-func generateChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *sse.LogBroadcaster) string {
+// generateChapterContentStreamWithRetryLog returns the draft plus whether the
+// last successful call ended truncated (finish_reason=length). Truncated
+// partial drafts are RETURNED to the length controller instead of being
+// retried or dropped: a chapter cut off by the output cap is still usable
+// material (kept, expanded, or regenerated with explicit feedback), whereas
+// before it was treated as a fatal error and the whole chapter failed.
+func generateChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, extraWritingConstraints string, logger *sse.LogBroadcaster) (string, bool) {
 	retryCount := 0
 	for {
 		if ctx.Err() != nil {
-			return ""
+			return "", false
 		}
 		content, err := generateChapterContentStream(ctx, apiCfg, cfg, state, idx, settings, extraWritingConstraints, logger)
 		if err == nil && strings.TrimSpace(content) != "" {
-			return content
+			return content, false
+		}
+		// Output-cap truncation: keep the partial text and hand it to the
+		// caller's length control; retrying the identical request would just
+		// truncate again at the same place.
+		if llm.IsOutputTruncation(err) && strings.TrimSpace(content) != "" {
+			return content, true
 		}
 		if err == nil {
 			err = fmt.Errorf("la API devolvió una respuesta vacía")
 		}
 		if llm.IsFatalAPIError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			logger.ErrorKey("log.fatal_no_retry", err)
-			return ""
+			return "", false
 		}
 		retryCount++
 		if retryCount > llm.MaxAPIRetries {
 			logger.ErrorKey("log.max_retries_exceeded", fmt.Errorf("se agotaron los %d reintentos de generación del capítulo %d", llm.MaxAPIRetries, idx+1))
-			return ""
+			return "", false
 		}
 
 		waitTime := llm.RetryWaitTime(retryCount)
@@ -783,7 +851,7 @@ func generateChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *confi
 		select {
 		case <-time.After(time.Duration(waitTime) * time.Second):
 		case <-ctx.Done():
-			return ""
+			return "", false
 		}
 	}
 }
