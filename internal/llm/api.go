@@ -209,13 +209,32 @@ func isStreamUnsupportedError(err error) bool {
 	return true
 }
 
-func IsFatalAPIError(err error) bool {
+// IsOutputTruncation reports whether the model hit its output token cap
+// (finish_reason=length). The partial text is NOT carried inside the error:
+// callers receive it through CompletionResult.Content alongside this error.
+// Chapter generation treats truncation as RECOVERABLE: the partial draft is
+// handed to the length controller (which keeps, expands or regenerates it)
+// rather than aborting the chapter outright.
+func IsOutputTruncation(err error) bool {
 	if err == nil {
 		return false
 	}
 	var limit *outputLimitError
+	return errors.As(err, &limit)
+}
+
+func IsFatalAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Truncation is deliberately NOT fatal anymore: retrying with the same
+	// request would truncate identically, but throwing the partial draft away
+	// lost whole chapters that were merely slightly short of max_tokens. The
+	// streaming caller returns the partial content plus this error so the
+	// length-control loop can decide (keep / expand / regenerate).
+	var limit *outputLimitError
 	if errors.As(err, &limit) {
-		return true
+		return false
 	}
 	var budget *contextBudgetError
 	if errors.As(err, &budget) {

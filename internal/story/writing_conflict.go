@@ -222,6 +222,61 @@ func mapArcIssueInfos(issues []string) []arcIssueInfo {
 // about different named characters.
 var knownProtagonists = map[string]bool{"cordelia": true}
 
+// castAwareIssueStats reports whether each issue explicitly mentions at least
+// one reserved (not-yet-debuted) cast name, case-insensitively over the whole
+// wording. Used by the cast-aware dedup path: a premature-intro issue that
+// names NONE of the reserved characters is almost always the reviewer
+// hallucinating a banned debut onto an anonymous background figure ("a
+// laughing couple", "a murmuring group") — such wordings collapse into the
+// cluster that actually spells the reserved name out, and when no such cluster
+// exists they are dropped entirely (see dropFalsePrematureIssues).
+func castAwareIssueStats(issues []string) []bool {
+	cores := arcCastCoreNamesCache
+	out := make([]bool, len(issues))
+	for i, it := range issues {
+		lower := strings.ToLower(it)
+		for _, core := range cores {
+			if core != "" && strings.Contains(lower, core) {
+				out[i] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+// dropFalsePrematureIssues removes premature-introduction wordings that never
+// quote any reserved cast member. Genuine violations produced by this pipeline
+// always name the character whose debut was staged (the ban list is rendered
+// with their names, and the reviewer quotes the offending prose), so a
+// "premature" complaint that mentions none of them is speculation about an
+// unnamed extra — exactly the false positive reported against the fact-checker.
+// Issues of other categories (timeline, recap…) are never touched.
+func dropFalsePrematureIssues(issues []string) []string {
+	stats := castAwareIssueStats(issues)
+	var out []string
+	for i, it := range issues {
+		if arcCategory(it) == "premature-intro" && !stats[i] {
+			// Keep only wordings that quote a reserved cast member with at
+			// least 3 characters — honorific-only complaints ("the Lord",
+			// "my lady") name nobody and are treated as speculation.
+			lower := strings.ToLower(it)
+			named := false
+			for _, core := range arcCastCoreNamesCache {
+				if len([]rune(core)) >= 3 && strings.Contains(lower, core) {
+					named = true
+					break
+				}
+			}
+			if !named {
+				continue
+			}
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
 func knownProtagonist(lower string) string {
 	for p := range knownProtagonists {
 		if strings.Contains(lower, p) {
@@ -331,20 +386,28 @@ func dedupeArcIssuesInfo(infos []arcIssueInfo) []string {
 // lexical — no extra LLM call.
 func dedupeArcIssuesWithCast(issues []string, state *Progress, idx int) []string {
 	// Publish the structured cast's core names for this run so name detection
-	// can cluster wordings that mention reserved debuts in lower case.
+	// can cluster wordings that mention reserved debuts in lower case. The
+	// debut names are already normalized to lower case — entitySet only picks
+	// up CAPITALIZED spans, so feeding it lower-cased names yielded nothing
+	// and every premature-intro wording was silently dropped as "speculation".
 	var cores []string
 	for n := range pendingDebutNames(state, idx) {
-		for e := range entitySet(n) {
-			if isArcGenericEntity(e) {
-				continue
-			}
-			cores = append(cores, arcCoreNames(e)...)
-		}
+		cores = append(cores, arcCoreNames(n)...)
 	}
+	if len(cores) == 0 {
+		// No structured reserved-debut cast available (nil state / outline
+		// without future debuts): fall back to the plain lexical dedup. In
+		// particular we must NOT run dropFalsePrematureIssues here — with an
+		// empty ban list every premature-intro wording would "name nobody"
+		// and be discarded as speculation, silently swallowing genuine
+		// complaints from the reviewer.
+		return dedupeArcIssuesTwoPass(issues)
+	}
+	sort.Strings(cores)
 	prev := arcCastCoreNamesCache
 	arcCastCoreNamesCache = cores
 	defer func() { arcCastCoreNamesCache = prev }()
-	return dedupeArcIssuesTwoPass(resolveObliqueArcIssues(issues, state, idx))
+	return dedupeArcIssuesTwoPass(resolveObliqueArcIssues(dropFalsePrematureIssues(issues), state, idx))
 }
 
 // dedupeArcIssuesTwoPass applies dedupeArcIssues, then removes leftover
@@ -819,6 +882,12 @@ func splitFactCheckIssues(issues string) []string {
 	parts := strings.Split(issues, "; ")
 	if len(parts) == 1 {
 		parts = strings.Split(issues, ";")
+	}
+	// Trim trailing periods left by the "; ." separator so sentence-ending
+	// punctuation does not glue onto the next fragment's first word (e.g.
+	// "beatrice." would otherwise stop "Lady Beatrice" from being detected).
+	for i, p := range parts {
+		parts[i] = strings.TrimRight(strings.TrimSpace(p), ".")
 	}
 	return dedupeArcIssues(mergeUniqueIssues(parts))
 }

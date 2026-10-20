@@ -18,13 +18,15 @@ var DefaultPromptsEN = PromptsConfig{
 Chapter title: "{{.ChapterTitle}}"
 Outline: {{.ChapterOutline}}
 
+{{.ScenePlan}}
 [Writing style] {{.WritingStyle}}
 [Narrative POV] {{.WritingPOV}}
 {{.CharacterContext}}
 {{.WorldviewContext}}
 Writing rules:
+0. Scene plan first: if a [Scene plan] block is provided above, treat it as the authoritative structure for this chapter. Write EVERY scene listed, in order, dramatizing each one to roughly its word budget (±20%). Do not merge scenes into a summary, skip any scene, or invent scenes not in the plan. The plan's budgets sum to the chapter target — following it is how you reach the required length.
 1. Strictly continue from the character states, timeline, and established facts in the story-so-far. Do not contradict them.
-2. Stay inside this chapter's outline. Your chapter's outline is your ONLY source of what happens here — it fully defines where the chapter starts and ends. You do not receive later chapters' outlines; all you learn about the future is the negative constraints below (who has not debuted yet, which one-time events are reserved). Never invent scenes, characters or reveals that go beyond this chapter's outline.
+2. Stay inside this chapter's outline and scene plan. Your chapter's outline is your ONLY source of what happens here — it fully defines where the chapter starts and ends. The synopsis, story-so-far recap, memory and foreshadow blocks are REFERENCE ONLY — background continuity, never material to write now. Do not resolve, re-enact or spoil events that belong to other chapters. You do not receive later chapters' outlines; all you learn about the future is the negative constraints below (who has not debuted yet, which one-time events are reserved). Never invent scenes, characters or reveals that go beyond this chapter's outline.
 3. Hard sequencing rule: any character listed under "have NOT debuted yet" must be absent from this chapter in every form — do not name them, do not describe them, do not stage an encounter with them, and do not introduce them as an anonymous figure ("a stranger whose…", "my lord", a dropped glove, an overheard whisper) whose traits match the banned character. A disguised cameo counts as a violation. Likewise, never hint at or spoil their identity reveal; save that material for its designated chapter.
 4. One-time events (first meetings, identity reveals, relationships established, objects left behind after a first encounter) may occur EXACTLY ONCE, in the chapter that owns them per the arc block. Events already played out are established facts: reference them, never re-enact them. Events reserved for later chapters must not occur early in any form.
 5. Do not re-summarise the story-so-far. Open straight into this chapter's scene. If a previous-chapter ending is provided, your opening must seamlessly continue its setting, time, and mood without re-establishing what's already there.

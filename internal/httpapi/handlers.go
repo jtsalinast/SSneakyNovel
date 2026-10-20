@@ -948,6 +948,15 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 	h.writeJSON(w, http.StatusOK, h.settings.Characters)
 }
 
+// asScenePlanPending reports whether err is the scene-plan review gate pause.
+func asScenePlanPending(err error) (*story.ScenePlanPendingError, bool) {
+	var spErr *story.ScenePlanPendingError
+	if errors.As(err, &spErr) {
+		return spErr, true
+	}
+	return nil, false
+}
+
 func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 	if !h.tryStartTask() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
@@ -977,6 +986,12 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 					var wcErr *story.WritingConflictError
 					if errors.As(err, &wcErr) {
 						h.logger.WarnKey("log.chapter_write_conflict_pause")
+					} else if _, ok := asScenePlanPending(err); ok {
+						// Scene-plan review gate: not an error — the plan was
+						// generated and awaits approval (GenerateChapterAction
+						// already logged it and persisted the pause marker in
+						// state.PendingScenePlanChapter). Stop the batch cleanly;
+						// the UI auto-opens the plan editor from progress.
 					} else {
 						h.logger.ErrorKey("log.chapter_write_failed", err)
 					}

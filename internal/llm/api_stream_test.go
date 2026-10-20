@@ -108,8 +108,11 @@ func TestBufferedCompletionErrors(t *testing.T) {
 			if (mode == "fallback") != (err == nil) {
 				t.Fatalf("error=%v", err)
 			}
-			if strings.Contains(mode, "length") && (!IsFatalAPIError(err) || !strings.Contains(err.Error(), "finish_reason=length")) {
-				t.Fatalf("missing non-retryable limit diagnostic: %v", err)
+			// Truncation is deliberately NOT fatal anymore (the partial draft is
+			// handed to the length controller instead of aborting), but it must
+			// still be flagged as output truncation with a clear diagnostic.
+			if strings.Contains(mode, "length") && (!IsOutputTruncation(err) || !strings.Contains(err.Error(), "finish_reason=length")) {
+				t.Fatalf("missing output-truncation diagnostic: %v", err)
 			}
 			wantCalls := 1
 			if strings.HasPrefix(mode, "fallback") {

@@ -55,21 +55,38 @@ func collectDebutedNames(state *Progress, idx int) map[string]bool {
 	return debuted
 }
 
-// futureDebuts lists characters flagged FirstAppearance in chapters AFTER idx
-// whose debut has not occurred in any chapter before idx. Entries duplicated
-// across several future chapters keep only the earliest planned debut.
+// futureDebuts lists characters planned to DEBUT in a chapter after idx — i.e.
+// characters that appear in the structured cast of some later chapter but in NO
+// chapter up to and including idx (neither in an earlier cast nor as a cast
+// member of the current chapter). The outline/cast membership is the single
+// source of truth: the boolean FirstAppearance flag was previously used here,
+// but it goes stale whenever a character gets added or moved through manual
+// edits, which made the fact-checker report "premature debuts" for characters
+// that were never reserved anywhere. Entries duplicated across several future
+// chapters keep only the earliest planned debut.
 func futureDebuts(state *Progress, idx int) []arcDebut {
-	debuted := collectDebutedNames(state, idx)
 	seen := map[string]bool{}
 	var out []arcDebut
-	if state == nil {
+	if state == nil || idx < 0 || idx >= len(state.Chapters) {
 		return out
+	}
+	// Every name known up to and INCLUDING the chapter being written: casts of
+	// drafted chapters plus the current chapter's own planned cast. A character
+	// listed here already belongs to this point of the story, so its presence
+	// is never a premature introduction.
+	present := map[string]bool{}
+	for i := 0; i <= idx && i < len(state.Chapters); i++ {
+		for _, c := range state.Chapters[i].Characters {
+			if n := normalizeArcName(c.Name); n != "" {
+				present[n] = true
+			}
+		}
 	}
 	for i := idx + 1; i < len(state.Chapters); i++ {
 		ch := state.Chapters[i]
 		for _, c := range ch.Characters {
 			n := normalizeArcName(c.Name)
-			if n == "" || !c.FirstAppearance || debuted[n] || seen[n] {
+			if n == "" || present[n] || seen[n] {
 				continue
 			}
 			seen[n] = true
@@ -99,13 +116,20 @@ func draftedCastNames(state *Progress, idx int) map[string]bool {
 }
 
 // buildPrematureEventLines renders one line per planned one-time event inside
-// the future-outline window, tagged with its destination chapter and marked
-// UNDECLARED when no structured cast exists to confirm it is a genuine debut.
-// These lines feed the future channel of the arc block; the returned slice is
-// also used by the hard-debut filter to avoid contradicting itself.
+// the future-outline window, tagged with its destination chapter. Membership
+// in the structured casts is the source of truth: a cast name that appears in
+// NO chapter up to and including idx is a genuine pending debut for that later
+// chapter (the FirstAppearance flag alone was unreliable — manual outline
+// edits leave it stale, producing "reserved" bans on characters that were
+// never reserved). These lines feed the future channel of the arc block; the
+// returned slice is also used by the hard-debut filter to avoid contradicting
+// itself.
 func buildPrematureEventLines(state *Progress, idx int, lang string) []string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
-	debuted := collectDebutedNames(state, idx)
+	reserved := map[string]bool{}
+	for _, d := range futureDebuts(state, idx) {
+		reserved[normalizeArcName(d.name)] = true
+	}
 	castKnown := false
 	for i := idx + 1; i < len(state.Chapters) && i <= idx+futureOutlineWindow; i++ {
 		if len(state.Chapters[i].Characters) > 0 {
@@ -121,7 +145,7 @@ func buildPrematureEventLines(state *Progress, idx int, lang string) []string {
 		var pairs []string
 		for _, c := range ch.Characters {
 			n := normalizeArcName(c.Name)
-			if n == "" || !c.FirstAppearance || debuted[n] {
+			if n == "" || !reserved[n] {
 				continue
 			}
 			pairs = append(pairs, c.Name)
@@ -148,25 +172,23 @@ func buildPrematureEventLines(state *Progress, idx int, lang string) []string {
 }
 
 // buildHardDebutBlock builds the [Do-not-introduce] section: an explicit,
-// deduplicated ban list derived from FirstAppearance flags. When the flag data
-// is too sparse to produce a meaningful list, it returns "" and the caller
-// falls back to the generic upcoming-outline warning.
+// deduplicated ban list derived from structured cast membership (see
+// futureDebuts). When no genuine pending debut exists, it returns "" and the
+// caller falls back to the generic upcoming-outline warning.
 func buildHardDebutBlock(state *Progress, idx int, lang string) string {
 	if idx < 0 || idx >= len(state.Chapters) {
 		return ""
 	}
 	debutSet := map[string]bool{}
 	for _, d := range futureDebuts(state, idx) {
-		debutSet[d.name] = true
+		debutSet[normalizeArcName(d.name)] = true
 	}
-	// Also ban characters implied by the premature-event lines within the
-	// window (same source data, so this stays consistent).
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	var entries []arcDebut
 	for i := idx + 1; i < min(idx+1+futureOutlineWindow, len(state.Chapters)); i++ {
 		ch := state.Chapters[i]
 		for _, c := range ch.Characters {
-			if c.FirstAppearance && debutSet[c.Name] {
+			if debutSet[normalizeArcName(c.Name)] {
 				entries = append(entries, arcDebut{name: c.Name, num: ch.Num, idx: i})
 			}
 		}
@@ -200,11 +222,11 @@ func buildHardDebutBlock(state *Progress, idx int, lang string) string {
 		return ""
 	}
 	if en {
-		return "[Characters who have NOT debuted yet — do-not-introduce list, derived from the outline's first-appearance data]\n" +
+		return "[Characters who have NOT debuted yet — do-not-introduce list, derived from the outline's cast data]\n" +
 			body + "\n" +
 			"Do NOT introduce, name, meet, describe, or even hint at these characters in this chapter — no disguised cameo, no \"a stranger whose…\", no foreshadowing of their identity. Their debut belongs EXCLUSIVELY to the chapter listed above.\n\n"
 	}
-	return "[Personajes que TODAVÍA NO han debutado — lista de prohibición de introducción, derivada de los datos de primera aparición del outline]\n" +
+	return "[Personajes que TODAVÍA NO han debutado — lista de prohibición de introducción, derivada del cast del outline]\n" +
 		body + "\n" +
 		"NO introduzcas, nombres, hagas encontrarse, describas ni siquiera insinúes a estos personajes en este capítulo — sin cameos disfrazados, sin «un desconocido cuyo…», sin prefigurar su identidad. Su debut pertenece EXCLUSIVAMENTE al capítulo indicado arriba.\n\n"
 }

@@ -405,6 +405,10 @@ func TestGenerateChapterReviewAfterMemorySync(t *testing.T) {
 			memoryCalls := 0
 			api := batchAPI(t, func(prompt string) string {
 				switch {
+				case strings.HasPrefix(prompt, "You are a novel planner"):
+					// Scene-plan gate (scene_plan.go): return a valid beat sheet so
+					// generation proceeds straight to prose in auto mode below.
+					return `[{"title":"Walk","description":"Alice walks home along the river","pov":"Alice","words_budget":500},{"title":"Door","description":"She finds the door ajar","pov":"Alice","words_budget":500}]`
 				case strings.HasPrefix(prompt, "TEST_PROSE"):
 					return content
 				case strings.HasPrefix(prompt, "TEST_SUMMARY"):
@@ -419,7 +423,7 @@ func TestGenerateChapterReviewAfterMemorySync(t *testing.T) {
 					return `{}`
 				}
 			})
-			state := &Progress{Phase: "writing", Chapters: []ChapterState{
+			state := &Progress{Phase: "writing", AutoScenePlan: true, Chapters: []ChapterState{
 				{Num: 1, Title: "Home", Status: StatusPending},
 				{Num: 2, Title: "Tomorrow", Status: StatusPending},
 			}}
