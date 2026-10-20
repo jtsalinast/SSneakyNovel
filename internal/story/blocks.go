@@ -160,7 +160,19 @@ func syncSceneBlocks(ch *ChapterState) bool {
 			if start >= end {
 				continue
 			}
-			text := strings.Join(paras[start:end], sep)
+			// Trope text excludes pure break-marker paragraphs (*** / ---),
+			// but the span keeps covering them so scenes/units still tile.
+			var kept []string
+			for _, p := range paras[start:end] {
+				if paraIsBreak(p) {
+					continue
+				}
+				kept = append(kept, p)
+			}
+			if len(kept) == 0 {
+				continue // a unit made only of separators carries no prose
+			}
+			text := strings.Join(kept, sep)
 			id := 0
 			for i, old := range ch.Blocks {
 				if !used[i] && old.Text == text {
@@ -244,9 +256,10 @@ func sceneTropeUnitSpans(ch *ChapterState, pos int, sceneParas []string) [][2]in
 			return spans
 		}
 	}
-	// Re-derive tropes from the scene prose currently on disk.
-	sceneText := strings.Join(sceneParas, "\n\n")
-	if _, ranges := splitTropes(sceneText); len(ranges) > 0 {
+	// Re-derive tropes from the scene prose currently on disk, over the SAME
+	// paragraph slice (keeping ch.BlockSep as join separator) so the returned
+	// spans are scene-local paragraph indices that tile it exactly.
+	if _, ranges := splitTropesFromParas(sceneParas, "", ch.BlockSep); len(ranges) > 0 {
 		return ranges
 	}
 	return fallback
@@ -390,26 +403,38 @@ func recordedSceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 		if len(spans) > 0 && sc.ParaStart != spans[len(spans)-1][1] {
 			return nil // gap or overlap → stale
 		}
-		// Trope units must tile this scene's span exactly.
-		if len(sc.TropeUnits) > 0 {
-			maxEnd := 0
-			for _, u := range sc.TropeUnits {
-				if u.ParaStart < 0 || u.ParaEnd <= u.ParaStart || u.ParaEnd > sc.ParaEnd-sc.ParaStart {
-					return nil
-				}
-				if u.ParaEnd > maxEnd {
-					maxEnd = u.ParaEnd
-				}
-			}
-			if maxEnd != sc.ParaEnd-sc.ParaStart {
-				return nil
-			}
-		}
 
 		spans = append(spans, [2]int{sc.ParaStart, sc.ParaEnd})
 	}
 	if spans[len(spans)-1][1] != len(paras) {
 		return nil // trailing paragraphs unaccounted for
+	}
+	// Trope units are a per-scene refinement: when they are stale (a manual
+	// edit inside one scene changed its paragraph count) drop ONLY that
+	// scene's units so sceneTropeUnitSpans re-derives them live from the
+	// current text — instead of discarding the whole exact scene tiling and
+	// falling back to budget-proportional blocks.
+	for i := range plan.Scenes {
+		sc := &plan.Scenes[i]
+		if len(sc.TropeUnits) == 0 {
+			continue
+		}
+		sceneLen := sc.ParaEnd - sc.ParaStart
+		ok := true
+		maxEnd := 0
+		for _, u := range sc.TropeUnits {
+			if u.ParaStart < 0 || u.ParaEnd <= u.ParaStart || u.ParaEnd > sceneLen {
+				ok = false
+				break
+			}
+			if u.ParaEnd > maxEnd {
+				maxEnd = u.ParaEnd
+			}
+		}
+		if !ok || maxEnd != sceneLen {
+			sc.TropeUnits = nil
+			sc.TropeRanges = nil
+		}
 	}
 	return spans
 }

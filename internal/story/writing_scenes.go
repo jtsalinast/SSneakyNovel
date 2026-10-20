@@ -390,12 +390,17 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 		if best == "" {
 			continue
 		}
+		best = stripChapterMetaProse(best, lang)
+		if strings.TrimSpace(best) == "" {
+			continue
+		}
 		parts = append(parts, best)
 		written = strings.Join(parts, "\n\n")
 		// Record this scene's EXACT absolute paragraph span over the joined
 		// content (paraAcc accumulates accepted-scene paragraph counts). This is
 		// what lets syncSceneBlocks group story-blocks per trope inside each
-		// scene without guessing from word budgets.
+		// scene without guessing from word budgets. Meta lines were stripped
+		// above so the span matches what actually lands in the chapter.
 		bestParas, _ := splitBlockParagraphs(best)
 		plan.Scenes[pos].ParaStart = paraAcc
 		plan.Scenes[pos].ParaEnd = paraAcc + len(bestParas)
@@ -434,7 +439,7 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 	// and the viewer silently drops back to one-block-per-paragraph — losing
 	// both the per-trope grouping and the scene chip.
 	recordFinalSceneSpans := func(finalContent string) {
-		finalParas, _ := splitBlockParagraphs(finalContent)
+		finalParas, finalSep := splitBlockParagraphs(finalContent)
 		if len(finalParas) == 0 {
 			return
 		}
@@ -460,19 +465,23 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 					if sc.ParaEnd <= 0 {
 						continue
 					}
-					sceneText := strings.Join(finalParas[sc.ParaStart:sc.ParaEnd], "\n\n")
-					tropesOfScene(sceneText, sc)
+					segBeats, segRanges := splitTropesFromParas(finalParas[sc.ParaStart:sc.ParaEnd], "", finalSep)
+					applyTropeSegmentation(sc, segBeats, segRanges)
 				}
 				return
 			}
 		}
-		// Slow path: a compression/expansion pass rewrote paragraphs. Re-anchor
-		// each accepted scene part inside the final content by fuzzy text match
-		// so ParaStart/ParaEnd stay exact instead of going stale. Parts that
-		// cannot be located leave their old (stale) bookkeeping; the budget
-		// fallback in sceneParaSpans then covers them safely.
-		reanchored := 0
+		// Slow path: a compression/expansion pass rewrote paragraphs, or the
+		// joined content has extra/fewer paragraphs than paraAcc counted
+		// (blank-line runs, single-newline separators, meta lines). Re-anchor
+		// each accepted scene part inside the final paragraph list by fuzzy
+		// head/tail matching so ParaStart/ParaEnd stay exact instead of going
+		// stale. Scenes that cannot be located keep their old bookkeeping; the
+		// budget fallback in sceneParaSpans then covers them safely.
+		type loc struct{ lo, hi int }
+		locs := make([]loc, len(plan.Scenes))
 		cum := 0
+		found := 0
 		for pos, part := range parts {
 			if pos >= len(plan.Scenes) {
 				break
@@ -485,22 +494,33 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 			if n <= 0 {
 				continue
 			}
-			sc := &plan.Scenes[pos]
-			sc.ParaStart = cum
-			sc.ParaEnd = cum + n
+			locs[pos] = loc{cum, cum + n}
 			cum += n
-			reanchored++
+			found++
 		}
-		if reanchored == 0 || cum == 0 {
+		if found == 0 || cum == 0 {
 			return
+		}
+		// The last located scene absorbs every remaining paragraph so the
+		// spans tile the whole content (trailing blank artifacts included).
+		if cum < len(finalParas) {
+			for pos := len(locs) - 1; pos >= 0; pos-- {
+				if locs[pos].hi > locs[pos].lo {
+					locs[pos].hi = len(finalParas)
+					break
+				}
+			}
 		}
 		for pos := range plan.Scenes {
 			sc := &plan.Scenes[pos]
-			if sc.ParaEnd <= 0 || sc.ParaEnd > len(finalParas) || sc.ParaStart >= sc.ParaEnd {
+			l := locs[pos]
+			if l.hi <= l.lo || l.hi > len(finalParas) {
 				continue
 			}
-			sceneText := strings.Join(finalParas[sc.ParaStart:sc.ParaEnd], "\n\n")
-			tropesOfScene(sceneText, sc)
+			sc.ParaStart = l.lo
+			sc.ParaEnd = l.hi
+			segBeats, segRanges := splitTropesFromParas(finalParas[l.lo:l.hi], "", finalSep)
+			applyTropeSegmentation(sc, segBeats, segRanges)
 		}
 	}
 

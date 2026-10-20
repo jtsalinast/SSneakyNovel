@@ -633,16 +633,19 @@ func finalizeChapterSummary(ctx context.Context, apiCfg *config.APIConfig, cfg *
 	summary, reason := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
 	ch := &state.Chapters[idx]
 	if strings.TrimSpace(summary) == "" {
-		if ctx.Err() != nil || reason == summaryFailCancelled || reason == summaryFailTimeout {
-			// Genuine cancellation or task wall-clock deadline: checkpoint the
-			// draft so the user can resume ONLY the cheap remaining steps
-			// (summary → critic/fact-check) instead of losing the chapter.
+		if ctx.Err() != nil || reason == summaryFailCancelled {
+			// Genuine user cancellation: checkpoint the draft so Resume re-runs
+			// exactly this step plus verification without rewriting prose.
 			return "", abortChapterWithDraftCheckpoint(state, progressPath, idx, logger, "log.chapter_draft_saved", fmt.Errorf("%w (%s)", ErrSummaryStepFailed, reason))
 		}
-		// API-side failure (fatal error, exhausted retries, empty answers):
-		// the summary MUST still happen for the history sync, so degrade
-		// instead of aborting — the precise reason was already logged by the
-		// retry loop with full API detail.
+		// The summary MUST exist for the history sync downstream, so every other
+		// failure degrades instead of aborting — including the task's 30-minute
+		// wall-clock deadline (summaryFailTimeout): the summary call is cheap and
+		// short compared to the whole-chapter task, so a deadline already expired
+		// at this point was burned by the earlier prose-writing steps, not by the
+		// summary itself. Aborting here would throw away minutes of writing over
+		// a step that has a perfectly good deterministic fallback. The precise
+		// reason was already logged by the retry loop with full API detail.
 		if prev := strings.TrimSpace(ch.Summary); prev != "" {
 			summary = prev
 			logger.WarnKey("log.summary_fallback_previous", ch.Num, string(reason))
