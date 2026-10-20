@@ -416,6 +416,29 @@ body {
   background-color: oklch(50% 0.10 250 / 0.16);        /* info 20% → 16%           */
 }
 
+/* Scene marker chip between trope blocks of different scenes: almost
+   invisible by default (very light grey pill, near-transparent white text,
+   unselectable). On hover the ⓘ icon fades in and its InfoTip popover shows
+   the incoming scene's title/trope description (same style as SmartSelect's
+   summary tips). */
+#ChapterProseViewer .scene-marker-row { user-select: none; }
+#ChapterProseViewer .scene-marker-chip {
+  background: rgb(0 0 0 / 0.045);
+  border: 1px solid transparent;
+  transition: background 150ms ease;
+}
+#ChapterProseViewer .scene-marker-chip:hover { background: rgb(0 0 0 / 0.08); }
+#ChapterProseViewer .scene-marker-text {
+  color: rgb(255 255 255 / 0.08);
+  text-shadow: 0 0 1px rgb(0 0 0 / 0.05);
+  pointer-events: none;
+}
+@media (prefers-color-scheme: dark) {
+  #ChapterProseViewer .scene-marker-chip { background: rgb(255 255 255 / 0.05); }
+  #ChapterProseViewer .scene-marker-chip:hover { background: rgb(255 255 255 / 0.09); }
+  #ChapterProseViewer .scene-marker-text { color: rgb(255 255 255 / 0.07); text-shadow: none; }
+}
+
 @media (max-width: 1279px) {
   .assistant-panel { position: absolute; z-index: 80; inset-block: 0; right: 0; width: min(28rem, 92vw); max-width: none; transform: translateX(100%); visibility: hidden; pointer-events: none; transition: transform 200ms ease-out; border-left: 1px solid color-mix(in oklch, var(--color-base-content) 12%, transparent); }
   .assistant-panel.drawer-open { transform: translateX(0); visibility: visible; pointer-events: auto; }

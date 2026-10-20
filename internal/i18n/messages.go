@@ -99,6 +99,88 @@ var messageCatalog = map[string]map[string]string{
 	"log.scene_plan_cancelled": {
 
 		LangEN: "Scene plan generation cancelled"},
+	// ---- Scene-by-scene sequential writing (writing_scenes.go) ----
+	"log.scene_seq_start": {
+
+		LangEN: "[Scenes] Chapter %d: writing scene by scene — %d scenes, target %d words. Each scene is generated and verified against its word budget (±10%) before the next one starts."},
+	"log.scene_gen_start": {
+
+		LangEN: "[Scenes] Writing scene %d/%d \"%s\" — budget %d words, accepted range %d–%d words..."},
+	"log.scene_gen_failed": {
+
+		LangEN: "[Scenes] Scene %d \"%s\": attempt %d produced no text"},
+	"log.scene_call_retry": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\": call failed — controlled retry, %d attempt(s) left for this scene..."},
+	"log.scene_truncated": {
+
+		LangEN: "[Scenes] Scene %d \"%s\": output was cut off by the token cap at %d words"},
+	"log.scene_count_ok": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" ✓ %d words (budget %d, band %d–%d) — moving to the next scene"},
+	"log.scene_count_retry": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\" is %d words (budget %d, band %d–%d) — %s. Controlled retry %d/%d..."},
+	"log.scene_count_keep_best": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" still %d words after %d retries (budget %d, band %d–%d) — keeping closest draft and continuing"},
+	"log.scene_done": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\" accepted — chapter now at %d words total"},
+	"log.scene_seq_fallback": {
+
+		LangEN: "[Scenes] No scene could be written sequentially — falling back to single-pass chapter generation"},
+	"log.scene_tropes": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" segmented into %d trope units (%s) — critiques can now repair a single unit"},
+	"log.scene_shrink_start": {
+
+		LangEN: "[Length] Chapter %d too long — surgically rewriting ONLY scene %d/%d \"%s\" (%d words → target %d); other scenes untouched"},
+	"log.scene_shrink_retry": {
+
+		LangEN: "[Length] Shrink of scene %d \"%s\" (chapter %d) came back at %d words (target %d) — controlled retry %d/%d..."},
+	"log.scene_shrink_failed": {
+
+		LangEN: "[Length] Shrink attempt %d for scene %d \"%s\" (chapter %d) returned empty text"},
+	"log.scene_shrink_done": {
+
+		LangEN: "[Length] Scene %d \"%s\" (chapter %d) shrunk to %d words — new chapter total %d words"},
+	"log.chapter_shrink_scene_pick": {
+
+		LangEN: "[Length] Chapter %d is %d words (max %d) — longest-over-budget scene is %d/%d (+%d words over its own budget); shrinking it surgically"},
+	"log.chapter_shrink_scene_ok": {
+
+		LangEN: "[Length] Surgical scene shrink fixed the chapter ✓ %d words (range %d–%d)"},
+	"log.chapter_shrink_scene_partial": {
+
+		LangEN: "[Length] Surgical scene shrink helped but chapter still %d words (range %d–%d) — trying whole-chapter adjust as last resort"},
+	"log.chapter_shrink_scene_failed": {
+
+		LangEN: "[Length] Surgical shrink of scene %d (chapter %d) not possible — falling back to whole-chapter adjustment"},
+	"log.trope_rewrite_start": {
+
+		LangEN: "[Fact-check] Chapter %d: repairing scene %d, trope unit %d/%d only (rest of scene kept verbatim)..."},
+	"log.trope_rewrite_length_guard": {
+
+		LangEN: "[Fact-check] Trope rewrite for scene %d (chapter %d) changed length too much (%d vs %d words) — retrying"},
+	"log.trope_rewrite_failed": {
+
+		LangEN: "[Fact-check] Trope rewrite attempt %d for scene %d (chapter %d) returned empty text"},
+	"log.trope_rewrite_done": {
+
+		LangEN: "[Fact-check] Scene %d trope unit %d repaired in chapter %d (scene now %d words) — rest of chapter untouched"},
+	"log.chapter_total_check": {
+
+		LangEN: "[Length] All scenes written: chapter total is %d WORDS (accepted range %d–%d) — verifying whole chapter..."},
+	"log.chapter_total_ok": {
+
+		LangEN: "[Length] Chapter total verified ✓ %d words (range %d–%d)"},
+	"log.chapter_total_adjust": {
+
+		LangEN: "[Length] Chapter total %d words is outside the %d–%d range — adjusting the full draft..."},
+	"log.chapter_total_final": {
+
+		LangEN: "[Length] After adjustment the chapter is %d words (target range %d–%d) — keeping best available draft"},
 	"log.auto_scene_plan_on": {
 
 		LangEN: "Scene-plan automation enabled: plans are generated and accepted automatically"},
@@ -359,6 +441,18 @@ var messageCatalog = map[string]map[string]string{
 	"log.factcheck_constraint_pass": {
 
 		LangEN: "[Fact-check] Constrained retry passed ✓"},
+	"log.critic_run": {
+
+		LangEN: "[Critic] Bestseller chapter review (act-aware, scene-level)…"},
+	"log.critic_scene_issue": {
+
+		LangEN: "[Critic] Scene %d · unit %d: %s"},
+	"log.critic_repairs_done": {
+
+		LangEN: "[Critic] Surgical repairs applied to %d scene/unit(s), %d skipped"},
+	"log.critic_repair_failed": {
+
+		LangEN: "[Critic] Surgical repair failed for scene %d unit %d — deferring to full-chapter retry"},
 	"log.factcheck_pass": {
 
 		LangEN: "[Fact-check] Passed ✓"},

@@ -20,10 +20,10 @@ func TestCalcChapterLengthRange(t *testing.T) {
 		wantMin int
 		wantMax int
 	}{
-		{5000, 4500, 7500},
-		{2500, 2250, 3750},
-		{10000, 9000, 15000},
-		{0, 2250, 3750}, // defaults to 2500
+		{5000, 4500, 9000},
+		{2500, 2250, 4500},
+		{10000, 9000, 18000},
+		{0, 2250, 4500}, // defaults to 2500
 	}
 	for _, tt := range tests {
 		minLen, maxLen := calcChapterLengthRange(tt.target)
@@ -31,6 +31,55 @@ func TestCalcChapterLengthRange(t *testing.T) {
 			t.Errorf("calcChapterLengthRange(%d) = (%d,%d), want (%d,%d)",
 				tt.target, minLen, maxLen, tt.wantMin, tt.wantMax)
 		}
+	}
+}
+
+func TestCalcSceneLengthRange(t *testing.T) {
+	tests := []struct {
+		budget  int
+		wantMin int
+		wantMax int
+	}{
+		{1000, 900, 1100}, // ±10% band
+		{833, 750, 916},   // ceil at the floor, floor at the ceiling of ±10%
+		{5, 5, 5},         // tiny budgets: ±10% collapses onto the budget itself
+		{0, 0, 0},         // degenerate budget: nothing to enforce
+	}
+	for _, tt := range tests {
+		minLen, maxLen := calcSceneLengthRange(tt.budget)
+		if minLen != tt.wantMin || maxLen != tt.wantMax {
+			t.Errorf("calcSceneLengthRange(%d) = (%d,%d), want (%d,%d)",
+				tt.budget, minLen, maxLen, tt.wantMin, tt.wantMax)
+		}
+	}
+}
+
+func TestFormatSceneLengthRetryFeedbackMentionsRetries(t *testing.T) {
+	got := formatSceneLengthRetryFeedback("Ambush", 500, 900, 1100, 1, sceneBudgetMaxRetries, "en")
+	if !strings.Contains(got, "retry 2 of 3") || !strings.Contains(got, "2 attempt(s) left") {
+		t.Fatalf("feedback should count remaining retries, got %q", got)
+	}
+	if !strings.Contains(got, "too short") || !strings.Contains(got, "aiming for about 1000 words") || !strings.Contains(got, "roughly 500 more words") {
+		t.Fatalf("feedback should give direction + concrete delta, got %q", got)
+	}
+	last := formatSceneLengthRetryFeedback("Ambush", 500, 900, 1100, 3, sceneBudgetMaxRetries, "en")
+	if strings.Contains(last, "more attempt") {
+		t.Fatalf("final retry must not promise more attempts, got %q", last)
+	}
+	over := formatSceneLengthRetryFeedback("Ambush", 1400, 900, 1100, 1, sceneBudgetMaxRetries, "en")
+	if !strings.Contains(over, "too long") || !strings.Contains(over, "trim roughly 400 words") {
+		t.Fatalf("over-length feedback should ask to cut a concrete amount, got %q", over)
+	}
+	es := formatSceneLengthRetryFeedback("Emboscada", 500, 900, 1100, 2, sceneBudgetMaxRetries, "es")
+	if !strings.Contains(es, "reintento 3 de 3") {
+		t.Fatalf("spanish feedback missing retry counter, got %q", es)
+	}
+	if !strings.Contains(es, "salió corta") || !strings.Contains(es, "apuntando a unas 1000") || !strings.Contains(es, "500 palabras más") {
+		t.Fatalf("spanish feedback should give direction + concrete delta, got %q", es)
+	}
+	esOver := formatSceneLengthRetryFeedback("Emboscada", 1400, 900, 1100, 1, sceneBudgetMaxRetries, "es")
+	if !strings.Contains(esOver, "salió larga") || !strings.Contains(esOver, "recorta unas 400") {
+		t.Fatalf("spanish over-length feedback should ask to cut a concrete amount, got %q", esOver)
 	}
 }
 
@@ -54,12 +103,18 @@ func TestResolveChapterTargetWords(t *testing.T) {
 }
 
 func TestChapterLengthInRange(t *testing.T) {
-	minLen, maxLen := calcChapterLengthRange(5000)
+	minLen, maxLen := calcChapterLengthRange(5000) // 4500–9000 (90%–180%)
 	if !chapterLengthInRange(strings.Repeat("word ", 5000), minLen, maxLen) {
 		t.Fatal("5000 prose units should be in range for 5000 target")
 	}
-	if chapterLengthInRange(strings.Repeat("word ", 15000), minLen, maxLen) {
-		t.Fatal("15000 prose units should be out of range for 5000 target")
+	if !chapterLengthInRange(strings.Repeat("word ", 8900), minLen, maxLen) {
+		t.Fatal("8900 prose units should be inside the 180% ceiling")
+	}
+	if chapterLengthInRange(strings.Repeat("word ", 4400), minLen, maxLen) {
+		t.Fatal("4400 prose units is below the 90% floor and must be out of range")
+	}
+	if chapterLengthInRange(strings.Repeat("word ", 9100), minLen, maxLen) {
+		t.Fatal("9100 prose units exceeds the 180% ceiling and must be out of range")
 	}
 }
 
@@ -75,7 +130,7 @@ func TestProseLengthScore(t *testing.T) {
 }
 
 func TestIsSoftLengthDeviation(t *testing.T) {
-	_, maxLen := calcChapterLengthRange(5000) // 7500 (150% hard bound)
+	_, maxLen := calcChapterLengthRange(5000) // 9000 (180% hard bound)
 	if !isSoftLengthDeviation(maxLen+200, 4500, maxLen) {
 		t.Fatal("200 over max should be soft")
 	}
@@ -98,7 +153,7 @@ func TestShouldAttemptLengthAdjust(t *testing.T) {
 }
 
 func TestMaybeUpdateBestDraft(t *testing.T) {
-	minLen, maxLen := calcChapterLengthRange(5000) // 4500–7500
+	minLen, maxLen := calcChapterLengthRange(5000) // 4500–9000
 	target := 5000
 	var best string
 	score := int(^uint(0) >> 1)
@@ -259,9 +314,9 @@ func TestPerSceneWordCountsAndBudgetLines(t *testing.T) {
 }
 
 func TestHardBandRejectsVeryShortDraft(t *testing.T) {
-	minLen, maxLen := calcChapterLengthRange(4000) // 3600–6000
-	if minLen != 3600 || maxLen != 6000 {
-		t.Fatalf("range for 4000 = (%d,%d), want (3600,6000)", minLen, maxLen)
+	minLen, maxLen := calcChapterLengthRange(4000) // 3600–7200 (90%–180%)
+	if minLen != 3600 || maxLen != 7200 {
+		t.Fatalf("range for 4000 = (%d,%d), want (3600,7200)", minLen, maxLen)
 	}
 	short := strings.Repeat("palabra ", 1050)
 	if chapterLengthInRange(short, minLen, maxLen) {
@@ -420,5 +475,193 @@ func TestContinueTruncatedChapterStopsWhenAllScenesCovered(t *testing.T) {
 	}
 	if content != partial {
 		t.Fatal("content must pass through untouched")
+	}
+}
+
+// --- scene-by-scene sequential writing (writing_scenes.go) ------------------
+
+func wordsN(n int) string { return strings.Repeat("word ", n) }
+
+func TestSceneSequentialHappyPath(t *testing.T) {
+	api, prompts := streamAPI(t, func(idx int, prompt string) (string, string) {
+		return wordsN(1000), "stop" // three scenes × 1000 = 3000 = plan target
+	})
+	cfg, state := newContinuationFixture()
+	content, ok := generateChapterScenesSequentially(context.Background(), api, cfg, state, 0, nil, "", 3000, 2700, 5400, nil)
+	if !ok || content == "" {
+		t.Fatalf("sequential pass should succeed, got ok=%v len=%d", ok, len(content))
+	}
+	if got := prose.CountProseUnits(content); got != 3000 {
+		t.Fatalf("joined chapter = %d units, want 3000", got)
+	}
+	if len(*prompts) != 3 {
+		t.Fatalf("expected exactly 3 scene calls, got %d", len(*prompts))
+	}
+	// Each call must target only its own scene and carry the length block.
+	if !strings.Contains((*prompts)[1], "Write scene 2 of 3") ||
+		!strings.Contains((*prompts)[1], "approximately 1000-word fully dramatized scene") ||
+		!strings.Contains((*prompts)[1], "Keep the length within roughly 900–1100 words") {
+		t.Fatalf("scene 2 prompt missing task/length block:\n%s", (*prompts)[1])
+	}
+	// Later calls receive the already-written scenes for continuity.
+	if !strings.Contains((*prompts)[2], "scenes already written in this chapter") {
+		t.Fatal("last scene prompt should include the written-scenes tail")
+	}
+}
+
+func TestSceneSequentialRetriesOutOfBandScene(t *testing.T) {
+	var mu sync.Mutex
+	count := 0
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		mu.Lock()
+		count++
+		c := count
+		mu.Unlock()
+		switch c {
+		case 1:
+			return wordsN(600), "stop" // scene 1 too short → retry
+		case 2:
+			return wordsN(1000), "stop" // retry lands in band
+		default:
+			return wordsN(1000), "stop" // scenes 2 and 3 first try
+		}
+	})
+	cfg, state := newContinuationFixture()
+	content, ok := generateChapterScenesSequentially(context.Background(), api, cfg, state, 0, nil, "", 3000, 2700, 5400, nil)
+	if !ok {
+		t.Fatal("sequential pass should succeed after a successful retry")
+	}
+	if got := prose.CountProseUnits(content); got != 3000 {
+		t.Fatalf("joined chapter = %d units, want 3000 (bad draft must be replaced by retry)", got)
+	}
+}
+
+func TestSceneSequentialKeepsClosestAfterThreeFailedRetries(t *testing.T) {
+	var mu sync.Mutex
+	count := 0
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		mu.Lock()
+		count++
+		c := count
+		mu.Unlock()
+		if c <= 1+sceneBudgetMaxRetries { // scene 1 misses the band on every attempt
+			return wordsN(600), "stop"
+		}
+		return wordsN(1000), "stop"
+	})
+	cfg, state := newContinuationFixture()
+	content, ok := generateChapterScenesSequentially(context.Background(), api, cfg, state, 0, nil, "", 3000, 2700, 5400, nil)
+	if !ok {
+		t.Fatal("stubborn scene must not stall the chapter")
+	}
+	want := 600 + 2*1000
+	if got := prose.CountProseUnits(content); got != want {
+		t.Fatalf("joined chapter = %d units, want %d (closest scene-1 draft kept)", got, want)
+	}
+	if !strings.Contains(content, "LENGTH") && strings.Count(content, "word") != want {
+		t.Fatal("unexpected content")
+	}
+}
+
+func TestSceneSequentialFallsBackWithoutPlan(t *testing.T) {
+	api, prompts := streamAPI(t, func(idx int, prompt string) (string, string) {
+		return wordsN(1000), "stop"
+	})
+	cfg, state := newContinuationFixture()
+	state.Chapters[0].ScenePlan = nil
+	if _, ok := generateChapterScenesSequentially(context.Background(), api, cfg, state, 0, nil, "", 3000, 2700, 5400, nil); ok {
+		t.Fatal("unplanned chapters must fall back to the one-shot pipeline")
+	}
+	if len(*prompts) != 0 {
+		t.Fatalf("fallback should make no LLM calls, got %d", len(*prompts))
+	}
+}
+
+// An empty scene call (API produced no text) is retried in a controlled way:
+// one initial call plus up to sceneBudgetMaxRetries (3) retries per scene.
+func TestSceneSequentialRetriesEmptyCallUpToThreeTimes(t *testing.T) {
+	var mu sync.Mutex
+	count := 0
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		mu.Lock()
+		c := count
+		count++
+		mu.Unlock()
+		switch c {
+		case 0:
+			return "", "stop" // scene 1 first call fails → controlled retry
+		case 1:
+			return "", "stop" // second call also fails → keep retrying
+		default:
+			return wordsN(1000), "stop" // third call succeeds; scenes 2-3 succeed too
+		}
+	})
+	cfg, state := newContinuationFixture()
+	content, ok := generateChapterScenesSequentially(context.Background(), api, cfg, state, 0, nil, "", 3000, 2700, 5400, nil)
+	if !ok {
+		t.Fatal("empty-call retries must recover the scene, not stall the chapter")
+	}
+	if got := prose.CountProseUnits(content); got != 3000 {
+		t.Fatalf("joined chapter = %d units, want 3000", got)
+	}
+}
+
+// If every attempt of a scene returns no text at all, the scene is skipped
+// after exactly 1 initial call + sceneBudgetMaxRetries (3) controlled retries
+// (4 calls for that scene), and the remaining scenes still get written.
+func TestSceneSequentialSkipsSceneAfterExhaustingEmptyRetries(t *testing.T) {
+	var mu sync.Mutex
+	count := 0
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		mu.Lock()
+		count++
+		mu.Unlock()
+		if strings.Contains(prompt, "Write scene 1 of 3") || strings.Contains(prompt, "Escribe la escena 1 de 3") {
+			return "", "stop" // scene 1 never produces text
+		}
+		return wordsN(1000), "stop"
+	})
+	cfg, state := newContinuationFixture()
+	content, ok := generateChapterScenesSequentially(context.Background(), api, cfg, state, 0, nil, "", 3000, 2700, 5400, nil)
+	if !ok {
+		t.Fatal("one dead scene must not fail the whole sequential pass")
+	}
+	if got := prose.CountProseUnits(content); got != 2000 {
+		t.Fatalf("joined chapter = %d units, want 2000 (scene 1 skipped)", got)
+	}
+}
+
+// When every attempt of a scene misses the band, the draft kept must be the
+// one CLOSEST to the budget — not simply the first or the last one generated.
+func TestSceneSequentialKeepsAttemptClosestToBudget(t *testing.T) {
+	var mu sync.Mutex
+	count := 0
+	api, _ := streamAPI(t, func(idx int, prompt string) (string, string) {
+		mu.Lock()
+		count++
+		c := count
+		mu.Unlock()
+		if c <= 1+sceneBudgetMaxRetries { // all attempts at scene 1 miss the band
+			switch c {
+			case 1:
+				return wordsN(400), "stop" // dist 600
+			case 2:
+				return wordsN(800), "stop" // dist 200 → closest so far
+			case 3:
+				return wordsN(500), "stop" // dist 500 → worse, must NOT replace
+			default:
+				return wordsN(1300), "stop" // dist 300 → worse than 800, must NOT replace
+			}
+		}
+		return wordsN(1000), "stop" // scenes 2 and 3 land in band first try
+	})
+	cfg, state := newContinuationFixture()
+	content, ok := generateChapterScenesSequentially(context.Background(), api, cfg, state, 0, nil, "", 3000, 2700, 5400, nil)
+	if !ok {
+		t.Fatal("stubborn scene must not stall the chapter")
+	}
+	want := 800 + 2*1000
+	if got := prose.CountProseUnits(content); got != want {
+		t.Fatalf("joined chapter = %d units, want %d (the 800-word draft is closest to the 1000-word budget)", got, want)
 	}
 }

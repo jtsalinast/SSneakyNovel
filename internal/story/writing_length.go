@@ -8,15 +8,107 @@ import (
 	"showmethestory/internal/llm"
 	"showmethestory/internal/prose"
 	"showmethestory/internal/sse"
+	"strconv"
 	"strings"
 )
 
 const (
-	// A chapter is accepted only between 90% and 150% of the configured
-	// target words per chapter (Novel parameters).
+	// A chapter is accepted only between 90% and 180% of the configured
+	// target words per chapter (Novel parameters). The upper bound is wide
+	// on purpose: scene-by-scene generation habitually overshoots the target
+	// slightly, and a 150% ceiling forced needless compress passes.
 	chapterLengthAcceptMinPercent = 90
-	chapterLengthAcceptMaxPercent = 150
-	chapterGenMaxLengthAttempts   = 2 // initial draft + two rewrites, then compress/expand
+	chapterLengthAcceptMaxPercent = 180
+
+	// Per-scene word-budget band enforced while writing scene by scene:
+	// each scene must land within ±10% of its budget before the next scene
+	// starts. Up to three controlled REWRITE retries per scene (the initial
+	// generation plus up to three rewrites = at most four generations per
+	// scene); if every attempt still misses the band the closest draft is
+	// kept and the loop continues so a stubborn scene never stalls the whole
+	// chapter.
+	sceneBudgetTolerancePercent = 10
+	sceneBudgetMaxRetries       = 3
+
+	// sceneCallMaxRetries bounds the controlled retries when a scene call
+	// returns NO text at all (API/transport failure after the internal
+	// llm.MaxAPIRetries backoff loop). Same ceiling as the length retries:
+	// one initial call plus up to three controlled retries per scene.
+	sceneCallMaxRetries = 3
+)
+
+// calcSceneLengthRange returns the acceptance band [±sceneBudgetTolerancePercent]
+// around a scene's word budget. Budgets below 1 unit degrade to (0,0), which
+// callers treat as "nothing to enforce".
+func calcSceneLengthRange(budget int) (minLen, maxLen int) {
+	if budget < 1 {
+		return 0, 0
+	}
+	// Integer floor/ceil so the band is never narrower than ±10%: e.g. a
+	// 833-word budget yields [749, 917] instead of truncating to [749, 916].
+	minLen = (budget*(100-sceneBudgetTolerancePercent) + 99) / 100
+	if minLen < 1 {
+		minLen = 1
+	}
+	maxLen = (budget*(100+sceneBudgetTolerancePercent)) / 100
+	if maxLen < minLen {
+		maxLen = minLen
+	}
+	return minLen, maxLen
+}
+
+// formatSceneLengthRetryFeedback builds the controlled-retry instruction for
+// a scene whose draft fell outside its ±10% budget band. It reports the last
+// attempt's length and, when earlier attempts exist, warns the model that the
+// remaining retries must land inside the band.
+func formatSceneLengthRetryFeedback(sceneTitle string, actual, minLen, maxLen int, attempt, maxAttempts int, lang string) string {
+	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
+	remaining := maxOf(0, maxAttempts-attempt)
+	target := (minLen + maxLen) / 2
+	delta := target - actual
+	direction := "too long"
+	action := fmt.Sprintf("trim roughly %d words of redundant description", -delta)
+	if delta > 0 {
+		direction = "too short"
+		action = fmt.Sprintf("deepen it with roughly %d more words of concrete action, sensory detail and dialogue (never summarize)", delta)
+	} else if delta == 0 {
+		action = "keep this length"
+	}
+	if en {
+		guard := fmt.Sprintf("Your previous version of scene \"%s\" came out at %d words — %s. The editor only accepts %d–%d words for this scene, so rewrite it aiming for about %d words.", sceneTitle, actual, direction, minLen, maxLen, target)
+		if remaining > 0 {
+			guard += fmt.Sprintf(" This is retry %d of %d — you have %d attempt(s) left, so land in the range this time.", attempt+1, maxAttempts, remaining)
+		} else {
+			guard += " This is your last attempt."
+		}
+		return guard + fmt.Sprintf(" Rewrite ONLY this scene: %s. Keep everything that already works; don't write any other scene and don't advance past this scene's beats.", action)
+	}
+	guard := fmt.Sprintf("La versión anterior de la escena \"%s\" quedó en %d palabras — salió %s. El editor solo acepta entre %d y %d palabras para esta escena, así que reescríbela apuntando a unas %d.", sceneTitle, actual, dirShortES(actual, minLen, maxLen), minLen, maxLen, target)
+	if remaining > 0 {
+		guard += fmt.Sprintf(" Es el reintento %d de %d: te quedan %d intento(s) más, así que acierta el rango en este.", attempt+1, maxAttempts, remaining)
+	} else {
+		guard += " Este es tu último intento."
+	}
+	actionES := "recorta unas " + itoa(-delta) + " palabras de descripción redundante"
+	if delta > 0 {
+		actionES = "profundízala con unas " + itoa(delta) + " palabras más de acción concreta, detalle sensorial y diálogo (nunca la resumas)"
+	} else if delta == 0 {
+		actionES = "mantén esa longitud"
+	}
+	return guard + fmt.Sprintf(" Reescribe SOLO esta escena: %s. Conserva lo que ya funciona; no escribas ninguna otra escena ni avances más allá de los beats de esta escena.", actionES)
+}
+
+func dirShortES(actual, minLen, maxLen int) string {
+	if actual < minLen {
+		return "corta"
+	}
+	return "larga"
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+const (
+	chapterGenMaxLengthAttempts = 2 // initial draft + two rewrites, then compress/expand
 
 	chapterLengthSoftOverflowAbsolute = 200 // soft keep: within ±200 units of a hard bound
 	chapterLengthSoftOverflowPercent  = 0   // hard percentage band: no extra tolerance
@@ -44,7 +136,7 @@ const (
 const proseLengthOutOfRangeBase = 1_000_000
 
 // calcChapterLengthRange returns acceptable chapter prose length bounds in
-// WORDS (prose units): [90%, 150%] of the configured target words per chapter.
+// WORDS (prose units): [90%, 180%] of the configured target words per chapter.
 func calcChapterLengthRange(targetWordsPerChapter int) (minLen, maxLen int) {
 	if targetWordsPerChapter < 1 {
 		targetWordsPerChapter = 2500
@@ -132,9 +224,9 @@ func maybeUpdateBestDraft(bestContent *string, bestScore *int, content string, m
 
 func formatChapterLengthRequirementBlock(minLen, maxLen, target int, lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return fmt.Sprintf("Chapter prose must be %d–%d WORDS (target %d; accepted range is 90%%–150%% of the configured words per chapter). Below %d or above %d words is unacceptable — stay inside this chapter's outline only.", minLen, maxLen, target, minLen, maxLen)
+		return fmt.Sprintf("Chapter prose must be %d–%d WORDS (target %d; accepted range is 90%%–180%% of the configured words per chapter). Below %d or above %d words is unacceptable — stay inside this chapter's outline only.", minLen, maxLen, target, minLen, maxLen)
 	}
-	return fmt.Sprintf("La prosa del capítulo debe tener entre %d y %d PALABRAS (objetivo: %d; se acepta del 90%% al 150%% de las palabras por capítulo configuradas). Por debajo de %d o por encima de %d palabras no es aceptable: quédate dentro del outline de este capítulo.", minLen, maxLen, target, minLen, maxLen)
+	return fmt.Sprintf("La prosa del capítulo debe tener entre %d y %d PALABRAS (objetivo: %d; se acepta del 90%% al 180%% de las palabras por capítulo configuradas). Por debajo de %d o por encima de %d palabras no es aceptable: quédate dentro del outline de este capítulo.", minLen, maxLen, target, minLen, maxLen)
 }
 
 func formatChapterLengthRetryFeedback(actual, minLen, maxLen int, lang string) string {
@@ -356,14 +448,52 @@ func recoverChapterLengthBest(ctx context.Context, apiCfg *config.APIConfig, cfg
 		}
 		return bestContent, nil
 	}
+	// Surgical shrink: when the chapter is OVER the maximum and a scene plan
+	// exists, rewrite ONLY the scene that overshoots its own word budget the
+	// most (up to sceneShrinkMaxRetries controlled attempts inside
+	// shrinkSceneToBudget), leaving every other scene byte-identical. Only if
+	// no single scene overshoots — or the surgical pass cannot run — do we
+	// fall back to whole-chapter compression below.
+	if actual > maxLen && state != nil && idx >= 0 && idx < len(state.Chapters) {
+		ch := &state.Chapters[idx]
+		if ch.ScenePlan != nil && len(ch.ScenePlan.Scenes) > 1 {
+			if pos, excess := LongestWrittenScenePos(ch.ScenePlan, bestContent); pos >= 0 && excess > 0 {
+				if logger != nil {
+					logger.InfoKey("log.chapter_shrink_scene_pick", ch.Num, pos+1, len(ch.ScenePlan.Scenes), actual, maxLen, excess)
+				}
+				if shrunk, ok := shrinkSceneToBudget(ctx, apiCfg, cfg, state, idx, nil, pos, maxLen, logger); ok && shrunk != "" {
+					newLen := prose.CountProseUnits(shrunk)
+					maybeUpdateBestDraft(&bestContent, &bestScore, shrunk, minLen, maxLen, target)
+					if newLen >= minLen && newLen <= maxLen {
+						if logger != nil {
+							logger.SuccessKey("log.chapter_shrink_scene_ok", newLen, minLen, maxLen)
+						}
+						return shrunk, nil
+					}
+					if logger != nil {
+						logger.WarnKey("log.chapter_shrink_scene_partial", newLen, minLen, maxLen)
+					}
+					actual = newLen
+					if isSoftLengthDeviation(actual, minLen, maxLen) || !shouldAttemptLengthAdjust(actual, minLen, maxLen) {
+						if logger != nil {
+							logger.WarnKey("log.chapter_length_off_range", actual, minLen, maxLen)
+						}
+						return bestContent, nil
+					}
+				} else if logger != nil {
+					logger.WarnKey("log.chapter_shrink_scene_failed", ch.Num, pos+1)
+				}
+			}
+		}
+	}
 	if logger != nil {
 		logger.WarnKey("log.chapter_length_adjust", actual, minLen, maxLen)
 	}
 	scenePlanBlock := ""
-if state != nil && idx >= 0 && idx < len(state.Chapters) {
-scenePlanBlock = scenePlanBudgetLines(state.Chapters[idx].ScenePlan, bestContent, cfg.Language)
-}
-adjusted, err := adjustChapterLength(ctx, apiCfg, cfg, bestContent, minLen, maxLen, logger, scenePlanBlock)
+	if state != nil && idx >= 0 && idx < len(state.Chapters) {
+		scenePlanBlock = scenePlanBudgetLines(state.Chapters[idx].ScenePlan, bestContent, cfg.Language)
+	}
+	adjusted, err := adjustChapterLength(ctx, apiCfg, cfg, bestContent, minLen, maxLen, logger, scenePlanBlock)
 	if err != nil || adjusted == "" {
 		if logger != nil {
 			logger.WarnKey("log.chapter_length_adjust_failed", err)
@@ -443,6 +573,16 @@ func generateChapterContentWithLengthControl(ctx context.Context, apiCfg *config
 	lang := cfg.Language
 	if logger != nil {
 		logger.InfoKey("log.chapter_length_target", state.Chapters[idx].Num, target, minLen, maxLen, source)
+	}
+	// Scene-by-scene path: when the chapter has an approved beat sheet with
+	// per-scene word budgets, write one scene per LLM call, verify each scene
+	// lands within ±10% of its budget (up to three controlled retries otherwise)
+	// and
+	// only then move to the next scene. The full-chapter 90%–180% check runs
+	// at the end over the joined text. Chapters without a usable plan fall
+	// back to the legacy one-shot loop below.
+	if sc, ok := generateChapterScenesSequentially(ctx, apiCfg, cfg, state, idx, settings, extraWritingConstraints, target, minLen, maxLen, logger); ok {
+		return sc, nil
 	}
 	lengthFeedback := ""
 	var bestContent string

@@ -39,6 +39,21 @@ type Scene struct {
 	Description string `json:"description"`
 	PoV         string `json:"pov,omitempty"`
 	WordsBudget int    `json:"words_budget"`
+	// TropeRanges locates this scene's trope units inside the written scene
+	// prose as paragraph indexes [start,end) (see splitTropes). Derived after
+	// generation; nil until the scene has been written and segmented.
+	TropeRanges [][2]int `json:"beat_ranges,omitempty"`
+	// TropeUnits carries the labeled trope segmentation of the written scene
+	// (opening/tension/dialogue/reveal/…). Derived locally, never by LLM, so
+	// it survives reloads. Used by surgical repairs to target one trope unit
+	// instead of a whole scene.
+	TropeUnits []TropeUnit `json:"trope_units,omitempty"`
+	// BlockStart / BlockEnd are the first/last editable-block indexes that
+	// belong to this scene once ch.Blocks is derived per scene (see
+	// SyncChapterBlocksSceneAware). Written-scene bookkeeping for surgical
+	// beat-level rewrites.
+	BlockStart int `json:"block_start,omitempty"`
+	BlockEnd   int `json:"block_end,omitempty"`
 }
 
 // ScenePlan is the editable beat sheet for one chapter. Persisted on the

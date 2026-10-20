@@ -12,6 +12,7 @@ import (
 	"showmethestory/internal/config"
 	"showmethestory/internal/i18n"
 	"showmethestory/internal/llm"
+	"showmethestory/internal/prose"
 	"showmethestory/internal/sse"
 	"strings"
 )
@@ -26,6 +27,16 @@ type Block struct {
 	ID   int    `json:"id"`
 	Type string `json:"type"`
 	Text string `json:"text"`
+	// ScenePos is the 0-based index of the scene this block belongs to (-1
+	// when the chapter has no scene bookkeeping). The viewer uses it to draw
+	// a discreet marker whenever the scene changes between consecutive blocks.
+	ScenePos int `json:"scene_pos"`
+	// SceneTitle / TropeLabel describe the owning scene and the trope unit
+	// inside it, for hover tooltips on the marker chip.
+	SceneTitle string `json:"scene_title,omitempty"`
+	TropeLabel string `json:"trope_label,omitempty"`
+	TropeIndex int    `json:"trope_index,omitempty"`
+	TropeCount int    `json:"trope_count,omitempty"`
 }
 
 // splitBlockParagraphs splits content the same way segment revision does:
@@ -65,7 +76,20 @@ func classifyBlock(text string) string {
 
 // SyncChapterBlocks re-derives ch.Blocks from ch.Content, preserving the IDs
 // of blocks whose text is unchanged (first-unused exact match, in order).
+//
+// Trope-aware mode: when the chapter carries a scene plan with at least two
+// scenes whose paragraph spans map reliably onto the content, blocks are
+// grouped PER TROPE UNIT inside each scene (dialogue exchange, action run,
+// interiority beat…) — finer than one-block-per-scene, sturdier than
+// one-block-per-paragraph. Each block records its owning scene (ScenePos /
+// SceneTitle) and trope position (TropeLabel / TropeIndex / TropeCount) so
+// the viewer can render the discreet scene marker and its tooltip, and so
+// surgical critic repairs can splice a single trope unit. Chapters without
+// such bookkeeping keep the classic one-block-per-paragraph split.
 func SyncChapterBlocks(ch *ChapterState) {
+	if syncSceneBlocks(ch) {
+		return
+	}
 	paras, sep := splitBlockParagraphs(ch.Content)
 	ch.BlockSep = sep
 
@@ -88,10 +112,253 @@ func SyncChapterBlocks(ch *ChapterState) {
 			id = next
 			next++
 		}
-		blocks = append(blocks, Block{ID: id, Type: classifyBlock(p), Text: p})
+		blocks = append(blocks, Block{ID: id, Type: classifyBlock(p), Text: p, ScenePos: -1})
 	}
 	ch.Blocks = blocks
 	ch.NextBlockID = next
+}
+
+// syncSceneBlocks rebuilds ch.Blocks at TROPE granularity: one story-block per
+// trope unit of each planned scene (dialogue exchange, action run, interiority
+// beat…), which sits between "one block per blank-line paragraph" (too atomic)
+// and "one block per scene" (too coarse for surgical critic repairs). Scene
+// membership is recovered from each scene's recorded TropeRanges so the viewer
+// can render a discreet marker between scenes while blocks stay small enough
+// for single-unit rewrites. Returns false when the chapter has no usable
+// per-scene bookkeeping (caller falls back to paragraph blocks). The scene
+// boundaries must tile the whole content; otherwise derived ranges are stale
+// (e.g. after a manual edit) and paragraph mode is safer.
+func syncSceneBlocks(ch *ChapterState) bool {
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 2 {
+		return false
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 {
+		return false
+	}
+	spans := sceneParaSpans(ch, paras)
+	if spans == nil {
+		return false
+	}
+	used := make([]bool, len(ch.Blocks))
+	next := ch.NextBlockID
+	if next <= 0 {
+		next = 1
+	}
+	blocks := make([]Block, 0, len(spans)*2)
+	for pos, sp := range spans {
+		sceneParas := paras[sp[0]:sp[1]]
+		units := sceneTropeUnitSpans(ch, pos, sceneParas)
+		sc := ch.ScenePlan.Scenes[pos]
+		title := sceneDisplayTitle(sc, pos)
+		labels := sceneTropeLabels(ch, pos, units, sceneParas)
+		for ui, u := range units {
+			start, end := sp[0]+u[0], sp[0]+u[1]
+			if end > len(paras) {
+				end = len(paras)
+			}
+			if start >= end {
+				continue
+			}
+			text := strings.Join(paras[start:end], sep)
+			id := 0
+			for i, old := range ch.Blocks {
+				if !used[i] && old.Text == text {
+					used[i] = true
+					id = old.ID
+					break
+				}
+			}
+			if id == 0 {
+				id = next
+				next++
+			}
+			typ := classifyTropeBlock(text)
+			label := ""
+			if ui < len(labels) {
+				label = labels[ui]
+			}
+			blocks = append(blocks, Block{
+				ID: id, Type: typ, Text: text,
+				ScenePos: pos, SceneTitle: title,
+				TropeLabel: label, TropeIndex: ui + 1, TropeCount: len(units),
+			})
+		}
+	}
+	if len(blocks) == 0 {
+		return false
+	}
+	ch.Blocks = blocks
+	ch.NextBlockID = next
+	ch.BlockSep = sep
+	return true
+}
+
+// classifyTropeBlock labels a trope-level block for display hints. Multi-
+// paragraph trope runs keep the legacy "scene" type only when they contain a
+// hard break marker; otherwise dialogue vs paragraph classification applies.
+func classifyTropeBlock(text string) string {
+	if strings.Contains(text, "\n\n") && looksLikeTropeRun(text) {
+		return "trope"
+	}
+	return classifyBlock(text)
+}
+
+func looksLikeTropeRun(text string) bool {
+	n := strings.Count(text, "\n\n") + 1
+	return n >= 2
+}
+
+// sceneTropeUnitSpans returns [start,end) paragraph spans (scene-local) for
+// every trope unit of the scene at index pos. It prefers the segmentation
+// recorded by the sequential writer (Scene.TropeUnits/TropeRanges) when it is
+// consistent with the current paragraphs — i.e. the same number of units and
+// every recorded ParaEnd within range — and otherwise re-derives the tropes
+// live from the scene prose via splitTropes (keeps blocks fresh after manual
+// edits inside a scene). Always returns at least one span tiling the scene.
+func sceneTropeUnitSpans(ch *ChapterState, pos int, sceneParas []string) [][2]int {
+	fallback := [][2]int{{0, len(sceneParas)}}
+	if ch.ScenePlan == nil || pos >= len(ch.ScenePlan.Scenes) {
+		return fallback
+	}
+	sc := ch.ScenePlan.Scenes[pos]
+	if len(sc.TropeUnits) > 0 {
+		ok := true
+		maxEnd := 0
+		for _, u := range sc.TropeUnits {
+			if u.ParaStart < 0 || u.ParaEnd <= u.ParaStart || u.ParaEnd > len(sceneParas) {
+				ok = false
+				break
+			}
+			if u.ParaEnd > maxEnd {
+				maxEnd = u.ParaEnd
+			}
+		}
+		// Recorded ranges must tile the scene exactly; if the prose changed
+		// length the bookkeeping is stale and we re-segment instead.
+		if ok && maxEnd == len(sceneParas) {
+			spans := make([][2]int, 0, len(sc.TropeUnits))
+			for _, u := range sc.TropeUnits {
+				spans = append(spans, [2]int{u.ParaStart, u.ParaEnd})
+			}
+			return spans
+		}
+	}
+	// Re-derive tropes from the scene prose currently on disk.
+	sceneText := strings.Join(sceneParas, "\n\n")
+	if _, ranges := splitTropes(sceneText); len(ranges) > 0 {
+		return ranges
+	}
+	return fallback
+}
+
+// sceneDisplayTitle returns a short human label for the scene marker tooltip.
+func sceneDisplayTitle(sc Scene, pos int) string {
+	if t := strings.TrimSpace(sc.Title); t != "" {
+		return t
+	}
+	if d := strings.TrimSpace(sc.Description); d != "" {
+		if rs := []rune(d); len(rs) > 60 {
+			return string(rs[:60]) + "…"
+		}
+		return d
+	}
+	return fmt.Sprintf("Scene %d", pos+1)
+}
+
+// sceneTropeLabels maps each trope span of a scene to its trope label
+// (opening/tension/dialogue/…). Recorded unit labels are used when they align
+// 1:1 with the spans; otherwise labels are re-derived deterministically from
+// the span text so every block carries a meaningful label for the viewer's
+// tooltip (same cues as classifyTrope — no LLM call).
+func sceneTropeLabels(ch *ChapterState, pos int, spans [][2]int, sceneParas []string) []string {
+	out := make([]string, len(spans))
+	var units []TropeUnit
+	if ch.ScenePlan != nil && pos < len(ch.ScenePlan.Scenes) {
+		units = ch.ScenePlan.Scenes[pos].TropeUnits
+	}
+	if len(units) == len(spans) {
+		for i, u := range units {
+			out[i] = string(u.Label)
+		}
+		return out
+	}
+	// Spans were re-derived live (or units are missing): classify each span's
+	// own text positionally within the scene.
+	for i, sp := range spans {
+		lo, hi := sp[0], sp[1]
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(sceneParas) {
+			hi = len(sceneParas)
+		}
+		if lo >= hi {
+			continue
+		}
+		text := strings.Join(sceneParas[lo:hi], "\n\n")
+		out[i] = string(classifyTrope(text, i == 0, i == len(spans)-1))
+	}
+	return out
+}
+
+// sceneParaSpans computes [start,end) paragraph spans for every planned scene
+// from their word budgets, verifying the spans tile the full content exactly.
+// Returns nil when the mapping is unreliable.
+func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
+	plan := ch.ScenePlan
+	totalBudget := 0
+	for _, sc := range plan.Scenes {
+		if sc.WordsBudget < 1 {
+			return nil // degenerate budget → can't map reliably
+		}
+		totalBudget += sc.WordsBudget
+	}
+	if totalBudget <= 0 || len(plan.Scenes) > len(paras) {
+		return nil
+	}
+	totalWords := 0
+	counts := make([]int, len(paras))
+	for i, p := range paras {
+		counts[i] = prose.CountProseUnits(p)
+		totalWords += counts[i]
+	}
+	if totalWords == 0 {
+		return nil
+	}
+	// Distribute paragraphs proportionally to budgets; each boundary snaps to
+	// the paragraph whose cumulative words pass the cumulative budget share.
+	spans := make([][2]int, 0, len(plan.Scenes))
+	cumBudget := 0
+	start := 0
+	for pos, sc := range plan.Scenes {
+		cumBudget += sc.WordsBudget
+		end := len(paras)
+		if pos != len(plan.Scenes)-1 {
+			want := float64(cumBudget) / float64(totalBudget) * float64(totalWords)
+			acc := 0
+			end = start
+			for i := start; i < len(paras); i++ {
+				acc += counts[i]
+				end = i + 1
+				if float64(acc) >= want {
+					break
+				}
+			}
+			if end > len(paras)-1 {
+				end = len(paras) - 1 // always leave at least one paragraph for later scenes
+			}
+		}
+		if end <= start {
+			return nil
+		}
+		spans = append(spans, [2]int{start, end})
+		start = end
+	}
+	if start != len(paras) {
+		spans[len(spans)-1][1] = len(paras)
+	}
+	return spans
 }
 
 // rebuildContentFromBlocks makes ch.Content match ch.Blocks after a block edit.

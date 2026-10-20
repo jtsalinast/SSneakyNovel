@@ -209,9 +209,36 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 
 		logger.StepInfo(4, 6, "Verifying this chapter against established facts...")
 		historySummary := buildHistorySummary(state, i)
-		factCheckResult := generateChapterFactCheckWithRetryLog(factCtx, apiCfg, cfg, state, i, content, historySummary, logger)
-
-		failed, issues := parseFactCheckResult(factCheckResult)
+		// Evolved fact-check: bestseller critic with act awareness and scene
+		// routing. Scene-scoped issues are repaired surgically (single trope
+		// unit / single scene rewrite) before burning a full-chapter retry.
+		// Leftover chapter-scope issues fall through to the classic loop below.
+		var failed bool
+		var issues string
+		if logger != nil {
+			logger.InfoKey("log.critic_run")
+		}
+		criticContent, leftover := repairChapterWithCritic(factCtx, apiCfg, cfg, state, i, content, historySummary, settings, logger)
+		if len(leftover) == 0 {
+			if criticContent != content {
+				content = criticContent
+				ch.Content = content
+				summary = generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
+				if summary != "" {
+					ch.Summary = summary
+				}
+			}
+			failed = false
+			issues = ""
+		} else {
+			if criticContent != content {
+				// Keep the surgical fixes; only the structural issues remain.
+				content = criticContent
+				ch.Content = content
+			}
+			failed = true
+			issues = strings.Join(leftover, "\n")
+		}
 		if failed {
 			accumulatedIssues = dedupeArcIssuesWithCast(mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues)), state, i)
 			if attempt < maxFactCheckRetries {
@@ -243,8 +270,9 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 					return fmt.Errorf("summary generation failed or was canceled")
 				}
 				ch.Summary = summary
-				factCheckResult = generateChapterFactCheckWithRetryLog(factCtx, apiCfg, cfg, state, i, content, historySummary, logger)
-				failed, issues = parseFactCheckResult(factCheckResult)
+				_, leftover2 := repairChapterWithCritic(factCtx, apiCfg, cfg, state, i, content, historySummary, settings, logger)
+				failed = len(leftover2) > 0
+				issues = strings.Join(leftover2, "\n")
 				if failed {
 					accumulatedIssues = dedupeArcIssuesWithCast(mergeUniqueIssues(accumulatedIssues, splitFactCheckIssues(issues)), state, i)
 				} else {
