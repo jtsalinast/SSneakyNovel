@@ -448,6 +448,44 @@ func recoverChapterLengthBest(ctx context.Context, apiCfg *config.APIConfig, cfg
 		}
 		return bestContent, nil
 	}
+	// Surgical shrink: when the chapter is OVER the maximum and a scene plan
+	// exists, rewrite ONLY the scene that overshoots its own word budget the
+	// most (up to sceneShrinkMaxRetries controlled attempts inside
+	// shrinkSceneToBudget), leaving every other scene byte-identical. Only if
+	// no single scene overshoots — or the surgical pass cannot run — do we
+	// fall back to whole-chapter compression below.
+	if actual > maxLen && state != nil && idx >= 0 && idx < len(state.Chapters) {
+		ch := &state.Chapters[idx]
+		if ch.ScenePlan != nil && len(ch.ScenePlan.Scenes) > 1 {
+			if pos, excess := LongestWrittenScenePos(ch.ScenePlan, bestContent); pos >= 0 && excess > 0 {
+				if logger != nil {
+					logger.InfoKey("log.chapter_shrink_scene_pick", ch.Num, pos+1, len(ch.ScenePlan.Scenes), actual, maxLen, excess)
+				}
+				if shrunk, ok := shrinkSceneToBudget(ctx, apiCfg, cfg, state, idx, nil, pos, maxLen, logger); ok && shrunk != "" {
+					newLen := prose.CountProseUnits(shrunk)
+					maybeUpdateBestDraft(&bestContent, &bestScore, shrunk, minLen, maxLen, target)
+					if newLen >= minLen && newLen <= maxLen {
+						if logger != nil {
+							logger.SuccessKey("log.chapter_shrink_scene_ok", newLen, minLen, maxLen)
+						}
+						return shrunk, nil
+					}
+					if logger != nil {
+						logger.WarnKey("log.chapter_shrink_scene_partial", newLen, minLen, maxLen)
+					}
+					actual = newLen
+					if isSoftLengthDeviation(actual, minLen, maxLen) || !shouldAttemptLengthAdjust(actual, minLen, maxLen) {
+						if logger != nil {
+							logger.WarnKey("log.chapter_length_off_range", actual, minLen, maxLen)
+						}
+						return bestContent, nil
+					}
+				} else if logger != nil {
+					logger.WarnKey("log.chapter_shrink_scene_failed", ch.Num, pos+1)
+				}
+			}
+		}
+	}
 	if logger != nil {
 		logger.WarnKey("log.chapter_length_adjust", actual, minLen, maxLen)
 	}

@@ -56,10 +56,10 @@ func TestCalcSceneLengthRange(t *testing.T) {
 
 func TestFormatSceneLengthRetryFeedbackMentionsRetries(t *testing.T) {
 	got := formatSceneLengthRetryFeedback("Ambush", 500, 900, 1100, 1, sceneBudgetMaxRetries, "en")
-	if !strings.Contains(got, "retry 2 of 3") || !strings.Contains(got, "2 more attempt(s)") {
+	if !strings.Contains(got, "retry 2 of 3") || !strings.Contains(got, "2 attempt(s) left") {
 		t.Fatalf("feedback should count remaining retries, got %q", got)
 	}
-	if !strings.Contains(got, "too short") || !strings.Contains(got, "aim for about 1000 words") || !strings.Contains(got, "roughly 500 more words") {
+	if !strings.Contains(got, "too short") || !strings.Contains(got, "aiming for about 1000 words") || !strings.Contains(got, "roughly 500 more words") {
 		t.Fatalf("feedback should give direction + concrete delta, got %q", got)
 	}
 	last := formatSceneLengthRetryFeedback("Ambush", 500, 900, 1100, 3, sceneBudgetMaxRetries, "en")
@@ -67,18 +67,18 @@ func TestFormatSceneLengthRetryFeedbackMentionsRetries(t *testing.T) {
 		t.Fatalf("final retry must not promise more attempts, got %q", last)
 	}
 	over := formatSceneLengthRetryFeedback("Ambush", 1400, 900, 1100, 1, sceneBudgetMaxRetries, "en")
-	if !strings.Contains(over, "too long") || !strings.Contains(over, "cut roughly 400 words") {
+	if !strings.Contains(over, "too long") || !strings.Contains(over, "trim roughly 400 words") {
 		t.Fatalf("over-length feedback should ask to cut a concrete amount, got %q", over)
 	}
 	es := formatSceneLengthRetryFeedback("Emboscada", 500, 900, 1100, 2, sceneBudgetMaxRetries, "es")
 	if !strings.Contains(es, "reintento 3 de 3") {
 		t.Fatalf("spanish feedback missing retry counter, got %q", es)
 	}
-	if !strings.Contains(es, "quedó corta") || !strings.Contains(es, "apunta a unas 1000") || !strings.Contains(es, "500 palabras más") {
+	if !strings.Contains(es, "salió corta") || !strings.Contains(es, "apuntando a unas 1000") || !strings.Contains(es, "500 palabras más") {
 		t.Fatalf("spanish feedback should give direction + concrete delta, got %q", es)
 	}
 	esOver := formatSceneLengthRetryFeedback("Emboscada", 1400, 900, 1100, 1, sceneBudgetMaxRetries, "es")
-	if !strings.Contains(esOver, "quedó larga") || !strings.Contains(esOver, "elimina unos 400") {
+	if !strings.Contains(esOver, "salió larga") || !strings.Contains(esOver, "recorta unas 400") {
 		t.Fatalf("spanish over-length feedback should ask to cut a concrete amount, got %q", esOver)
 	}
 }
@@ -498,13 +498,13 @@ func TestSceneSequentialHappyPath(t *testing.T) {
 		t.Fatalf("expected exactly 3 scene calls, got %d", len(*prompts))
 	}
 	// Each call must target only its own scene and carry the length block.
-	if !strings.Contains((*prompts)[1], "WRITE SCENE 2 OF 3") ||
-		!strings.Contains((*prompts)[1], "- Aim for about 1000 words of prose") ||
-		!strings.Contains((*prompts)[1], "Acceptable range: 900–1100 words") {
+	if !strings.Contains((*prompts)[1], "Write scene 2 of 3") ||
+		!strings.Contains((*prompts)[1], "approximately 1000-word fully dramatized scene") ||
+		!strings.Contains((*prompts)[1], "Keep the length within roughly 900–1100 words") {
 		t.Fatalf("scene 2 prompt missing task/length block:\n%s", (*prompts)[1])
 	}
 	// Later calls receive the already-written scenes for continuity.
-	if !strings.Contains((*prompts)[2], "Already-written scenes of THIS chapter") {
+	if !strings.Contains((*prompts)[2], "scenes already written in this chapter") {
 		t.Fatal("last scene prompt should include the written-scenes tail")
 	}
 }

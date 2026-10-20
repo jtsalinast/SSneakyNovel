@@ -426,7 +426,10 @@ var systemPrompts = map[string]map[string]string{
 		LangEN: "The user quoted this passage but gave no specific instruction. Apply minimal polish to the passage (tighten wording, sharpen sensory detail) and keep all plot beats intact."},
 	"memory_manager": {
 
-		LangEN: "You are a precise narrative memory manager. Output strict JSON exactly as requested — no extra prose."}}
+		LangEN: "You are a precise narrative memory manager. Output strict JSON exactly as requested — no extra prose."},
+	"bestseller_chapter_critic_json": {
+
+		LangEN: "You are a world-famous literary editor whose lists have produced multiple global bestsellers, running the final consistency-and-quality pass on one drafted chapter of a novel in progress. You know which act of the book the chapter belongs to and its scene breakdown. Output strict JSON exactly as requested — no extra prose, no markdown code fences."}}
 
 // SystemPromptFor returns the AI system-prompt for the given key; falls back to English.
 func SystemPromptFor(lang, key string) string {

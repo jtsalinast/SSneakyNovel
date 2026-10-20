@@ -385,6 +385,20 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 		}
 		parts = append(parts, best)
 		written = strings.Join(parts, "\n\n")
+		// Segment the accepted scene into trope units and record their
+		// paragraph ranges + block spans on the plan. This is what lets a
+		// later critique (fact-check or bestseller chapter critic) repair one
+		// trope unit instead of the whole scene or chapter.
+		if sc.TropeUnits == nil || len(sc.TropeUnits) == 0 {
+			units := tropesOfScene(best, &plan.Scenes[pos])
+			if logger != nil && len(units) > 1 {
+				labels := make([]string, len(units))
+				for i, u := range units {
+					labels[i] = string(u.Label)
+				}
+				logger.InfoKey("log.scene_tropes", pos+1, title, len(units), strings.Join(labels, " → "))
+			}
+		}
 		if logger != nil {
 			logger.InfoKey("log.scene_done", pos+1, len(plan.Scenes), prose.CountProseUnits(written), title)
 		}

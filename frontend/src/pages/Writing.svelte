@@ -7,6 +7,7 @@
   import { countProseUnits } from '../lib/proseUnits.js';
   import TaskTokenBadge from '../components/TaskTokenBadge.svelte';
   import KnowledgePanel from '../components/KnowledgePanel.svelte';
+  import InfoTip from '../components/InfoTip.svelte';
   import ScenePlanEditor from '../components/ScenePlanEditor.svelte';
   import { settings } from '../lib/stores.js';
   let showKnowledge = false;
@@ -148,6 +149,27 @@
   let revisingBlockId = null;  // block whose AI revision feedback is being typed
   let blockFeedback = '';
   let insertAfterId = null;    // id of the block after which a new block is inserted (0 = start)
+
+  // —— Scene marker chips (trope-granular story blocks) ——————————————
+  // The backend tags every block with its owning scene (scene_pos /
+  // scene_title) and trope unit (trope_label / trope_index / trope_count).
+  // Between two consecutive blocks whose scene changes we render an almost
+  // invisible chip: very light grey background, near-transparent white text,
+  // not selectable. On hover it reveals an ⓘ icon (same popover style as the
+  // SmartSelect/SmartCombobox summary tips) describing the incoming scene.
+  function sceneMarkerBefore(blocks, i) {
+    if (!blocks || i <= 0 || i >= blocks.length) return null;
+    const prev = blocks[i - 1], cur = blocks[i];
+    const p = prev.scene_pos ?? -1, c = cur.scene_pos ?? -1;
+    if (c < 0 || p === c) return null; // no bookkeeping or same scene
+    return { pos: c + 1, title: cur.scene_title || '', label: cur.trope_label || '', idx: cur.trope_index || 0, count: cur.trope_count || 0 };
+  }
+  function sceneMarkerTip(m) {
+    if (!m) return '';
+    let s = $t('writing.blockSceneMarker', [m.pos]) + '\n\n' + (m.title || '');
+    if (m.label && m.count > 0) s += '\n' + $t('writing.blockTropeHint', [m.label, m.idx, m.count]);
+    return s.trim();
+  }
   let insertText = '';
 
   function startBlockEdit(b) {
@@ -698,7 +720,16 @@
                     <span class="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-0.5 align-text-bottom"></span>
                   {:else if chapterBlocks.length > 0}
                     <div class="space-y-3">
-                      {#each chapterBlocks as b (b.id)}
+                      {#each chapterBlocks as b, bi (b.id)}
+                        {#if sceneMarkerBefore(chapterBlocks, bi)}
+                          {@const m = sceneMarkerBefore(chapterBlocks, bi)}
+                          <div class="scene-marker-row flex justify-center -my-1" aria-hidden="true">
+                            <span class="scene-marker-chip group inline-flex items-center gap-1 rounded-full bg-base-content/5 px-2 py-0.5 select-none pointer-events-auto cursor-default">
+                              <span class="scene-marker-text text-[10px] font-medium text-white/[0.07] tracking-wider uppercase select-none">{m.pos}</span>
+                              <span class="opacity-0 group-hover:opacity-100 transition-opacity"><InfoTip text={sceneMarkerTip(m)} label={$t('writing.blockSceneMarker', [m.pos])} /></span>
+                            </span>
+                          </div>
+                        {/if}
                         <div id={'story-block-' + b.id} class="relative rounded -mx-2 px-2 py-1 cursor-pointer transition-colors hover:bg-base-100/40 {highlightedBlock === b.id || activeFact?.references?.some(r => !r.stale && r.chapter === ch.num && r.block_id === b.id) ? 'story-block-highlight' : selectedBlockId === b.id ? 'story-block-selected' : ''}" role="button" tabindex="0" aria-pressed={selectedBlockId===b.id} on:click={() => selectBlock(b.id)} on:keydown={(e) => { if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectBlock(b.id); } }}>
                           {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-2">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation={() => { activeFact = fact; highlightedBlock = b.id; knowledgeExpanded = true; }}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
                           {#if editingBlockId === b.id}
