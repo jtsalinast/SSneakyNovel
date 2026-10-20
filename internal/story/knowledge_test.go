@@ -401,7 +401,18 @@ func TestGenerateChapterReviewAfterMemorySync(t *testing.T) {
 			cfg.Prompts.ChapterSummary = "TEST_SUMMARY"
 			cfg.Prompts.FactCheck = "TEST_FACT_CHECK"
 			cfg.Prompts.MemoryUpdate = "TEST_MEMORY"
-			content := strings.Repeat("Alice walked home. ", 350)
+			// The sequential scene writer emits "[TASK — WRITE SCENE n OF m ONLY]" /
+			// "[TAREA — ESCRIBE SOLO LA ESCENA n DE m]" markers in every per-scene
+			// user prompt. Each mocked scene returns ~500 words so it lands inside
+			// its ±10% budget band on the first attempt, and the joined chapter
+			// (~1000 words) sits inside the final 90%–180% verification band — no
+			// retries or length-recovery calls are triggered.
+			isScenePrompt := func(p string) bool {
+				return strings.Contains(p, "[TASK — WRITE SCENE") || strings.Contains(p, "[TAREA — ESCRIBE SOLO LA ESCENA")
+			}
+			walkScene := strings.TrimRight(strings.Repeat("Alice walked home along the river. ", 175), " ")
+			doorScene := strings.TrimRight(strings.Repeat("She found the door ajar and stepped inside. ", 138), " ")
+			content := walkScene + "\n\n" + doorScene
 			memoryCalls := 0
 			api := batchAPI(t, func(prompt string) string {
 				switch {
@@ -409,6 +420,14 @@ func TestGenerateChapterReviewAfterMemorySync(t *testing.T) {
 					// Scene-plan gate (scene_plan.go): return a valid beat sheet so
 					// generation proceeds straight to prose in auto mode below.
 					return `[{"title":"Walk","description":"Alice walks home along the river","pov":"Alice","words_budget":500},{"title":"Door","description":"She finds the door ajar","pov":"Alice","words_budget":500}]`
+				case isScenePrompt(prompt):
+					if strings.Contains(prompt, "WRITE SCENE 2") || strings.Contains(prompt, "ESCRIBE SOLO LA ESCENA 2") {
+						return doorScene
+					}
+					return walkScene
+				case strings.HasPrefix(prompt, "You are a novel editor"):
+					// Whole-chapter length adjuster: keep the draft as-is.
+					return content
 				case strings.HasPrefix(prompt, "TEST_PROSE"):
 					return content
 				case strings.HasPrefix(prompt, "TEST_SUMMARY"):

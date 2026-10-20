@@ -99,6 +99,49 @@ var messageCatalog = map[string]map[string]string{
 	"log.scene_plan_cancelled": {
 
 		LangEN: "Scene plan generation cancelled"},
+	// ---- Scene-by-scene sequential writing (writing_scenes.go) ----
+	"log.scene_seq_start": {
+
+		LangEN: "[Scenes] Chapter %d: writing scene by scene — %d scenes, target %d words. Each scene is generated and verified against its word budget (±10%) before the next one starts."},
+	"log.scene_gen_start": {
+
+		LangEN: "[Scenes] Writing scene %d/%d \"%s\" — budget %d words, accepted range %d–%d words..."},
+	"log.scene_gen_failed": {
+
+		LangEN: "[Scenes] Scene %d \"%s\": attempt %d produced no text"},
+	"log.scene_call_retry": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\": call failed — controlled retry, %d attempt(s) left for this scene..."},
+	"log.scene_truncated": {
+
+		LangEN: "[Scenes] Scene %d \"%s\": output was cut off by the token cap at %d words"},
+	"log.scene_count_ok": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" ✓ %d words (budget %d, band %d–%d) — moving to the next scene"},
+	"log.scene_count_retry": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\" is %d words (budget %d, band %d–%d) — %s. Controlled retry %d/%d..."},
+	"log.scene_count_keep_best": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" still %d words after %d retries (budget %d, band %d–%d) — keeping closest draft and continuing"},
+	"log.scene_done": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\" accepted — chapter now at %d words total"},
+	"log.scene_seq_fallback": {
+
+		LangEN: "[Scenes] No scene could be written sequentially — falling back to single-pass chapter generation"},
+	"log.chapter_total_check": {
+
+		LangEN: "[Length] All scenes written: chapter total is %d WORDS (accepted range %d–%d) — verifying whole chapter..."},
+	"log.chapter_total_ok": {
+
+		LangEN: "[Length] Chapter total verified ✓ %d words (range %d–%d)"},
+	"log.chapter_total_adjust": {
+
+		LangEN: "[Length] Chapter total %d words is outside the %d–%d range — adjusting the full draft..."},
+	"log.chapter_total_final": {
+
+		LangEN: "[Length] After adjustment the chapter is %d words (target range %d–%d) — keeping best available draft"},
 	"log.auto_scene_plan_on": {
 
 		LangEN: "Scene-plan automation enabled: plans are generated and accepted automatically"},
