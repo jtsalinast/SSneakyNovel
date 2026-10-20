@@ -85,7 +85,7 @@ var chapterTemplateTokens = []string{
 
 // scenePlanChecklistBlock renders the full beat sheet as context for every
 // scene call so the model knows where this scene sits inside the chapter.
-func scenePlanChecklistBlock(plan *ScenePlan, lang string) string {
+func scenePlanChecklistBlock(plan *ScenePlan, lang string, chapterTargetTotal int) string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	var sb strings.Builder
 	if en {
@@ -94,11 +94,15 @@ func scenePlanChecklistBlock(plan *ScenePlan, lang string) string {
 		fmt.Fprintf(&sb, "[Beat sheet completo del capítulo — escribe SOLO la escena asignada abajo]\n")
 	}
 	cum := 0
+	denominator := plan.TargetWords
+	if denominator <= 0 {
+		denominator = chapterTargetTotal
+	}
 	for _, s := range plan.Scenes {
 		cum += s.WordsBudget
 		pct := 0
-		if plan.TargetWords > 0 {
-			pct = cum * 100 / plan.TargetWords
+		if denominator > 0 {
+			pct = cum * 100 / denominator
 		}
 		if en {
 			fmt.Fprintf(&sb, "%d. [%d words · ends ≈%d%%] %s: %s\n", s.ID, s.WordsBudget, pct, s.Title, s.Description)
@@ -112,7 +116,7 @@ func scenePlanChecklistBlock(plan *ScenePlan, lang string) string {
 // buildSceneWritingPrompt assembles the user prompt for ONE scene call:
 // shared chapter context + beat sheet + already-written scenes (verbatim tail
 // for continuity) + the assigned scene with its hard ±band word budget.
-func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, plan *ScenePlan, pos int, written string, extraConstraints, retryFeedback string) (userPrompt, systemPrompt string) {
+func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, plan *ScenePlan, pos int, written string, extraConstraints, retryFeedback string, chapterTargetTotal int) (userPrompt, systemPrompt string) {
 	lang := cfg.Language
 	sc := plan.Scenes[pos]
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
@@ -132,46 +136,78 @@ func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, setti
 		sb.WriteString(ctxBlock)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(scenePlanChecklistBlock(plan, lang))
+	sb.WriteString(scenePlanChecklistBlock(plan, lang, chapterTargetTotal))
 	sb.WriteString("\n\n")
 
 	writtenWords := prose.CountProseUnits(written)
+	targetPct := 0
+	if sc.WordsBudget > 0 && chapterTargetTotal > 0 {
+		targetPct = sc.WordsBudget * 100 / chapterTargetTotal
+	}
+	lastScene := pos == len(plan.Scenes)-1
+	firstScene := writtenWords == 0
 	if en {
-		fmt.Fprintf(&sb, "[TASK — WRITE SCENE %d OF %d ONLY]\n", pos+1, len(plan.Scenes))
-		sb.WriteString("Write ONLY the following scene as a FULL dramatized scene (concrete action, sensory detail, dialogue, character interiority). Do not summarize it, do not write any other scene, and do not advance past this scene's beats.\n\n")
-		fmt.Fprintf(&sb, "Assigned scene — %s (%d words budget, accepted range %d–%d words):\n%s\n\n", title, sc.WordsBudget, bandMin, bandMax, strings.TrimSpace(sc.Description))
+		// Natural-language request up front, in the style that word-count
+		// benchmarks follow ("Write a ~N-word scene based on this outline…").
+		fmt.Fprintf(&sb, "Write scene %d of %d of this chapter: an approximately %d-word fully dramatized scene", pos+1, len(plan.Scenes), sc.WordsBudget)
+		if targetPct > 0 {
+			fmt.Fprintf(&sb, " (about %d%% of the chapter)", targetPct)
+		}
+		sb.WriteString(", in prose.\n\n")
+		fmt.Fprintf(&sb, "Outline for this scene — %s:\n%s\n\n", title, strings.TrimSpace(sc.Description))
 		if sc.PoV != "" {
-			fmt.Fprintf(&sb, "Point of view for this scene: %s\n\n", sc.PoV)
+			fmt.Fprintf(&sb, "Point of view: %s\n\n", sc.PoV)
+		}
+		if firstScene && strings.TrimSpace(buildPreviousChapterTailForLang(state, idx, lang)) != "" {
+			sb.WriteString("Open the chapter flowing naturally from the end of the previous chapter shown above.\n\n")
+		}
+		if lastScene {
+			sb.WriteString("This is the last scene: close the chapter on the hook the outline implies.\n\n")
 		}
 		if writtenWords > 0 {
-			sb.WriteString("[Already-written scenes of THIS chapter — continue seamlessly from the END of this text; never repeat or rewrite it]\n")
+			sb.WriteString("Here are the scenes already written in this chapter. Continue seamlessly from the very end of this text — match its voice and tense, and never repeat or rewrite it:\n\n")
 			sb.WriteString(strings.TrimSpace(written))
 			sb.WriteString("\n\n")
-		} else if strings.TrimSpace(buildPreviousChapterTailForLang(state, idx, lang)) != "" {
-			sb.WriteString("The chapter's opening must flow naturally from the previous chapter's ending shown above.\n\n")
+			sb.WriteString("Now write only the new scene, picking up right where that text leaves off.\n\n")
 		}
-		if pos == len(plan.Scenes)-1 {
-			sb.WriteString("This is the LAST scene: close the chapter on the hook/cliffhanger implied by the outline.\n\n")
+		sb.WriteString("A few ground rules:\n")
+		sb.WriteString("- Play the scene out moment to moment — concrete action, sensory detail, dialogue, the character's inner life. Don't summarize it and don't skip ahead past its beats.\n")
+		fmt.Fprintf(&sb, "- Keep the length within roughly %d–%d words: under %d it reads like a summary, over %d it drags. Before you finish, check how long your draft is and adjust it toward %d words.\n", bandMin, bandMax, bandMin, bandMax, sc.WordsBudget)
+		sb.WriteString("- Write only this scene, nothing else — no other scene from the plan above.")
+		if lastScene {
+			sb.WriteString(" End it with a clean cliffhanger or emotional turn that closes the chapter.")
 		}
-		fmt.Fprintf(&sb, "Output exactly %d–%d words of prose (hard length requirement for this scene). Output ONLY the scene prose — no titles, numbering, recaps, dividers or meta lines.", bandMin, bandMax)
+		sb.WriteString("\nReturn only the finished scene prose itself — no title, numbering, recap, divider or note about what you wrote.")
 	} else {
-		fmt.Fprintf(&sb, "[TAREA — ESCRIBE SOLO LA ESCENA %d DE %d]\n", pos+1, len(plan.Scenes))
-		sb.WriteString("Escribe ÚNICAMENTE la siguiente escena como una escena completa dramatizada (acción concreta, detalle sensorial, diálogo, vida interior). No la resumas, no escribas ninguna otra escena y no avances más allá de los beats de esta escena.\n\n")
-		fmt.Fprintf(&sb, "Escena asignada — %s (presupuesto %d palabras, rango aceptado %d–%d palabras):\n%s\n\n", title, sc.WordsBudget, bandMin, bandMax, strings.TrimSpace(sc.Description))
+		fmt.Fprintf(&sb, "Escribe la escena %d de %d de este capítulo: una escena completamente dramatizada de aproximadamente %d palabras", pos+1, len(plan.Scenes), sc.WordsBudget)
+		if targetPct > 0 {
+			fmt.Fprintf(&sb, " (cerca del %d%% del capítulo)", targetPct)
+		}
+		sb.WriteString(", en prosa.\n\n")
+		fmt.Fprintf(&sb, "Argumento de esta escena — %s:\n%s\n\n", title, strings.TrimSpace(sc.Description))
 		if sc.PoV != "" {
-			fmt.Fprintf(&sb, "Punto de vista de esta escena: %s\n\n", sc.PoV)
+			fmt.Fprintf(&sb, "Punto de vista: %s\n\n", sc.PoV)
+		}
+		if firstScene && strings.TrimSpace(buildPreviousChapterTailForLang(state, idx, lang)) != "" {
+			sb.WriteString("Abre el capítulo fluyendo con naturalidad desde el final del capítulo anterior mostrado arriba.\n\n")
+		}
+		if lastScene {
+			sb.WriteString("Esta es la última escena: cierra el capítulo con el gancho que sugiere el argumento.\n\n")
 		}
 		if writtenWords > 0 {
-			sb.WriteString("[Escenas ya escritas de ESTE capítulo — continúa sin costuras desde el FINAL de este texto; nunca lo repitas ni lo reescribas]\n")
+			sb.WriteString("Estas son las escenas ya escritas de este capítulo. Continúa sin costuras justo desde el final de este texto — iguala su voz y su tiempo verbal, y nunca lo repitas ni lo reescribas:\n\n")
 			sb.WriteString(strings.TrimSpace(written))
 			sb.WriteString("\n\n")
-		} else if strings.TrimSpace(buildPreviousChapterTailForLang(state, idx, lang)) != "" {
-			sb.WriteString("La apertura del capítulo debe fluir naturalmente desde el final del capítulo anterior mostrado arriba.\n\n")
+			sb.WriteString("Ahora escribe solo la escena nueva, retomando exactamente donde se queda ese texto.\n\n")
 		}
-		if pos == len(plan.Scenes)-1 {
-			sb.WriteString("Esta es la ÚLTIMA escena: cierra el capítulo con el gancho que implica el outline.\n\n")
+		sb.WriteString("Algunas reglas básicas:\n")
+		sb.WriteString("- Desarrolla la escena momento a momento: acción concreta, detalle sensorial, diálogo y vida interior del personaje. No la resumes ni saltes más allá de sus beats.\n")
+		fmt.Fprintf(&sb, "- Mantén la extensión entre aproximadamente %d y %d palabras: por debajo de %d se lee como resumen; por encima de %d se arrastra. Antes de terminar, revisa cuánto mediste y ajústalo hacia las %d palabras.\n", bandMin, bandMax, bandMin, bandMax, sc.WordsBudget)
+		sb.WriteString("- Escribe solo esta escena, nada más — ninguna otra escena del plan de arriba.")
+		if lastScene {
+			sb.WriteString(" Ciérrala con un gancho o giro emocional que remate el capítulo.")
 		}
-		fmt.Fprintf(&sb, "Devuelve exactamente %d–%d palabras de prosa (requisito de longitud estricto de esta escena). Devuelve SOLO la prosa de la escena — sin títulos, numeración, resúmenes, separadores ni comentarios meta.", bandMin, bandMax)
+		sb.WriteString("\nDevuelve únicamente la prosa final de la escena — sin título, numeración, resumen, separador ni comentario alguno sobre lo escrito.")
 	}
 
 	userPrompt = sb.String()
@@ -279,7 +315,7 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 		// band is hit, the pool is exhausted, or the scene cannot be written.
 		attemptsLeft := sceneBudgetMaxRetries
 		for try := 0; ; try++ {
-			userPrompt, systemPrompt := buildSceneWritingPrompt(cfg, state, idx, settings, plan, pos, written, extraConstraints, retryFeedback)
+			userPrompt, systemPrompt := buildSceneWritingPrompt(cfg, state, idx, settings, plan, pos, written, extraConstraints, retryFeedback, target)
 			text, truncated := streamSceneCall(ctx, apiCfg, cfg, idx, userPrompt, systemPrompt, logger)
 			if text == "" {
 				if logger != nil {

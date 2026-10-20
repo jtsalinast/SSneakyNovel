@@ -8,6 +8,7 @@ import (
 	"showmethestory/internal/llm"
 	"showmethestory/internal/prose"
 	"showmethestory/internal/sse"
+	"strconv"
 	"strings"
 )
 
@@ -63,19 +64,48 @@ func calcSceneLengthRange(budget int) (minLen, maxLen int) {
 func formatSceneLengthRetryFeedback(sceneTitle string, actual, minLen, maxLen int, attempt, maxAttempts int, lang string) string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	remaining := maxOf(0, maxAttempts-attempt)
-	if en {
-		guard := fmt.Sprintf("LENGTH GUARD: your previous version of scene \"%s\" was %d words; this scene MUST be %d–%d words.", sceneTitle, actual, minLen, maxLen)
-		if remaining > 0 {
-			guard += fmt.Sprintf(" This is retry %d of %d — you have %d more attempt(s), so hit the range this time.", attempt+1, maxAttempts, remaining)
-		}
-		return guard + " Rewrite ONLY this scene at that length — if it was too short, deepen it with concrete action, sensory detail and dialogue (never summarize); if it was too long, cut redundant description. Do not write any other scene and do not advance past this scene's beats."
+	target := (minLen + maxLen) / 2
+	delta := target - actual
+	direction := "too long"
+	action := fmt.Sprintf("trim roughly %d words of redundant description", -delta)
+	if delta > 0 {
+		direction = "too short"
+		action = fmt.Sprintf("deepen it with roughly %d more words of concrete action, sensory detail and dialogue (never summarize)", delta)
+	} else if delta == 0 {
+		action = "keep this length"
 	}
-	guard := fmt.Sprintf("CONTROL DE LONGITUD: la versión anterior de la escena \"%s\" tuvo %d palabras; esta escena DEBE tener entre %d y %d palabras.", sceneTitle, actual, minLen, maxLen)
+	if en {
+		guard := fmt.Sprintf("Your previous version of scene \"%s\" came out at %d words — %s. The editor only accepts %d–%d words for this scene, so rewrite it aiming for about %d words.", sceneTitle, actual, direction, minLen, maxLen, target)
+		if remaining > 0 {
+			guard += fmt.Sprintf(" This is retry %d of %d — you have %d attempt(s) left, so land in the range this time.", attempt+1, maxAttempts, remaining)
+		} else {
+			guard += " This is your last attempt."
+		}
+		return guard + fmt.Sprintf(" Rewrite ONLY this scene: %s. Keep everything that already works; don't write any other scene and don't advance past this scene's beats.", action)
+	}
+	guard := fmt.Sprintf("La versión anterior de la escena \"%s\" quedó en %d palabras — salió %s. El editor solo acepta entre %d y %d palabras para esta escena, así que reescríbela apuntando a unas %d.", sceneTitle, actual, dirShortES(actual, minLen, maxLen), minLen, maxLen, target)
 	if remaining > 0 {
 		guard += fmt.Sprintf(" Es el reintento %d de %d: te quedan %d intento(s) más, así que acierta el rango en este.", attempt+1, maxAttempts, remaining)
+	} else {
+		guard += " Este es tu último intento."
 	}
-	return guard + " Reescribe SOLO esta escena con esa longitud: si quedó corta, profundízala con acción concreta, detalle sensorial y diálogo (nunca la resumas); si quedó larga, elimina descripción redundante. No escribas ninguna otra escena ni avances más allá de los beats de esta escena."
+	actionES := "recorta unas " + itoa(-delta) + " palabras de descripción redundante"
+	if delta > 0 {
+		actionES = "profundízala con unas " + itoa(delta) + " palabras más de acción concreta, detalle sensorial y diálogo (nunca la resumas)"
+	} else if delta == 0 {
+		actionES = "mantén esa longitud"
+	}
+	return guard + fmt.Sprintf(" Reescribe SOLO esta escena: %s. Conserva lo que ya funciona; no escribas ninguna otra escena ni avances más allá de los beats de esta escena.", actionES)
 }
+
+func dirShortES(actual, minLen, maxLen int) string {
+	if actual < minLen {
+		return "corta"
+	}
+	return "larga"
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 const (
 	chapterGenMaxLengthAttempts = 2 // initial draft + two rewrites, then compress/expand
