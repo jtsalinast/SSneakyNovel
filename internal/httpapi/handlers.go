@@ -17,6 +17,7 @@ import (
 	"showmethestory/internal/prose"
 	"showmethestory/internal/sse"
 	"showmethestory/internal/story"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -980,9 +981,26 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 			err := story.GenerateChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, h.logger)
 
 			if err != nil {
-				if ctx.Err() != nil {
+				// Three distinct outcomes, previously conflated into a single
+				// "Chapter writing cancelled" log that made every stop look like a
+				// user cancel and hid the fact that prose was checkpointed:
+				//  - explicit Stop (taskCtx cancelled): genuine cancellation; any
+				//    finished prose was already checkpointed by the abort helpers.
+				//  - task deadline hit (context.DeadlineExceeded): NOT a user cancel —
+				//    report it as an abort with saved progress.
+				//  - summary-step failure after expensive prose: draft resumable via
+				//    POST /api/chapters/{n}/resume.
+				switch {
+				case errors.Is(context.Cause(ctx), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded):
+					h.logger.WarnKey("log.chapter_write_aborted")
+				case story.IsSummaryStepFailed(err):
+					// Draft checkpoint + explanatory warn already logged inside
+					// abortChapterWithDraftCheckpoint; keep the batch stopped but do
+					// not claim the work was lost.
+					h.logger.WarnKey("log.chapter_write_aborted")
+				case ctx.Err() != nil:
 					h.logger.WarnKey("log.chapter_write_cancelled")
-				} else {
+				default:
 					var wcErr *story.WritingConflictError
 					if errors.As(err, &wcErr) {
 						h.logger.WarnKey("log.chapter_write_conflict_pause")
@@ -996,13 +1014,14 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 						h.logger.ErrorKey("log.chapter_write_failed", err)
 					}
 				}
+			} else {
+				h.logger.SuccessKey("log.chapter_write_done", chIdx+1, chTitle)
+			}
+			h.broadcastProgress()
+			if err != nil {
 				h.logger.TaskEnd("chapter_generation", false)
-				h.broadcastProgress()
 				return
 			}
-
-			h.logger.SuccessKey("log.chapter_write_done", chIdx+1, chTitle)
-			h.broadcastProgress()
 
 			// move: movethischapterandlifeloweronechapter; closeopencloselaterinthischapterhourstop
 			if !h.isAutoConfirmOn() {
@@ -1182,6 +1201,140 @@ func (h *Handlers) PostChapterConfirm(w http.ResponseWriter, r *http.Request) {
 	h.logger.SuccessKey("log.chapter_confirmed", ch.Num)
 	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
 	h.startKnowledgeSync()
+}
+
+// chapterRecoveryTarget resolves {num} from the URL and validates it is a real
+// chapter index. Shared by the resume/fact-check/reset handlers.
+func (h *Handlers) chapterRecoveryTarget(w http.ResponseWriter, r *http.Request) (int, bool) {
+	numStr := r.PathValue("num")
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num", numStr)
+		return 0, false
+	}
+	idx := -1
+	for i := range h.state.Chapters {
+		if h.state.Chapters[i].Num == num {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		h.writeErrorReq(w, r, http.StatusNotFound, "chapter_not_found", num)
+		return 0, false
+	}
+	return idx, true
+}
+
+// PostChapterResume re-runs ONLY the cheap post-prose steps (summary →
+// critic/fact-check → memory) on the draft that an interrupted generation
+// checkpointed (DraftSavedAt). The prose itself is never regenerated.
+func (h *Handlers) PostChapterResume(w http.ResponseWriter, r *http.Request) {
+	if !h.tryStartTask() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	idx, ok := h.chapterRecoveryTarget(w, r)
+	if !ok {
+		h.endTask()
+		return
+	}
+	if h.state.Phase != "writing" {
+		h.endTask()
+		h.writeErrorReq(w, r, http.StatusBadRequest, "phase_not_writing")
+		return
+	}
+	chNum := h.state.Chapters[idx].Num
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("chapter_resume")
+		ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterGenerate, true)
+		err := story.ResumeChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, chNum, h.logger)
+		if err != nil {
+			var wcErr *story.WritingConflictError
+			switch {
+			case errors.As(err, &wcErr):
+				h.logger.WarnKey("log.chapter_write_conflict_pause")
+			case ctx.Err() != nil:
+				h.logger.WarnKey("log.chapter_write_cancelled")
+			default:
+				h.logger.ErrorKey("log.chapter_resume_failed", err)
+			}
+			h.logger.TaskEnd("chapter_resume", false)
+			h.broadcastProgress()
+			return
+		}
+		h.logger.TaskEnd("chapter_resume", true)
+		h.broadcastProgress()
+	}()
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "resuming"})
+}
+
+// PostChapterFactCheck re-runs the critic/fact-check pass over the CURRENT
+// draft of a chapter without regenerating its prose or summary.
+func (h *Handlers) PostChapterFactCheck(w http.ResponseWriter, r *http.Request) {
+	if !h.tryStartTask() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	idx, ok := h.chapterRecoveryTarget(w, r)
+	if !ok {
+		h.endTask()
+		return
+	}
+	if h.state.Phase != "writing" {
+		h.endTask()
+		h.writeErrorReq(w, r, http.StatusBadRequest, "phase_not_writing")
+		return
+	}
+	chNum := h.state.Chapters[idx].Num
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("chapter_factcheck")
+		ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterFactCheck, true)
+		err := story.FactCheckChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, chNum, h.logger)
+		if err != nil {
+			var wcErr *story.WritingConflictError
+			switch {
+			case errors.As(err, &wcErr):
+				h.logger.WarnKey("log.chapter_write_conflict_pause")
+			case ctx.Err() != nil:
+				h.logger.WarnKey("log.chapter_write_cancelled")
+			default:
+				h.logger.ErrorKey("log.chapter_factcheck_failed", err)
+			}
+			h.logger.TaskEnd("chapter_factcheck", false)
+			h.broadcastProgress()
+			return
+		}
+		h.logger.TaskEnd("chapter_factcheck", true)
+		h.broadcastProgress()
+	}()
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "factchecking"})
+}
+
+// PostChapterReset discards the generated prose/summary/blocks of the CURRENT
+// chapter so the next generation starts clean. Synchronous (no LLM calls).
+func (h *Handlers) PostChapterReset(w http.ResponseWriter, r *http.Request) {
+	if h.isTaskRunning() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	idx, ok := h.chapterRecoveryTarget(w, r)
+	if !ok {
+		return
+	}
+	if h.state.Phase != "writing" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "phase_not_writing")
+		return
+	}
+	chNum := h.state.Chapters[idx].Num
+	if err := story.ResetChapterAction(h.state, h.progressPath, chNum, h.logger); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "chapter_reset_failed", err.Error())
+		return
+	}
+	h.broadcastProgress()
+	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
 }
 
 func (h *Handlers) PostChapterEdit(w http.ResponseWriter, r *http.Request) {

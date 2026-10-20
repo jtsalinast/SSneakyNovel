@@ -32,6 +32,13 @@ type ChapterState struct {
 	// ContentRev is a content hash for API responses; the frontend uses it to
 	// invalidate its per-chapter content cache. Never persisted.
 	ContentRev string `json:"content_rev,omitempty"`
+	// DraftSavedAt marks when an interrupted write checkpointed its prose into
+	// Content (see saveChapterDraftCheckpoint). Set when GenerateChapterAction
+	// aborts AFTER expensive prose was already produced (summary/critic step
+	// failed, task deadline hit, manual stop), so the draft survives reloads and
+	// can be resumed from the failed step instead of being thrown away. Cleared
+	// when the chapter completes normally or is reset.
+	DraftSavedAt string `json:"draft_saved_at,omitempty"`
 	// Blocks is the editable-block view of Content (one block per paragraph,
 	// stable IDs). Persisted in the chapter file, stripped from progress.json
 	// and /api/progress; ships with GET /api/chapters/{num}.

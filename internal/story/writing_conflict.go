@@ -1020,11 +1020,10 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 	logger.InfoKey("log.prose_revised", prose.CountProseUnits(revisedContent))
 
 	logger.StepInfo(2, 4, "Resumiendo este capítulo para el historial...")
-	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
-	if summary == "" {
-		return fmt.Errorf("summary generation failed or was canceled")
+	if _, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, idx, progressPath, logger, ch.Content); err != nil {
+		return err
 	}
-	ch.Summary = summary
+	ch = &state.Chapters[idx]
 	logger.InfoKey("log.summary_done")
 
 	logger.StepInfo(3, 4, "Verifying this chapter against established facts...")

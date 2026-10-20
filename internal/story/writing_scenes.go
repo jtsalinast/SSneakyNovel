@@ -282,6 +282,13 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 
 	var parts []string
 	written := ""
+	// paraAcc tracks how many content paragraphs every accepted scene so far
+	// occupies, so each Scene can record its EXACT absolute paragraph span
+	// (ParaStart/ParaEnd) instead of relying on proportional budget guesses.
+	// syncSceneBlocks prefers these spans; when they are fresh the viewer
+	// groups story-blocks per trope inside each scene and renders the scene
+	// chip between scenes.
+	paraAcc := 0
 	for pos, sc := range plan.Scenes {
 		if ctx.Err() != nil {
 			break
@@ -385,6 +392,14 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 		}
 		parts = append(parts, best)
 		written = strings.Join(parts, "\n\n")
+		// Record this scene's EXACT absolute paragraph span over the joined
+		// content (paraAcc accumulates accepted-scene paragraph counts). This is
+		// what lets syncSceneBlocks group story-blocks per trope inside each
+		// scene without guessing from word budgets.
+		bestParas, _ := splitBlockParagraphs(best)
+		plan.Scenes[pos].ParaStart = paraAcc
+		plan.Scenes[pos].ParaEnd = paraAcc + len(bestParas)
+		paraAcc += len(bestParas)
 		// Segment the accepted scene into trope units and record their
 		// paragraph ranges + block spans on the plan. This is what lets a
 		// later critique (fact-check or bestseller chapter critic) repair one

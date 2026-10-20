@@ -75,6 +75,47 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_write_cancelled": {
 
 		LangEN: "Chapter writing cancelled"},
+	// Distinguishes a hard stop (user cancel / task deadline) from a step
+	// failure whose prose was already checkpointed as a resumable draft.
+	"log.chapter_write_aborted": {
+
+		LangEN: "Chapter generation stopped before finishing — progress saved; use Resume, Fact-check or Reset on the chapter"},
+	// Emitted by abortChapterWithDraftCheckpoint when the draft checkpoint save succeeds.
+	"log.chapter_draft_saved": {
+
+		LangEN: "Chapter %d kept as resumable draft (summary/verification step failed) — use Resume, Fact-check or Reset in the sidebar"},
+	"log.chapter_draft_checkpoint_failed": {
+
+		LangEN: "Could not persist the draft checkpoint for this chapter: %v"},
+	// Resume / fact-check / reset recovery actions (see ResumeChapterAction,
+	// FactCheckChapterAction, ResetChapterAction and their HTTP handlers).
+	"log.chapter_resume": {
+
+		LangEN: "Resuming chapter %d from its saved draft (%d prose units) — skipping prose regeneration"},
+	"log.chapter_factcheck_rerun": {
+
+		LangEN: "Re-running critic/fact-check on chapter %d..."},
+	// Error surfaced by the resume / fact-check HTTP handlers when the
+	// recovery action itself fails (not a cancellation).
+	"log.chapter_resume_failed": {
+
+		LangEN: "Chapter resume failed: %v"},
+	"log.chapter_factcheck_failed": {
+
+		LangEN: "Chapter fact-check re-run failed: %v"},
+	// Emitted when an LLM step exhausts llm.MaxAPIRetries.
+	"log.max_retries_exceeded": {
+
+		LangEN: "Max API retries exceeded: %v"},
+	"log.chapter_factcheck_clean": {
+
+		LangEN: "Chapter %d passed verification — moved to review"},
+	"log.chapter_reset": {
+
+		LangEN: "Chapter %d cleared: prose, summary and blocks discarded; outline and scene plan kept"},
+	"log.scene_plan_gate_skipped_draft": {
+
+		LangEN: "Scene-plan gate skipped for chapter %d: a resumable draft already exists (use Resume/Fact-check/Reset)"},
 	"log.chapter_write_conflict_pause": {
 
 		LangEN: "Chapter writing paused due to fact-check conflict — choose how to proceed"},

@@ -128,14 +128,37 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	if err := ensureScenePlanForWriting(ctx, apiCfg, cfg, state, i, progressPath, logger); err != nil {
 		var spErr *ScenePlanPendingError
 		if errors.As(err, &spErr) {
-			// Persist the pause marker so the UI can auto-open the scene-plan
-			// editor after a reload (same pattern as PendingWritingConflict).
-			state.PendingScenePlanChapter = spErr.ChapterNum
-			_ = SaveProgress(progressPath, state)
+			// Scene-plan review gate: normally the plan awaits approval and we pause.
+			// But when a previous interrupted run already checkpointed finished
+			// prose for this chapter (DraftSavedAt), pausing again would push the
+			// user toward regenerate/approve — which throws away that expensive
+			// draft. Skip the gate in that case and continue with the saved content
+			// (the resume guard below logs it and clears DraftSavedAt).
+			if ch.DraftSavedAt != "" && strings.TrimSpace(ch.Content) != "" {
+				logger.WarnKey("log.scene_plan_gate_skipped_draft", ch.Num)
+			} else {
+				// Persist the pause marker so the UI can auto-open the scene-plan
+				// editor after a reload (same pattern as PendingWritingConflict).
+				state.PendingScenePlanChapter = spErr.ChapterNum
+				_ = SaveProgress(progressPath, state)
+				return err
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 	state.PendingScenePlanChapter = 0
+
+	// Resume guard: a previous interrupted run may have checkpointed finished
+	// prose for THIS chapter (DraftSavedAt). Regenerating from scratch would
+	// throw away the most expensive step of the pipeline; instead keep the
+	// draft and continue the normal flow below — the summary/critic steps are
+	// cheap compared to writing, and the user can also resume explicitly via
+	// POST /api/chapters/{num}/resume.
+	if ch.DraftSavedAt != "" && strings.TrimSpace(ch.Content) != "" {
+		logger.InfoKey("log.chapter_draft_resumed", ch.Num, prose.CountProseUnits(ch.Content))
+		ch.DraftSavedAt = ""
+	}
 
 	ch.Status = StatusWriting
 	if err := SaveProgress(progressPath, state); err != nil {
@@ -200,10 +223,12 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 		logger.InfoKey("log.prose_done", prose.CountProseUnits(content))
 
 		logger.StepInfo(3, 6, "Resumiendo este capítulo para el historial...")
-		summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
-		if summary == "" {
-			return fmt.Errorf("summary generation failed or was canceled")
+		summary, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, i, progressPath, logger, content)
+		if err != nil {
+			return err
 		}
+		ch = &state.Chapters[i]
+		content = ch.Content
 		ch.Summary = summary
 		logger.InfoKey("log.summary_done")
 
@@ -223,10 +248,14 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 			if criticContent != content {
 				content = criticContent
 				ch.Content = content
-				summary = generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
-				if summary != "" {
-					ch.Summary = summary
+				newSummary, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, i, progressPath, logger, content)
+				if err != nil {
+					return err
 				}
+				ch = &state.Chapters[i]
+				content = ch.Content
+				ch.Summary = newSummary
+				summary = newSummary
 			}
 			failed = false
 			issues = ""
@@ -265,11 +294,14 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 					return fmt.Errorf("la generación de prosa falló o fue cancelada")
 				}
 				ch.Content = content
-				summary = generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
-				if summary == "" {
-					return fmt.Errorf("summary generation failed or was canceled")
+				newSummary, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, i, progressPath, logger, content)
+				if err != nil {
+					return err
 				}
-				ch.Summary = summary
+				ch = &state.Chapters[i]
+				content = ch.Content
+				ch.Summary = newSummary
+				summary = newSummary
 				_, leftover2 := repairChapterWithCritic(factCtx, apiCfg, cfg, state, i, content, historySummary, settings, logger)
 				failed = len(leftover2) > 0
 				issues = strings.Join(leftover2, "\n")
@@ -338,6 +370,251 @@ func GenerateChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 
 	logger.SuccessKey("log.chapter_write_complete", ch.Num)
 	return nil
+}
+
+// ResumeChapterAction re-runs ONLY the cheap post-prose steps (summary →
+// critic/fact-check repair) on the draft prose of chapter chapterNum that an
+// interrupted GenerateChapterAction checkpointed (DraftSavedAt), then moves it
+// to review. It never regenerates the prose — the expensive step whose loss
+// this function exists to prevent. Safe to call when DraftSavedAt is stale:
+// the flag is cleared once the chapter completes.
+func ResumeChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, settings *ProjectSettings, skills []Skill, chapterNum int, logger *sse.LogBroadcaster) error {
+	if err := llm.ValidateConfig(apiCfg); err != nil {
+		return err
+	}
+	idx := -1
+	for i := range state.Chapters {
+		if state.Chapters[i].Num == chapterNum {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("chapter %d does not exist", chapterNum)
+	}
+	ch := &state.Chapters[idx]
+	if strings.TrimSpace(ch.Content) == "" {
+		return fmt.Errorf("chapter %d has no draft content to resume", chapterNum)
+	}
+	if ch.Status == StatusAccepted {
+		return fmt.Errorf("chapter #%d is already accepted", chapterNum)
+	}
+	if idx != state.CurrentChapterIndex {
+		return fmt.Errorf("chapter #%d is not the current chapter; resume it there first", state.Chapters[state.CurrentChapterIndex].Num)
+	}
+
+	logger.InfoKey("log.chapter_resume", chapterNum, prose.CountProseUnits(ch.Content))
+	ch.DraftSavedAt = ""
+	ch.Status = StatusWriting
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+
+	logger.StepInfo(1, 3, "Resumiendo este capítulo para el historial...")
+	summary, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, idx, progressPath, logger, ch.Content)
+	if err != nil {
+		return err
+	}
+	ch = &state.Chapters[idx]
+	ch.Summary = summary
+	content := ch.Content
+	logger.InfoKey("log.summary_done")
+
+	logger.StepInfo(2, 3, "Verifying this chapter against established facts...")
+	factSkills := ResolveSkills(skills, cfg.SkillConfig, SkillScopeChapterFactCheck, cfg.Language)
+	factCtx := llm.WithPromptAddon(ctx, FormatSkillsContent(factSkills))
+	historySummary := buildHistorySummary(state, idx)
+	criticContent, leftover := repairChapterWithCritic(factCtx, apiCfg, cfg, state, idx, content, historySummary, settings, logger)
+	if len(leftover) > 0 {
+		// Surface the unresolved issues as a normal conflict so the user gets the
+		// existing keep-in-review / revise / retry choices instead of a dead end.
+		ch.Content = criticContent
+		conflict := buildWritingConflict(state, idx, leftover, nil)
+		conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, cfg.Language)
+		state.PendingWritingConflict = conflict
+		if err := SaveProgress(progressPath, state); err != nil {
+			return err
+		}
+		logger.WritingConflict(conflict)
+		return &WritingConflictError{Conflict: conflict}
+	}
+	if criticContent != content {
+		content = criticContent
+		ch.Content = content
+		newSummary, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, idx, progressPath, logger, content)
+		if err != nil {
+			return err
+		}
+		ch = &state.Chapters[idx]
+		ch.Summary = newSummary
+	}
+	logger.InfoKey("log.factcheck_pass")
+
+	logger.StepInfo(3, 3, "Syncing narrative memory...")
+	if len(state.Foreshadows) > 0 {
+		syncForeshadowsAfterChapter(ctx, apiCfg, cfg, state, idx, progressPath, logger)
+	}
+	syncMemoryAfterChapter(ctx, apiCfg, cfg, state, idx, progressPath, logger)
+	ch = &state.Chapters[idx]
+
+	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
+	ch.Status = StatusReview
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+	logger.SuccessKey("log.chapter_write_complete", ch.Num)
+	return nil
+}
+
+// FactCheckChapterAction re-runs the critic/fact-check pass on an EXISTING
+// chapter draft without touching its prose unless the critic proposes surgical
+// repairs, and without regenerating the summary. Lets the author re-verify a
+// chapter after editing it or after a previous run raised a conflict. The
+// chapter must be the current one and in writing/review status.
+func FactCheckChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, progressPath string, settings *ProjectSettings, skills []Skill, chapterNum int, logger *sse.LogBroadcaster) error {
+	if err := llm.ValidateConfig(apiCfg); err != nil {
+		return err
+	}
+	idx := -1
+	for i := range state.Chapters {
+		if state.Chapters[i].Num == chapterNum {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("chapter %d does not exist", chapterNum)
+	}
+	ch := &state.Chapters[idx]
+	if strings.TrimSpace(ch.Content) == "" {
+		return fmt.Errorf("chapter %d has no generated content yet", chapterNum)
+	}
+	if ch.Status != StatusWriting && ch.Status != StatusReview {
+		return fmt.Errorf("chapter #%d cannot be fact-checked in status %q", chapterNum, ch.Status)
+	}
+	if idx != state.CurrentChapterIndex {
+		return fmt.Errorf("chapter #%d is not the current chapter; only the current chapter can be verified", chapterNum)
+	}
+
+	logger.InfoKey("log.chapter_factcheck_rerun", chapterNum)
+	factSkills := ResolveSkills(skills, cfg.SkillConfig, SkillScopeChapterFactCheck, cfg.Language)
+	factCtx := llm.WithPromptAddon(ctx, FormatSkillsContent(factSkills))
+	historySummary := buildHistorySummary(state, idx)
+	content := ch.Content
+	criticContent, leftover := repairChapterWithCritic(factCtx, apiCfg, cfg, state, idx, content, historySummary, settings, logger)
+	ch = &state.Chapters[idx]
+	if criticContent != content {
+		ch.Content = criticContent
+	}
+	if len(leftover) > 0 {
+		conflict := buildWritingConflict(state, idx, leftover, nil)
+		conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, cfg.Language)
+		state.PendingWritingConflict = conflict
+		if err := SaveProgress(progressPath, state); err != nil {
+			return err
+		}
+		logger.WritingConflict(conflict)
+		return &WritingConflictError{Conflict: conflict}
+	}
+	state.PendingWritingConflict = nil
+	ch.Status = StatusReview
+	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+	logger.SuccessKey("log.chapter_factcheck_clean", chapterNum)
+	return nil
+}
+
+// ResetChapterAction discards the generated prose/summary/blocks of the CURRENT
+// chapter (keeping outline and scene plan) so the next generation starts from
+// scratch. Accepted chapters are protected — resetting them would desync the
+// narrative memory built from their content.
+func ResetChapterAction(state *Progress, progressPath string, chapterNum int, logger *sse.LogBroadcaster) error {
+	idx := -1
+	for i := range state.Chapters {
+		if state.Chapters[i].Num == chapterNum {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("chapter %d does not exist", chapterNum)
+	}
+	if idx != state.CurrentChapterIndex {
+		return fmt.Errorf("only the current chapter (#%d) can be reset", state.Chapters[state.CurrentChapterIndex].Num)
+	}
+	ch := &state.Chapters[idx]
+	if ch.Status == StatusAccepted {
+		return fmt.Errorf("chapter #%d is already accepted and cannot be reset", chapterNum)
+	}
+	ch.Content = ""
+	ch.Summary = ""
+	ch.Blocks = nil
+	ch.NextBlockID = 0
+	ch.BlockSep = ""
+	ch.DraftSavedAt = ""
+	ch.ContinuityNotes = nil
+	ch.Status = StatusPending
+	state.PendingWritingConflict = nil
+	state.PendingScenePlanChapter = 0
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
+	logger.InfoKey("log.chapter_reset", chapterNum)
+	return nil
+}
+
+// ErrSummaryStepFailed is returned (wrapped by abortChapterWithDraftCheckpoint)
+// when the cheap post-prose steps (chapter summary) fail — typically because
+// the task hit its wall-clock deadline or the API errored fatally. The prose
+// itself was already checkpointed as a resumable draft, so callers must NOT
+// treat this as "the chapter was lost": resume via POST /api/chapters/{n}/resume.
+var ErrSummaryStepFailed = errors.New("summary step failed")
+
+// IsSummaryStepFailed reports whether err came from the summary-step abort.
+func IsSummaryStepFailed(err error) bool { return errors.Is(err, ErrSummaryStepFailed) }
+
+// abortChapterWithDraftCheckpoint persists the freshly generated prose of
+// chapter idx as a resumable draft before an expensive-pipeline abort, then
+// returns cause so the caller unwinds normally. Without this checkpoint the
+// whole chapter (the most expensive LLM work of the run) would be dropped on
+// the floor whenever a cheap follow-up step fails or the task is stopped.
+func abortChapterWithDraftCheckpoint(state *Progress, progressPath string, idx int, logger *sse.LogBroadcaster, msgKey string, cause error) error {
+	if idx >= 0 && idx < len(state.Chapters) {
+		ch := &state.Chapters[idx]
+		if strings.TrimSpace(ch.Content) != "" {
+			ch.Status = StatusWriting
+			ch.DraftSavedAt = time.Now().UTC().Format(time.RFC3339)
+			SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
+		}
+		if err := SaveProgress(progressPath, state); err != nil {
+			logger.WarnKey("log.chapter_draft_checkpoint_failed", err)
+		} else {
+			logger.WarnKey(msgKey, ch.Num)
+		}
+	}
+	return cause
+}
+
+// finalizeChapterSummary generates the chapter summary and, when that fails,
+// checkpoints the current prose as a resumable draft instead of letting the
+// caller abort the whole chapter. On success it also refreshes the persisted
+// markdown (blocks + content) so a crash right after this point still keeps
+// the finished prose. Returns the summary, or a draft-checkpointed error.
+func finalizeChapterSummary(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, progressPath string, logger *sse.LogBroadcaster, content string) (string, error) {
+	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
+	if strings.TrimSpace(summary) == "" {
+		return "", abortChapterWithDraftCheckpoint(state, progressPath, idx, logger, "log.chapter_draft_saved", ErrSummaryStepFailed)
+	}
+	ch := &state.Chapters[idx]
+	ch.Summary = summary
+	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
+	if err := SaveProgress(progressPath, state); err != nil {
+		return "", err
+	}
+	return summary, nil
 }
 
 // factVerdictFailRe matches an explicit FAIL verdict in JSON form ("result":
@@ -580,11 +857,10 @@ func ReviseChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	logger.InfoKey("log.prose_revised", prose.CountProseUnits(revisedContent))
 
 	logger.StepInfo(2, 3, "regenerating summary...")
-	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
-	if summary == "" {
-		return fmt.Errorf("summary generation failed or was canceled")
+	if _, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, chapterIdx, progressPath, logger, ch.Content); err != nil {
+		return err
 	}
-	ch.Summary = summary
+	ch = &state.Chapters[chapterIdx]
 	logger.InfoKey("log.summary_done")
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
@@ -668,11 +944,10 @@ func ReviseSpecificChapterAction(ctx context.Context, apiCfg *config.APIConfig, 
 	logger.InfoKey("log.prose_specific_revised", prose.CountProseUnits(revisedContent))
 
 	logger.StepInfo(2, 2, "regenerating summary...")
-	summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, ch.Content, logger)
-	if summary == "" {
-		return fmt.Errorf("summary generation failed or was canceled")
+	if _, err := finalizeChapterSummary(ctx, apiCfg, cfg, state, chapterIdx, progressPath, logger, ch.Content); err != nil {
+		return err
 	}
-	ch.Summary = summary
+	ch = &state.Chapters[chapterIdx]
 
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 

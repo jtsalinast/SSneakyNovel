@@ -302,11 +302,17 @@ func sceneTropeLabels(ch *ChapterState, pos int, spans [][2]int, sceneParas []st
 	return out
 }
 
-// sceneParaSpans computes [start,end) paragraph spans for every planned scene
-// from their word budgets, verifying the spans tile the full content exactly.
-// Returns nil when the mapping is unreliable.
+// sceneParaSpans returns [start,end) paragraph spans for every planned scene.
+// It prefers the EXACT absolute spans recorded by the sequential writer
+// (Scene.ParaStart/ParaEnd, plus per-scene trope units that tile each span);
+// when that bookkeeping is missing or stale (e.g. after a manual edit changed
+// the paragraph count) it falls back to distributing paragraphs proportionally
+// to word budgets. Returns nil when even the fallback mapping is unreliable.
 func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 	plan := ch.ScenePlan
+	if spans := recordedSceneParaSpans(ch, paras); spans != nil {
+		return spans
+	}
 	totalBudget := 0
 	for _, sc := range plan.Scenes {
 		if sc.WordsBudget < 1 {
@@ -357,6 +363,53 @@ func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 	}
 	if start != len(paras) {
 		spans[len(spans)-1][1] = len(paras)
+	}
+	return spans
+}
+
+// recordedSceneParaSpans rebuilds the exact scene spans the sequential writer
+// stored on Scene.ParaStart/ParaEnd. The spans are trusted only when they tile
+// the whole content with no gaps or overlaps AND every scene's recorded trope
+// units tile its own span (scene-local ParaStart/ParaEnd within range, last
+// unit ending at the scene end). Anything else means the bookkeeping is stale
+// (manual edit, older data) and the caller should fall back to budget-based
+// proportional mapping. Returns nil when unusable.
+func recordedSceneParaSpans(ch *ChapterState, paras []string) [][2]int {
+	plan := ch.ScenePlan
+	if plan == nil || len(plan.Scenes) < 2 {
+		return nil
+	}
+	spans := make([][2]int, 0, len(plan.Scenes))
+	for _, sc := range plan.Scenes {
+		if sc.ParaStart <= 0 && sc.ParaEnd <= 0 {
+			return nil // never recorded (older data)
+		}
+		if sc.ParaStart < 0 || sc.ParaEnd <= sc.ParaStart || sc.ParaEnd > len(paras) {
+			return nil
+		}
+		if len(spans) > 0 && sc.ParaStart != spans[len(spans)-1][1] {
+			return nil // gap or overlap → stale
+		}
+		// Trope units must tile this scene's span exactly.
+		if len(sc.TropeUnits) > 0 {
+			maxEnd := 0
+			for _, u := range sc.TropeUnits {
+				if u.ParaStart < 0 || u.ParaEnd <= u.ParaStart || u.ParaEnd > sc.ParaEnd-sc.ParaStart {
+					return nil
+				}
+				if u.ParaEnd > maxEnd {
+					maxEnd = u.ParaEnd
+				}
+			}
+			if maxEnd != sc.ParaEnd-sc.ParaStart {
+				return nil
+			}
+		}
+
+		spans = append(spans, [2]int{sc.ParaStart, sc.ParaEnd})
+	}
+	if spans[len(spans)-1][1] != len(paras) {
+		return nil // trailing paragraphs unaccounted for
 	}
 	return spans
 }
