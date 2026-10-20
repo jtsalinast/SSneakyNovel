@@ -7,7 +7,7 @@
   import { countProseUnits } from '../lib/proseUnits.js';
   import TaskTokenBadge from '../components/TaskTokenBadge.svelte';
   import KnowledgePanel from '../components/KnowledgePanel.svelte';
-  import InfoTip from '../components/InfoTip.svelte';
+  import InfoTip from '../lib/components/InfoTip.svelte';
   import ScenePlanEditor from '../components/ScenePlanEditor.svelte';
   import { settings } from '../lib/stores.js';
   let showKnowledge = false;
