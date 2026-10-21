@@ -193,6 +193,22 @@
   let applyingSuggestionId = '';
   let proposingSuggestionId = '';
 
+  // Rubric helpers (mirror BestsellerCritiqueCard): transparent sub-criteria
+  // levels per pillar, weakest first — the score is their average, so this
+  // list literally shows what must improve to reach 100%.
+  function criterionLabel(key) {
+    const msg = $t('criteria.' + key);
+    return msg && msg !== 'criteria.' + key ? msg : key.replace(/_/g, ' ');
+  }
+  function sortedChecklist(pl) {
+    return [...(pl?.checklist || [])].sort((a, b) => a.level - b.level);
+  }
+  const PRIORITY_BADGE = { high: 'badge-error', medium: 'badge-warning', low: 'badge-ghost' };
+  function priorityLabel(p) {
+    const msg = $t('analysis.priority.' + p);
+    return msg && msg !== 'analysis.priority.' + p ? msg : p;
+  }
+
   // Local (unsaved) edits the user makes in a recommendation's "Replace:
   // Outline" textarea before hitting Apply. Keyed by `${suggestionId}:${chapter}`
   // so each chapter proposal keeps its own draft. Persisted to the backend on
@@ -870,6 +886,22 @@
                         </div>
                       {/if}
                       {#if p.note}<p class="text-[11px] leading-snug text-base-content/60 line-clamp-3">{p.note}</p>{/if}
+                      {#if p.checklist?.length}
+                        <!-- Transparent sub-criteria: the pillar score is derived
+                             from these levels, so this list is literally the
+                             roadmap to 100% for this pillar. -->
+                        <details class="text-[11px]" title={$t('analysis.checklist.tip')}>
+                          <summary class="cursor-pointer text-base-content/55 select-none">{$t('analysis.checklist.title')} ({sortedChecklist(p).length})</summary>
+                          <ul class="mt-1 space-y-0.5">
+                            {#each sortedChecklist(p) as c (c.key)}
+                              <li class="flex items-center justify-between gap-1.5">
+                                <span class="truncate text-base-content/70">{criterionLabel(c.key)}</span>
+                                <span class="badge badge-xs normal-case {c.level >= 85 ? 'badge-success' : c.level >= 60 ? 'badge-warning' : 'badge-error'}">{c.level}</span>
+                              </li>
+                            {/each}
+                          </ul>
+                        </details>
+                      {/if}
                     </div>
                   {/each}
                 </div>
@@ -881,11 +913,23 @@
                   <section class="border border-base-content/10 rounded-lg p-3 space-y-2">
                     <div class="flex items-center gap-2 flex-wrap">
                       <span class="badge badge-outline badge-sm">{$t('outline.analysis.category.' + (s.category || 'other'))}</span>
+                      {#if s.priority}
+                        <span class="badge badge-sm normal-case {PRIORITY_BADGE[s.priority] || 'badge-ghost'}">{$t('analysis.priority.' + s.priority)}</span>
+                      {/if}
                       <h4 class="font-semibold text-sm flex-1 min-w-0">{s.title}</h4>
+                      {#if s.score_impact > 0}
+                        <span class="badge badge-success badge-sm normal-case" title={$t('analysis.checklist.tip')}>{$t('analysis.scoreImpact', { n: s.score_impact })}</span>
+                      {/if}
                       {#if s.status === 'applied'}
                         <span class="badge badge-success badge-sm">✓ {$t('outline.analysis.applied')}</span>
                       {/if}
                     </div>
+                    {#if s.criteria?.length}
+                      <p class="text-[11px] text-base-content/55">
+                        {$t('analysis.criteriaLabel')}: {s.criteria.map(criterionLabel).join(', ')}
+                        {#if s.pillar} · {$t('outline.analysis.pillar.' + s.pillar)}{/if}
+                      </p>
+                    {/if}
                     {#if s.detail}<p class="text-sm text-base-content/80 whitespace-pre-wrap">{s.detail}</p>{/if}
                     {#if s.action}<p class="text-sm text-base-content/70 italic whitespace-pre-wrap">{s.action}</p>{/if}
                     {#if s.applies_to_chapters?.length}

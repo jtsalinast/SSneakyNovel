@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"showmethestory/internal/config"
 	"showmethestory/internal/fsutil"
+	"strings"
 )
 
 type ChapterState struct {
@@ -54,6 +55,23 @@ type ChapterState struct {
 	// whose interventions target concrete trope units of the written prose.
 	// nil until the author runs an analysis on this chapter.
 	Analysis *ChapterAnalysisReport `json:"analysis,omitempty"`
+	// TropeIssues is a per-(scenePos, tropeIndex) roll-up of every OPEN
+	// editorial finding that lives inside this chapter's drafted prose:
+	// unresolved fact-check conflict issues (SceneTargets) and pending
+	// bestseller-critic interventions (Analysis suggestions). It ships with
+	// GET /api/chapters/{num} so the block viewer can render colored dots on
+	// the affected trope blocks; each entry carries short tooltip-ready
+	// descriptions. Rebuilt by refreshTropeIssues whenever the conflict or
+	// the analysis changes.
+	TropeIssues []TropeIssueGroup `json:"trope_issues,omitempty"`
+}
+
+// TropeIssueGroup aggregates the findings located at one trope unit.
+type TropeIssueGroup struct {
+	ScenePos   int      `json:"scene_pos"`
+	TropeIndex int      `json:"trope_index"`
+	Fact       []string `json:"fact,omitempty"`   // fact-check/conflict issue wordings
+	Critic     []string `json:"critic,omitempty"` // bestseller-critic intervention feedbacks
 }
 
 type ForeshadowStatus string
@@ -117,6 +135,72 @@ type WritingConflict struct {
 	// "edit only this trope" repair per located target, so single-unit
 	// contradictions no longer force full-chapter rewrites.
 	SceneTargets [][2]int `json:"scene_targets,omitempty"`
+	// SurgicalAttempts counts how many single-trope repairs have already been
+	// applied to THIS conflict (carried over across regenerated conflicts while
+	// the same issue keeps failing). Once it is >0 and the very same trope unit
+	// still fails fact-check, the fix is not a local prose problem — repeating
+	// the surgery just regenerates the same contradiction, so the UI demotes the
+	// surgical button and points at the real lever instead.
+	SurgicalAttempts int `json:"surgical_attempts,omitempty"`
+	// LastSurgicalTarget is the (scene, trope) unit repaired in the most recent
+	// surgical attempt, used to detect "same unit failed again".
+	LastSurgicalTarget [2]int `json:"last_surgical_target,omitempty"`
+	// ReviseAttempts counts how many times the whole-chapter "rewrite from
+	// feedback" pass has been run against THIS conflict lineage. Carried over
+	// across regenerated conflicts (preserveSurgicalHistory) so the UI can show
+	// "attempt #N" and stop presenting the retry as if it were fresh.
+	ReviseAttempts int `json:"revise_attempts,omitempty"`
+	// LastFailure records WHY the last revise/surgical run did not resolve the
+	// conflict (or errored out): stage, human-readable reason and a timestamp.
+	// Persisted on the successor conflict so the panel can explain the failure
+	// instead of leaving the user guessing — and so a failed attempt never
+	// silently disables retrying.
+	LastFailure *ConflictFailure `json:"last_failure,omitempty"`
+}
+
+// ConflictFailure explains one failed repair attempt raised by the
+// "rewrite from feedback" / surgical-repair actions.
+type ConflictFailure struct {
+	Stage       string `json:"stage"`  // "revise" | "surgical" | "preflight"
+	Reason      string `json:"reason"` // human-readable cause (LLM/prose/timeout...)
+	Time        string `json:"time"`   // RFC3339 UTC when the failure happened
+	KeptDraft   bool   `json:"kept_draft"`
+	ChapterNum  int    `json:"chapter_num,omitempty"`
+	FailedCount int    `json:"failed_count,omitempty"`
+	// SurgicalRepaired / SurgicalFailed count trope-unit surgeries that ran to
+	// completion during the last "rewrite from feedback" pass, and how many of
+	// those unit repairs errored out. They explain WHY the successor conflict
+	// still shows the same issue: either the repair loop never got a chance
+	// (hard error before surgery) or it repaired everything yet the verifier
+	// still flags the scene (looping repair → try the other option).
+	SurgicalRepaired int `json:"surgical_repaired,omitempty"`
+	SurgicalFailed   int `json:"surgical_failed,omitempty"`
+}
+
+// SameSurgicalTargetFailedAgain reports whether a freshly built conflict
+// repeats an issue that already survived a surgical repair on the SAME trope
+// unit — i.e. surgery is looping without progress. prev is the conflict being
+// replaced by cur (both may be nil).
+func SameSurgicalTargetFailedAgain(prev, cur *WritingConflict) bool {
+	if prev == nil || cur == nil || prev.SurgicalAttempts <= 0 {
+		return false
+	}
+	if prev.LastSurgicalTarget[0] < 0 || cur.SceneTargets == nil {
+		return false
+	}
+	for i, t := range cur.SceneTargets {
+		if t != prev.LastSurgicalTarget {
+			continue
+		}
+		if i < len(cur.Issues) && i < len(prev.Issues) && normConflictIssue(cur.Issues[i]) == normConflictIssue(prev.Issues[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func normConflictIssue(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
 }
 
 type MemoryEntry struct {

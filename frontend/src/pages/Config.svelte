@@ -66,7 +66,7 @@
   $: cfgKey = $apiConfig?.api_key || '';
   $: cfgTimeout = $apiConfig?.http_timeout_seconds || 600;
 
-  let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, max_tokens: 32768, context_budget_tokens: 900000 };
+  let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, task_duration_minutes: 0, max_tokens: 32768, context_budget_tokens: 900000 };
   // —— Cross-tab state (module level): both workspace tabs ("Config" and "Novel
   // parameters") render this same component, but Svelte destroys and recreates it
   // when switching. Keep unsaved form edits, per-section busy flags and undo
@@ -1320,7 +1320,7 @@ function randomizeStoryParams() {
     const snap = JSON.stringify($apiConfig);
     if (snap !== apiCfgSnapshot) {
       localApiCfg = {
-        base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, max_tokens: 32768, context_budget_tokens: 900000,
+        base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, task_duration_minutes: 0, max_tokens: 32768, context_budget_tokens: 900000,
         ...$apiConfig,
         url_strict: !!$apiConfig.url_strict,
       };
@@ -1901,6 +1901,10 @@ function randomizeStoryParams() {
           <div>
             <span class="field-label">{$t('config.api.timeout')}</span>
             <input type="number" class="input input-sm w-full" bind:value={localApiCfg.http_timeout_seconds} disabled={$taskRunning || testingApi} />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.api.taskDuration')}</span>
+            <input type="number" class="input input-sm w-full" bind:value={localApiCfg.task_duration_minutes} placeholder="30" title={$t('config.api.taskDuration.tooltip')} disabled={$taskRunning || testingApi} />
           </div>
           <div>
             <span class="field-label">{$t('config.api.maxTokens')}</span>

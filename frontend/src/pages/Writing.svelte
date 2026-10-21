@@ -179,6 +179,36 @@
     if (m.label && m.count > 0) s += '\n' + $t('writing.blockTropeHint', [m.label, m.idx, m.count]);
     return s.trim();
   }
+  // —— Trope-issue dots (fact-check red / bestseller-critic violet) ————
+  // ch.trope_issues is a per-(scene_pos, trope_index) roll-up rebuilt by the
+  // backend whenever the pending conflict or the critic analysis changes. Each
+  // story block knows its owning unit, so we paint small colored dots on the
+  // affected blocks; clicking one opens an InfoTip popover (same style as the
+  // SmartSelect/SmartCombobox summary tips) listing the exact issue wordings.
+  const tropeIssueKey = (b) => (b.scene_pos >= 0 && b.trope_index != null ? b.scene_pos + ':' + b.trope_index : null);
+  function tropeIssuesFor(b) {
+    const k = tropeIssueKey(b);
+    if (!k || !ch?.trope_issues?.length) return null;
+    return ch.trope_issues.find(g => (g.scene_pos + ':' + g.trope_index) === k) || null;
+  }
+  function tropeIssueTipText(g, kind) {
+    if (!g) return '';
+    const items = (kind === 'fact' ? g.fact : g.critic) || [];
+    const head = $t(kind === 'fact' ? 'writing.tropeDots.factTitle' : 'writing.tropeDots.criticTitle');
+    return head + '\n\n' + items.map((s, i) => (i + 1) + '. ' + s).join('\n');
+  }
+  // Red dot shown inside the "Scene N starts here" chip when the FIRST trope
+  // unit of that scene carries a fact-check finding — so the reader sees the
+  // problem at the scene boundary too, not only next to the paragraph block.
+  function firstUnitIssuesOfScene(pos) {
+    if (pos == null || !ch?.trope_issues?.length) return null;
+    let best = null;
+    for (const g of ch.trope_issues) {
+      if (g.scene_pos !== pos) continue;
+      if (!best || (g.trope_index ?? 0) < (best.trope_index ?? 0)) best = g;
+    }
+    return best;
+  }
   let insertText = '';
 
   function startBlockEdit(b) {
@@ -653,6 +683,27 @@
               </ul>
             </div>
           {/if}
+          {#if writingConflict.last_failure}
+            {@const lf = writingConflict.last_failure}
+            <div class="alert alert-warning text-xs py-2">
+              <div>
+                <div class="font-semibold">
+                  {$t('writing.conflict.lastFailure', { 0: $t(`writing.conflict.failureStage.${lf.stage}` || 'writing.conflict.failureStage.revise') })}
+                </div>
+                <div>{lf.reason}</div>
+                <div class="opacity-70 mt-0.5">{$t('writing.conflict.retryAlways')}</div>
+              </div>
+            </div>
+          {/if}
+          {#if (writingConflict.revise_attempts || 0) + (writingConflict.surgical_attempts || 0) > 0}
+            {@const st = writingConflict.last_surgical_target}
+            <div class="text-[11px] opacity-60">
+              {$t('writing.conflict.attempts', { 0: writingConflict.revise_attempts || 0, 1: writingConflict.surgical_attempts || 0 })}
+              {#if (writingConflict.surgical_attempts || 0) > 0 && st && st.length === 2 && st[0] >= 0}
+                <span class="ml-1">{$t('writing.conflict.lastSurgicalTarget', { 0: st[0] + 1, 1: st[1] + 1 })}</span>
+              {/if}
+            </div>
+          {/if}
           <div class="flex flex-wrap gap-2">
             {#each (writingConflict.suggested_actions || []) as action}
               {#if action.id === 'surgical_trope'}
@@ -846,15 +897,36 @@
                       {#each chapterBlocks as b, bi (b.id)}
                         {#if sceneMarkerBefore(chapterBlocks, bi)}
                           {@const m = sceneMarkerBefore(chapterBlocks, bi)}
-                          <div class="scene-marker-row flex justify-center -my-1" aria-hidden="true">
+                          {@const smi = firstUnitIssuesOfScene(m.pos)}
+                          <div class="scene-marker-row flex justify-center -my-1">
                             <span class="scene-marker-chip group inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 select-none pointer-events-auto cursor-default">
                               <span class="scene-marker-text text-[10px] font-semibold text-primary/90 tracking-wider uppercase select-none">{$t('writing.blockSceneMarker', [m.pos])}</span>
+                              {#if smi?.fact?.length}
+                                <InfoTip text={tropeIssueTipText(smi, 'fact')} label={$t('writing.tropeDots.factTitle')}>
+                                  <span slot="trigger" class="trope-dot trope-dot-fact" role="button" tabindex="-1" aria-label={$t('writing.tropeDots.factTitle')}></span>
+                                </InfoTip>
+                              {/if}
                               <span class="opacity-60 group-hover:opacity-100 transition-opacity"><InfoTip text={sceneMarkerTip(m)} label={$t('writing.blockSceneMarker', [m.pos])} /></span>
                             </span>
                           </div>
                         {/if}
                         <div id={'story-block-' + b.id} class="relative rounded -mx-2 px-2 py-1 cursor-pointer transition-colors hover:bg-base-100/40 {highlightedBlock === b.id || activeFact?.references?.some(r => !r.stale && r.chapter === ch.num && r.block_id === b.id) ? 'story-block-highlight' : selectedBlockId === b.id ? 'story-block-selected' : ''}" role="button" tabindex="0" aria-pressed={selectedBlockId===b.id} on:click={() => selectBlock(b.id)} on:keydown={(e) => { if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectBlock(b.id); } }}>
                           {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-2">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation={() => { activeFact = fact; highlightedBlock = b.id; knowledgeExpanded = true; }}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
+                          {#if tropeIssuesFor(b)}
+                            {@const ti = tropeIssuesFor(b)}
+                            <span class="inline-flex items-center gap-1 align-top ml-1">
+                              {#if ti.fact?.length}
+                                <InfoTip text={tropeIssueTipText(ti, 'fact')} label={$t('writing.tropeDots.factTitle')}>
+                                  <span slot="trigger" class="trope-dot trope-dot-fact" aria-label={$t('writing.tropeDots.factTitle')}></span>
+                                </InfoTip>
+                              {/if}
+                              {#if ti.critic?.length}
+                                <InfoTip text={tropeIssueTipText(ti, 'critic')} label={$t('writing.tropeDots.criticTitle')}>
+                                  <span slot="trigger" class="trope-dot trope-dot-critic" aria-label={$t('writing.tropeDots.criticTitle')}></span>
+                                </InfoTip>
+                              {/if}
+                            </span>
+                          {/if}
                           {#if editingBlockId === b.id}
                             <textarea class="textarea textarea-sm w-full text-[15px] leading-relaxed" rows={Math.max(3, Math.ceil(b.text.length / 40))} bind:value={editingText} disabled={$taskRunning}></textarea>
                             <div class="flex gap-2 justify-end mt-1">
@@ -1009,3 +1081,32 @@
 
   <ScenePlanEditor bind:open={showScenePlan} chapterNum={scenePlanChapter ?? ch?.num ?? scenePlanPendingNum} />
 {/if}
+
+<style>
+  /* Trope-issue dots — small colored markers painted on story blocks (and on
+     the "Scene N starts here" chip) when the fact-check and/or the bestseller
+     critic found something to repair in that trope unit. They are rendered as
+     the `trigger` slot of InfoTip, so clicking one opens the same fixed-
+     position popover style used by the SmartSelect/SmartCombobox summary tips,
+     listing the exact issue wordings for that unit. */
+  .trope-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 9999px;
+    cursor: help;
+    flex-shrink: 0;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+  .trope-dot:hover {
+    transform: scale(1.35);
+  }
+  .trope-dot-fact {
+    background: var(--fallback-error, oklch(var(--error)));
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--fallback-er, oklch(var(--er))) 25%, transparent);
+  }
+  .trope-dot-critic {
+    background: var(--fallback-secondary, oklch(var(--secondary)));
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--fallback-sc, oklch(var(--sc))) 25%, transparent);
+  }
+</style>

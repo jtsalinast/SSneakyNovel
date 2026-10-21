@@ -159,17 +159,18 @@ func (h *Handlers) PostScenePlanAnalysisEditRecommendation(w http.ResponseWriter
 		return
 	}
 	var body struct {
-		ID         string `json:"id"`
-		ChapterNum int    `json:"chapter_num"`
-		SceneID    int    `json:"scene_id"`
-		Field      string `json:"field"`
-		Value      string `json:"value"`
+		ID             string `json:"id"`
+		ChapterNum     int    `json:"chapter_num"`
+		SceneID        int    `json:"scene_id"`
+		Field          string `json:"field"`
+		Value          string `json:"value"`
+		MergeIntoScene int    `json:"merge_into_scene_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.ID) == "" {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_suggestion_id")
 		return
 	}
-	if err := story.EditScenePlanRecommendation(h.state, body.ID, body.ChapterNum, body.SceneID, body.Field, body.Value, h.progressPath); err != nil {
+	if err := story.EditScenePlanRecommendation(h.state, body.ID, body.ChapterNum, body.SceneID, body.Field, body.Value, body.MergeIntoScene, h.progressPath); err != nil {
 		status := http.StatusInternalServerError
 		code := "edit_failed"
 		switch err.Error() {

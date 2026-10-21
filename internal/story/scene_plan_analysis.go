@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -31,42 +30,70 @@ import (
 // replacement drafted on demand by "Propose scene plan changes"; the frontend
 // only surfaces proposed replacements — inside collapsed accordions — after
 // that explicit action, so no plan silently rewrites itself.
+// MergeIntoSceneID makes this replacement part of a REAL scene merge: when it
+// is > 0 and points at another existing scene of the same chapter, applying
+// the suggestion deletes this scene and applies NewTitle/NewDescription/… to
+// the survivor instead (the survivor is normally present as its own
+// recommendation carrying the merged content). The author can retarget the
+// survivor from the UI before applying.
 type ScenePlanRecommendation struct {
-	ChapterNum    int    `json:"chapter_num"`
-	SceneID       int    `json:"scene_id"`
-	Present       bool   `json:"present"`
-	NewTitle      string `json:"new_title,omitempty"`
-	NewDescription string `json:"new_description,omitempty"`
-	NewPoV        string `json:"new_pov,omitempty"`
-	NewWordsBudget int   `json:"new_words_budget,omitempty"`
-	Proposed      bool   `json:"proposed,omitempty"`
+	ChapterNum      int    `json:"chapter_num"`
+	SceneID         int    `json:"scene_id"`
+	Present         bool   `json:"present"`
+	NewTitle        string `json:"new_title,omitempty"`
+	NewDescription  string `json:"new_description,omitempty"`
+	NewPoV          string `json:"new_pov,omitempty"`
+	NewWordsBudget  int    `json:"new_words_budget,omitempty"`
+	Proposed        bool   `json:"proposed,omitempty"`
+	MergeIntoSceneID int   `json:"merge_into_scene_id,omitempty"`
 }
 
 // SceneSuggestion is one point of the editor's feedback on the scene plans:
 // what works / what must change and, once proposed, exactly which scenes to
 // replace. Categories mirror the craft axes a beat sheet can be judged on.
 type SceneSuggestion struct {
-	ID              string                    `json:"id"`
-	Category        string                    `json:"category"` // hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other
-	Title           string                    `json:"title"`
-	Detail          string                    `json:"detail"`
-	Action          string                    `json:"action"`
-	Status          string                    `json:"status"` // pending | applied
-	AppliedAt       string                    `json:"applied_at,omitempty"`
-	AppliesToChapters []int                   `json:"applies_to_chapters,omitempty"`
-	Recommendations []ScenePlanRecommendation `json:"recommendations,omitempty"`
+	ID                string                    `json:"id"`
+	Category          string                    `json:"category"` // hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other
+	Title             string                    `json:"title"`
+	Detail            string                    `json:"detail"`
+	Action            string                    `json:"action"`
+	Status            string                    `json:"status"` // pending | applied
+	AppliedAt         string                    `json:"applied_at,omitempty"`
+	AppliesToChapters []int                     `json:"applies_to_chapters,omitempty"`
+	Recommendations   []ScenePlanRecommendation `json:"recommendations,omitempty"`
+	// Pillar is the analysis pillar this point serves (reader_profile |
+	// inspirational_pieces | tone | story_structure), declared by the editor or
+	// inferred from the category during finalization.
+	Pillar string `json:"pillar,omitempty"`
+	// Criteria lists the pillar-checklist items this point repairs.
+	Criteria []SuggestionCriterion `json:"criteria,omitempty"`
+	// ScoreImpact is the points the pillar should gain once this point is fully
+	// applied, capped at the pillar's remaining headroom.
+	ScoreImpact int `json:"score_impact,omitempty"`
+	// Priority is the 3-level importance badge (high | medium | low) derived
+	// deterministically from ScoreImpact + how many checklist items the point
+	// repairs (see deriveSuggestionPriority), so it always agrees with the
+	// rubric numbers shown next to it in the UI.
+	Priority string `json:"priority,omitempty"`
+	// MergeSceneIDs lists scene ids of AppliesToChapters[0] that this point
+	// proposes to FUSE into one single scene. When a proposed replacement for
+	// the surviving scene carries the same chapter and its scene id appears
+	// here, applying the suggestion rewrites the survivor AND deletes the
+	// other scenes — a real merge on the beat sheet, not just a description
+	// covering two beats. The frontend shows a "merge" chip when non-empty.
+	MergeSceneIDs []int `json:"merge_scene_ids,omitempty"`
 }
 
 // ScenePlanAnalysisReport is the full editorial pass over the novel's pending
 // scene plans, persisted on Progress so the Writing page can render it point
 // by point with propose/apply actions per suggestion.
 type ScenePlanAnalysisReport struct {
-	GeneratedAt      string            `json:"generated_at"`
-	BasedOnStructure string            `json:"based_on_structure,omitempty"`
-	Summary          string            `json:"summary"`
-	OverallScore     int               `json:"overall_score,omitempty"`
+	GeneratedAt      string             `json:"generated_at"`
+	BasedOnStructure string             `json:"based_on_structure,omitempty"`
+	Summary          string             `json:"summary"`
+	OverallScore     int                `json:"overall_score,omitempty"`
 	PillarScores     []PillarAssessment `json:"pillar_scores,omitempty"`
-	Suggestions      []SceneSuggestion `json:"suggestions"`
+	Suggestions      []SceneSuggestion  `json:"suggestions"`
 	// ScenePlanFingerprint identifies the exact set of pending beat sheets
 	// (chapter numbers + scene titles/descriptions/budgets) the scores above
 	// were computed from. Re-analyzing UNCHANGED plans reuses the previous
@@ -102,6 +129,13 @@ func scenePlanFingerprint(state *Progress) string {
 // the artifact under review as a SCENE PLAN so the model never slips into
 // prose criticism.
 func buildScenePlanEditorPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string) string {
+	// prevChecklist embeds the previous pass's graded rubric (when any) so a
+	// re-analysis after corrections re-grades the SAME items and provably
+	// raises them — instead of drifting around randomized example anchors.
+	var prevChecklist string
+	if state.ScenePlanAnalysis != nil {
+		prevChecklist = renderPreviousChecklistBlock(state.ScenePlanAnalysis, "THE SCENE PLANS")
+	}
 	sc := cfg.Story
 	var meta strings.Builder
 	add := func(label, v string) {
@@ -166,9 +200,10 @@ STORY STRUCTURE FRAMEWORK IN USE: %s
 
 SCENE PLANS UNDER REVIEW (%d chapter plan(s) shown; accepted chapters are locked and already drafted — they are out of scope):
 %s
-
+%s
 YOUR MISSION: reverse-engineer what makes books in this genre hit #1 (an irresistible hook, relentless pacing, arcs that pay off, stakes that escalate) and grade THESE PLANS against that blueprint. Every suggestion must be a concrete step that measurably moves the beat sheets toward bestseller level on its pillar.
 
+%s
 Analyze the plans against ALL parameters above, giving special weight to these four pillars:
 1. Ideal reader profile — does every planned scene deliver what this reader came for? Genre expectations met without cliché?
 2. Inspirational pieces — do the plans live up to the comp titles' standard of scene craft (scope, hooks, emotional register) without copying them?
@@ -178,11 +213,11 @@ Analyze the plans against ALL parameters above, giving special weight to these f
 Also weigh: outline coverage fidelity, scene count and budget realism, POV clarity, chapter-ending hooks.
 
 Return STRICT JSON only (no markdown fences, no prose):
-{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":"%d","pillar_scores":[{"key":"reader_profile","score":%d,"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":%d,"note":"..."},{"key":"tone","score":%d,"note":"..."},{"key":"story_structure","score":%d,"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","title":"short imperative headline","detail":"what the plans currently do and why they fall short of bestseller level","action":"concrete guidance on which scenes to change and how","applies_to_chapters":[3,4]}]}
+{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the plans currently do and why they fall short of bestseller level","action":"concrete guidance on which scenes to change and how","applies_to_chapters":[3,4]}]}
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
-- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the PLANS are genuinely strong as-is. Reserve 90+ for truly exceptional planning; most plans land mid-range. The numeric examples in the JSON schema above are PLACEHOLDERS, not your answer — derive every score independently from THESE specific plans, and re-grading after edits must produce different numbers wherever the material changed. Redundant scenes, vague beats, unrealistic budgets or weak chapter-ending hooks cap scores below 85.
-- Never penalize or praise things a scene plan cannot show (prose rhythm, dialogue quality). If a weakness could only be judged from the manuscript, it is out of scope.
+- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the PLANS are genuinely strong as-is. Reserve 90+ for truly exceptional planning; most plans land mid-range. Derive every score independently from THESE specific plans: the pillar number must equal the average of its criteria_levels, so re-grading corrected plans raises exactly the items that improved. Redundant scenes, vague beats, unrealistic budgets or weak chapter-ending hooks cap scores below 85.
+- Never penalize or praise things a scene plan cannot show (prose rhythm, dialogue quality). If a weakness could only be judged from the manuscript, it is out of scope. Concretely: NEVER ask for "more emotional development", deeper interiority, richer dialogue or stronger prose texture of a character/moment — a beat sheet can only promise these through PLAN-LEVEL moves (give the beat room to breathe with a bigger word budget, merge two thin beats into one scene that can carry the arc, add or reorder a beat that sets up the payoff, shift POV to the character who experiences the turn). Phrase every such point as the planning move that enables it, and never as a critique of writing that does not exist yet.
 - pillar_scores MUST contain exactly the four keys reader_profile, inspirational_pieces, tone, story_structure.
 - Every pillar scoring below 90 MUST have at least one corresponding suggestion (reader_profile→market/other, inspirational_pieces→other, tone→emotion/tone-like, story_structure→structure/pacing/scene_economy). A pillar scoring 90+ may have zero suggestions — then the UI shows "No changes needed" for it.
 
@@ -190,11 +225,11 @@ Rules:
 - 4 to 10 suggestions, ordered most impactful first.
 - DO NOT include replacement scenes in this pass: return every suggestion WITHOUT a "recommendations" array (replacements are drafted later, ONLY after the author clicks "Propose scene plan changes" on a specific point).
 - applies_to_chapters may name the planned (non-accepted) chapters most affected by each point.
-- action must describe WHAT to change and HOW at the beat-sheet level (merge/split/reorder scenes, re-budget words, sharpen a beat, fix POV), so the author understands the advice before requesting concrete replacements.
+- action must describe WHAT to change and HOW at the beat-sheet level (merge/split/reorder scenes, re-budget words, sharpen a beat, fix POV), framed as closing specific checklist items (e.g. "raise scene_economy by merging scenes 2–3 of chapter 5"), so the author sees exactly which area of which pillar moves toward 100%%.
 - Write summary, titles, details and actions in the SAME language as the plans above.
 - If the plans are genuinely strong, say so and return fewer, higher-value suggestions.`,
-		editorPersona(lang), meta.String(), structureName, planned, planBuf.String(),
-		structureName, rand.Intn(21)+60, gradeAnchorFor("reader_profile"), lang, gradeAnchorFor("inspirational_pieces"), gradeAnchorFor("tone"), gradeAnchorFor("story_structure"), lang)
+		editorPersona(lang), meta.String(), structureName, planned, planBuf.String(), prevChecklist,
+		pillarContractPromptBlockEN(structureName), structureName, lang, lang)
 }
 
 // AnalyzePendingScenePlans runs the bestseller-editor pass over all pending
@@ -283,33 +318,16 @@ func AnalyzePendingScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg
 	if result.OverallScore < 0 || result.OverallScore > 100 {
 		result.OverallScore = 0
 	}
-	validPillar := map[string]bool{"reader_profile": true, "inspirational_pieces": true, "tone": true, "story_structure": true}
-	pillarDownstream := map[string][]string{
-		"reader_profile":       {"market", "hook"},
-		"inspirational_pieces": {"other", "emotion"},
-		"tone":                 {"emotion", "hook"},
-		"story_structure":      {"structure", "pacing", "scene_economy", "budget", "pov", "stakes"},
+	finalIn := make([]FinalizableSuggestion, len(kept))
+	for i, s := range kept {
+		finalIn[i] = FinalizableSuggestion{Category: s.Category, Status: s.Status, Pillar: s.Pillar, Impact: s.ScoreImpact, Criteria: s.Criteria}
 	}
-	cleanPillars := make([]PillarAssessment, 0, 4)
-	seenPillar := map[string]bool{}
-	for _, p := range result.PillarScores {
-		if !validPillar[p.Key] || seenPillar[p.Key] {
-			continue
-		}
-		seenPillar[p.Key] = true
-		if p.Score < 0 || p.Score > 100 {
-			p.Score = 0
-		}
-		p.Note = strings.TrimSpace(p.Note)
-		if p.IsStrong() && len(keptSceneSuggestionsForPillar(kept, pillarDownstream[p.Key])) > 0 {
-			p.Score = strongPillarScore - 1
-		}
-		cleanPillars = append(cleanPillars, p)
-	}
-	for _, key := range []string{"reader_profile", "inspirational_pieces", "tone", "story_structure"} {
-		if !seenPillar[key] {
-			cleanPillars = append(cleanPillars, PillarAssessment{Key: key, Score: strongPillarScore - 1})
-		}
+	cleanPillars, finalOut := finalizePillarReport(result.PillarScores, finalIn)
+	for i := range kept {
+		kept[i].Pillar = finalOut[i].Pillar
+		kept[i].Criteria = finalOut[i].Criteria
+		kept[i].ScoreImpact = finalOut[i].Impact
+		kept[i].Priority = finalOut[i].Priority
 	}
 	result.PillarScores = cleanPillars
 	result.Summary = strings.TrimSpace(result.Summary)
@@ -319,23 +337,6 @@ func AnalyzePendingScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg
 	result.ScenePlanFingerprint = fingerprint
 	state.ScenePlanAnalysis = &result
 	return nil
-}
-
-// keptSceneSuggestionsForPillar mirrors keptSuggestionsForPillar for scene
-// suggestions: a pillar cannot claim "no changes needed" while an open
-// suggestion still targets its categories.
-func keptSceneSuggestionsForPillar(suggestions []SceneSuggestion, categories []string) []SceneSuggestion {
-	in := make(map[string]bool, len(categories))
-	for _, c := range categories {
-		in[c] = true
-	}
-	var out []SceneSuggestion
-	for _, s := range suggestions {
-		if in[s.Category] && s.Status != "applied" {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // clearScenePlanCacheOnEdit drops the stored scene-plan analysis when the
@@ -417,13 +418,19 @@ SCENE PLANS UNDER REVIEW:
 This point currently has NO concrete replacement proposals. Every replacement you draft must measurably push these scenes toward GLOBAL BESTSELLER level on the pillar this point belongs to (tighter scene economy, sharper beats, stronger chapter-ending hooks, realistic budgets...) while staying consistent with the chapter outlines, neighbouring scenes and each chapter's total word target. Produce the changes at the BEAT-SHEET level:
 1. Decide which 1-4 scenes (across at most 2 chapters from the plans above) would benefit most from applying this point. Only scenes shown above exist — never invent chapter numbers or scene ids.
 2. For EACH chosen scene, write a COMPLETE replacement: a sharper scene title, the FULL new scene description (2-4 sentences: what happens, who is present, where, the emotional turn — same language as the plans, consistent with the chapter outline), the scene POV (a registered/main character when sensible) and a realistic words_budget. Keep each chapter's TOTAL budget close to its target (±10%%): if you raise one scene's budget, lower another's or say so in the description.
-3. Do NOT add or remove scenes — reshape existing ones only.
+3. Do NOT invent new scenes — reshape existing ones only. EXCEPTION: when this point calls for merging redundant or thin scenes into one stronger beat, produce a REAL merge: write the survivor scene (the one kept) as a complete replacement whose description FOLDS IN the essential beats of the absorbed scenes, give it a combined words_budget, and set "merge_into_scene_id" on each ABSORBED scene's entry to the survivor's scene_id (same chapter). Absorbed-scene entries must also carry the merged survivor content fields so the author can review what will be folded in; after applying, the absorbed scenes are deleted from the plan and only the survivor remains.
+4. Every recommendation must belong to this point's pillar and close one of its open checklist criteria.
 
-Return STRICT JSON only (no markdown fences): {"recommendations":[{"chapter_num":3,"scene_id":2,"present":true,"new_title":"...","new_description":"...","new_pov":"...","new_words_budget":900}]}
-Only include chapters/scenes that exist in the plans above.`,
+Return STRICT JSON only (no markdown fences): {"recommendations":[{"chapter_num":3,"scene_id":2,"present":true,"new_title":"...","new_description":"...","new_pov":"...","new_words_budget":900,"merge_into_scene_id":1}]}
+"merge_into_scene_id" is OPTIONAL and only used for absorbed scenes in a merge; omit it (or 0) for plain replacements. Only include chapters/scenes that exist in the plans above.`,
 		editorPersona(cfg.Language), s.Title, s.Detail, s.Action,
 		sc.Tone, sc.Theme, structureLabel(sc.Structure, cfg.Language), sc.AudienceProfile, sc.InspirationalPieces,
 		planBuf.String())
+	if s.Pillar != "" {
+		prompt += "\n\nPILLAR THIS POINT BELONGS TO (same rubric as the critique pass):\n" +
+			pillarContractPromptBlockEN("THE SCENE PLANS") +
+			fmt.Sprintf("\nThis point targets pillar \"%s\". Draft replacements that raise its open checklist criteria to 80+.", s.Pillar)
+	}
 	system := "You are a world-famous literary editor turning feedback into concrete SCENE-PLAN (beat sheet) rewrites — never manuscript prose. You rewrite planned scenes with one clear goal: make the book a global bestseller on the pillar under discussion, not just fix the complaint. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.sceneplan_analyze_proposing")
@@ -502,8 +509,12 @@ Only include chapters/scenes that exist in the plans above.`,
 // ApplyScenePlanSuggestion applies every replacement recommendation of one
 // scene-plan analysis point to the live beat sheets (only non-accepted
 // chapters) and marks the suggestion applied. Editing a plan un-approves it
-// server-side so the author re-reviews before writing. Returns the number of
-// scenes changed.
+// server-side so the author re-reviews before writing. Real MERGES are
+// honoured: a recommendation whose MergeIntoSceneID points at another scene
+// of the same chapter is applied to that survivor scene, and the original
+// scene is DELETED from the beat sheet — after applying, the merged scenes no
+// longer exist and only the survivor remains (never the other way around, and
+// never on accepted chapters). Returns the number of scenes changed.
 func ApplyScenePlanSuggestion(state *Progress, suggestionID string, progressPath string) (int, error) {
 	rep := state.ScenePlanAnalysis
 	if rep == nil {
@@ -517,11 +528,27 @@ func ApplyScenePlanSuggestion(state *Progress, suggestionID string, progressPath
 	if s.Status == "applied" {
 		return 0, fmt.Errorf("suggestion_already_applied")
 	}
+	type mergeOp struct {
+		target ScenePlanRecommendation // survivor content + chapter
+		delete [2]int                  // chapter/scene removed from the plan
+	}
+	var merges []mergeOp
 	changed := 0
 	applied := map[[2]int]bool{}
 	for _, r := range s.Recommendations {
 		if !r.Present || applied[[2]int{r.ChapterNum, r.SceneID}] {
 			continue
+		}
+		// Merge part: this scene is folded INTO another existing scene of the
+		// same chapter. Validate the survivor first; invalid targets degrade
+		// to a plain in-place replacement instead of deleting anything.
+		if mid := r.MergeIntoSceneID; mid > 0 && mid != r.SceneID {
+			if ch := findChapterForMerge(state, r.ChapterNum); ch != nil && sceneExists(ch, mid) && !applied[[2]int{r.ChapterNum, mid}] {
+				merges = append(merges, mergeOp{target: r, delete: [2]int{r.ChapterNum, r.SceneID}})
+				applied[[2]int{r.ChapterNum, r.SceneID}] = true
+				applied[[2]int{r.ChapterNum, mid}] = true
+				continue
+			}
 		}
 		for ci := range state.Chapters {
 			ch := &state.Chapters[ci]
@@ -553,6 +580,50 @@ func ApplyScenePlanSuggestion(state *Progress, suggestionID string, progressPath
 			break
 		}
 	}
+	// Second pass: write each merged survivor's content once (the LAST merged
+	// part targeting it wins) and DELETE the absorbed scenes from the plan.
+	for _, m := range merges {
+		r := m.target
+		for ci := range state.Chapters {
+			ch := &state.Chapters[ci]
+			if ch.Num != r.ChapterNum || ch.Status == StatusAccepted || ch.ScenePlan == nil {
+				continue
+			}
+			found := false
+			for si := range ch.ScenePlan.Scenes {
+				sc := &ch.ScenePlan.Scenes[si]
+				if sc.ID != r.MergeIntoSceneID {
+					continue
+				}
+				found = true
+				if strings.TrimSpace(r.NewTitle) != "" {
+					sc.Title = r.NewTitle
+				}
+				if strings.TrimSpace(r.NewDescription) != "" {
+					sc.Description = r.NewDescription
+				}
+				if strings.TrimSpace(r.NewPoV) != "" {
+					sc.PoV = r.NewPoV
+				}
+				if r.NewWordsBudget > 0 {
+					sc.WordsBudget = r.NewWordsBudget
+				}
+			}
+			if !found {
+				continue
+			}
+			out := ch.ScenePlan.Scenes[:0]
+			for _, sc := range ch.ScenePlan.Scenes {
+				if sc.ID == m.delete[1] {
+					continue
+				}
+				out = append(out, sc)
+			}
+			ch.ScenePlan.Scenes = out
+			ch.ScenePlan.Approved = false
+			changed++
+		}
+	}
 	if changed == 0 {
 		return 0, fmt.Errorf("no_editable_scenes_for_suggestion")
 	}
@@ -572,9 +643,39 @@ func ApplyScenePlanSuggestion(state *Progress, suggestionID string, progressPath
 	return changed, SaveProgress(progressPath, state)
 }
 
+// findChapterForMerge locates an editable (non-accepted) chapter with a plan
+// by number; returns nil when it cannot be touched.
+func findChapterForMerge(state *Progress, num int) *ChapterState {
+	for i := range state.Chapters {
+		ch := &state.Chapters[i]
+		if ch.Num != num || ch.Status == StatusAccepted || ch.ScenePlan == nil {
+			continue
+		}
+		return ch
+	}
+	return nil
+}
+
+// sceneExists reports whether the plan still contains a scene with that id.
+func sceneExists(ch *ChapterState, id int) bool {
+	if ch == nil || ch.ScenePlan == nil {
+		return false
+	}
+	for _, sc := range ch.ScenePlan.Scenes {
+		if sc.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // EditScenePlanRecommendation persists a manual edit made in one of the
 // accordion fields of a proposed scene replacement before applying it.
-func EditScenePlanRecommendation(state *Progress, suggestionID string, chapterNum, sceneID int, field, value string, progressPath string) error {
+// mergeInto > 0 retargets this replacement as an ABSORBED scene of a real
+// merge (it will be deleted and folded into scene mergeInto of the same
+// chapter); mergeInto == 0 with field "merge_into_scene_id" cancels the merge
+// and degrades the entry back to a plain in-place replacement.
+func EditScenePlanRecommendation(state *Progress, suggestionID string, chapterNum, sceneID int, field, value string, mergeInto int, progressPath string) error {
 	rep := state.ScenePlanAnalysis
 	if rep == nil {
 		return fmt.Errorf("no_scene_plan_analysis")
@@ -600,6 +701,12 @@ func EditScenePlanRecommendation(state *Progress, suggestionID string, chapterNu
 			var parsed int
 			if _, err := fmt.Sscanf(value, "%d", &parsed); err == nil && parsed >= 0 {
 				r.NewWordsBudget = parsed
+			}
+		case "merge_into_scene_id":
+			if mergeInto > 0 && mergeInto != sceneID {
+				r.MergeIntoSceneID = mergeInto
+			} else {
+				r.MergeIntoSceneID = 0
 			}
 		default:
 			return fmt.Errorf("unknown_field")

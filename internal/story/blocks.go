@@ -93,16 +93,43 @@ func SyncChapterBlocks(ch *ChapterState) {
 	paras, sep := splitBlockParagraphs(ch.Content)
 	ch.BlockSep = sep
 
+	// No reliable scene plan -> still show TROPE-level blocks whenever the
+	// chapter is segmented with blank-line paragraphs: merge runs of
+	// consecutive same-mode paragraphs (dialogue vs prose) into beats, exactly
+	// like the in-scene segmentation but applied over the whole chapter, so
+	// the viewer stays faithful to "blocks are tropes, not line breaks". The
+	// grouping is SKIPPED when it would merge paragraphs that already live in
+	// separate blocks (lossless-edit guard) or when the separator is a single
+	// newline (that mode intentionally mirrors one block per line).
+	// Fresh sync (no previous blocks — e.g. pasted or first-time content):
+	// keep the classic one-block-per-paragraph split. Trope merging exists to
+	// re-tile prose the writer segmented per scene/unit while protecting
+	// existing finer boundaries; collapsing brand-new independent paragraphs
+	// just because they share a mode would surprise editors and break ID
+	// stability expectations at import time.
+	freshSync := len(ch.Blocks) == 0
+	var groups [][2]int
+	if !freshSync {
+		groups = tropeFallbackGroups(ch.Blocks, paras, sep)
+	}
+	if freshSync || len(groups) == 0 {
+		groups = make([][2]int, len(paras))
+		for i := range paras {
+			groups[i] = [2]int{i, i + 1}
+		}
+	}
+
 	used := make([]bool, len(ch.Blocks))
 	next := ch.NextBlockID
 	if next <= 0 {
 		next = 1
 	}
-	blocks := make([]Block, 0, len(paras))
-	for _, p := range paras {
+	blocks := make([]Block, 0, len(groups))
+	for _, g := range groups {
+		text := strings.Join(paras[g[0]:g[1]], sep)
 		id := 0
 		for i, old := range ch.Blocks {
-			if !used[i] && old.Text == p {
+			if !used[i] && old.Text == text {
 				used[i] = true
 				id = old.ID
 				break
@@ -112,10 +139,109 @@ func SyncChapterBlocks(ch *ChapterState) {
 			id = next
 			next++
 		}
-		blocks = append(blocks, Block{ID: id, Type: classifyBlock(p), Text: p, ScenePos: -1})
+		blocks = append(blocks, Block{ID: id, Type: classifyTropeBlock(text), Text: text, ScenePos: -1})
 	}
 	ch.Blocks = blocks
 	ch.NextBlockID = next
+}
+
+// tropeFallbackGroups segments the whole paragraph list into trope beats via
+// the same deterministic splitter the sequential writer uses inside scenes
+// (splitTropesFromParas: dialogue/prose mode runs plus hard-break markers,
+// tiny trailing beats merged into their predecessor). Chapters with fewer
+// than 2*tropeMinParagraphs paragraphs keep one group per paragraph so
+// classic block editing stays predictable at that size.
+func tropeFallbackGroups(blocks []Block, paras []string, sep string) [][2]int {
+	single := func() [][2]int {
+		out := make([][2]int, len(paras))
+		for i := range paras {
+			out[i] = [2]int{i, i + 1}
+		}
+		return out
+	}
+	if sep != "\n\n" || len(paras) < 2*tropeMinParagraphs {
+		return single()
+	}
+	_, ranges := splitTropesFromParas(paras, "", sep)
+	if len(ranges) == 0 {
+		return single()
+	}
+	// Re-tile the FULL paragraph list so nothing is dropped: break-marker
+	// paragraphs become their own divider blocks (the viewer renders them
+	// specially) and each trope range stays one block. splitTropesFromParas
+	// only emits spans over kept prose paragraphs, so a naive pass would
+	// silently drop "---" lines when content is rebuilt from blocks. The
+	// walk below covers every paragraph: positions that START a trope range
+	// emit that range, break markers always get singleton groups, and any
+	// other uncovered stretch falls back to singletons (conservative — never
+	// merges across an unexpected shape).
+	out := make([][2]int, 0, len(paras))
+	rangeEnd := make(map[int]int) // paragraph index -> end of trope range starting here
+	for _, r := range ranges {
+		rangeEnd[r[0]] = r[1]
+	}
+	for cur := 0; cur < len(paras); {
+		if end, ok := rangeEnd[cur]; ok && end > cur {
+			out = append(out, [2]int{cur, end})
+			cur = end
+			continue
+		}
+		if paraIsBreak(paras[cur]) {
+			out = append(out, [2]int{cur, cur + 1})
+			cur++
+			continue
+		}
+		out = append(out, [2]int{cur, cur + 1})
+		cur++
+	}
+	if groupsOverlapTropeChange(blocks, paras, out) {
+		return single()
+	}
+	return out
+}
+
+// groupsOverlapTropeChange reports whether regrouping paras into trope beats
+// would merge two paragraphs that currently live in DIFFERENT blocks — i.e.
+// an existing finer segmentation (e.g. one block per paragraph after a
+// single-newline split) would be destroyed. Block editing must stay
+// lossless: UpdateBlock/DeleteBlock splice block texts back into content, so
+// we only collapse paragraphs into beats when no block boundary falls inside
+// a proposed group.
+func groupsOverlapTropeChange(blocks []Block, paras []string, groups [][2]int) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	belongs := make([]int, len(paras)) // paragraph -> block index (-1 none)
+	for bi, b := range blocks {
+		if strings.TrimSpace(b.Text) == "" {
+			continue
+		}
+		found := -1
+		for pi, p := range paras {
+			if p == b.Text {
+				found = pi
+				break
+			}
+		}
+		if found < 0 {
+			continue // block text not aligned with paragraphs: treat as boundary anywhere
+		}
+		belongs[found] = bi
+	}
+	for _, g := range groups {
+		first := -1
+		for i := g[0]; i < g[1]; i++ {
+			if belongs[i] < 0 {
+				continue
+			}
+			if first < 0 {
+				first = belongs[i]
+			} else if belongs[i] != first {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // syncSceneBlocks rebuilds ch.Blocks at TROPE granularity: one story-block per

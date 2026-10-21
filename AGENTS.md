@@ -107,6 +107,17 @@ main.go
 - 正文只注入有界的近期历史、分层远期摘要、BM25 相关旧章纲和未来 10 章；批次规划、规划复盘、大纲修订、设定协调及伏笔检查同样必须复用有界历史，不得恢复全量历史拼接。
 - 伏笔、摘要、事实核查和大纲一致性检查必须服从明确的结尾意图；通用章尾钩子不能覆盖收尾要求。
 
+### 畅销书编辑批评（大纲 / 场景计划 / 已成稿章节与幕）
+
+- 四条路径共享 `internal/story/analysis_pillars.go` 的确定性评分契约：四个支柱（reader_profile、inspirational_pieces、tone、story_structure）各自对固定子标准清单打分 0-100，支柱分数由代码从清单求导（平均），禁止随机锚点或模型自由打分；清单全部闭合时支柱必然趋近 100。
+- 每条未处理建议必须声明 `pillar`、`criteria`（修复的清单键）和 `score_impact`；impact 超出该支柱剩余提升空间时被代码封顶。建议优先级（high/medium/low）由代码按 impact 与状态确定性推导，不由模型给出。
+- 重新分析时提示词注入上一份报告的逐条清单等级（`renderPreviousChecklistBlock`），要求对照当前材料重新评级：已修正项必须上升，降分必须在支柱备注中说明理由——这使"修正 → 具体条目上升 → 导出分数上升"可追溯。
+- 所有报告落盘前必须经过 `finalizePillarReport` 清洗（补全缺失清单、封顶 impact、类别→支柱回退映射、未评级支柱不得声称 strong）；新增报告路径不得绕过它自行消毒。
+- 场景计划的替换建议支持真实合并：`merge_into_scene_id` 指向同章幸存场景，应用时被吸收场景从节拍表中删除而非仅改写描述；作者可在应用前通过编辑端点改指或取消合并（`field=merge_into_scene_id`）。前端在建议卡上提供合并开关与目标选择。
+- 前端统一渲染：子标准得分以升序（最弱优先）清单展示，建议带三级重要性标签与 `+N pts` 影响徽章；相关文案 key 只存在于 `frontend/src/lib/i18n/en.js`（本仓库 UI 仅有英文目录）。
+-  trope 问题圆点：`ChapterState.TropeIssues` 是按 (scene_pos, trope_index) 聚合的未处理发现清单（红 = fact-check 冲突 SceneTargets，紫 = 批评家 pending interventions），由 `refreshTropeIssuesWithConflict` 纯函数派生；任何改动 `ch.Analysis`、`PendingWritingConflict` 或单 block 外科手术编辑（`PutChapterBlock` → `RefreshTropeIssuesForChapter`）的路径都必须重建它，使正文块上的彩色圆点及其 InfoTip popover 始终反映当前状态。已 applied 的建议与已清除的冲突不得再产生圆点。
+- 写作冲突的可诊断性与重试：`WritingConflict` 持久化 `ReviseAttempts`、`SurgicalAttempts`、`LastSurgicalTarget` 与 `LastFailure`（stage + 分类 reason，由 `RecordConflictFailure` 写入；配置缺失与模型超时须区分）。任何失败路径都不得吞掉冲突——必须保留草稿并让面板继续展示 Retry / Rewrite from feedback / Surgical repair 按钮；同一 trope 单元反复手术修复无效时 `preserveSurgicalHistory` 会把建议降级为"改场景计划/事实条目"，前端在尝试计数旁显示上次手术目标（`writing.conflict.lastSurgicalTarget`）。
+
 ### 导入与完稿校订
 
 - 导入先本地切章，再写 accepted 章节并通过 `import.json` 保存断点；元信息和逐章分析按检查点续跑。

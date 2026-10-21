@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -63,6 +62,21 @@ type OutlineSuggestion struct {
 	AppliedAt         string                  `json:"applied_at,omitempty"`
 	AppliesToChapters []int                   `json:"applies_to_chapters,omitempty"`
 	Recommendations   []OutlineRecommendation `json:"recommendations,omitempty"`
+	// Pillar is the analysis pillar this point serves (reader_profile |
+	// inspirational_pieces | tone | story_structure). Filled by the rubric
+	// contract: either declared by the editor or inferred from the category.
+	Pillar string `json:"pillar,omitempty"`
+	// Criteria lists the pillar-checklist items this point repairs, so the UI
+	// can read "improve THESE areas of THAT pillar to reach 100%".
+	Criteria []SuggestionCriterion `json:"criteria,omitempty"`
+	// ScoreImpact is the points the pillar is expected to gain once this
+	// point is fully applied, capped at the pillar's remaining headroom.
+	ScoreImpact int `json:"score_impact,omitempty"`
+	// Priority is the 3-level importance badge (high | medium | low) derived
+	// deterministically from ScoreImpact + how many checklist items the point
+	// repairs (see deriveSuggestionPriority), so it always agrees with the
+	// rubric numbers shown next to it in the UI.
+	Priority string `json:"priority,omitempty"`
 }
 
 // PillarAssessment is the editor's verdict on one of the four analysis
@@ -74,16 +88,18 @@ type PillarAssessment struct {
 	Key   string `json:"key"` // reader_profile|inspirational_pieces|tone|story_structure
 	Score int    `json:"score"`
 	Note  string `json:"note,omitempty"`
-}
-
-// gradeAnchorFor returns the example anchor score the prompt template shows
-// for a pillar. The model tends to imitate the numeric examples embedded in
-// the schema line, so every grading pass randomizes these anchors per call:
-// without this, identical template numbers make different artifacts (and even
-// re-runs) echo back the exact same scores, which reads as "the critic never
-// really recalculates".
-func gradeAnchorFor(key string) int {
-	return 52 + rand.Intn(34) // 52..85
+	// CriteriaLevels is the editor's raw per-sub-criterion answer (only used
+	// while parsing the model response; the sanitized report ships the full
+	// Checklist below with levels filled in).
+	CriteriaLevels []struct {
+		Key   string `json:"key"`
+		Level int    `json:"level"`
+	} `json:"criteria_levels,omitempty"`
+	// Checklist is the fixed rubric of this pillar with the graded level per
+	// item. The frontend renders it as the "what must improve to reach 100%"
+	// list, and the pillar Score is derived from these levels so closing every
+	// item provably drives the pillar to 100.
+	Checklist []PillarCriterion `json:"checklist,omitempty"`
 }
 
 // strongPillarScore is the bar a pillar must clear to be considered
@@ -137,6 +153,14 @@ func outlineFingerprint(state *Progress) string {
 // are drafted later, on demand, via ProposeOutlineReplacements ("Propose
 // outline changes"), so the initial pass never suggests silent rewrites.
 func buildOutlineEditorPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string) string {
+	// prevChecklist carries the previous pass's graded rubric (if any) so a
+	// re-analysis after corrections RE-GRADES the same items and the score
+	// provably rises where the author fixed things — instead of drifting
+	// around randomized example anchors like before.
+	var prevChecklist string
+	if state.OutlineAnalysis != nil {
+		prevChecklist = renderPreviousChecklistBlock(state.OutlineAnalysis, "THE OUTLINE")
+	}
 	sc := cfg.Story
 	var meta strings.Builder
 	add := func(label, v string) {
@@ -208,9 +232,10 @@ STORY STRUCTURE FRAMEWORK IN USE: %s
 
 OUTLINE — planning synopses only, not drafted prose (%d chapter(s) shown; accepted chapters are locked and already drafted — do not propose replacements for them):
 %s
-
+%s
 YOUR MISSION: do not just list flaws — reverse-engineer what makes books in this genre hit #1 (an irresistible hook, relentless pacing, arcs that pay off, stakes that escalate, a tone readers can feel on the cover) and grade THIS plan against that blueprint. Every suggestion you return must be a concrete step that measurably moves the outline toward bestseller level on its pillar, so that applying your top points in a few iterations raises the scores substantially.
 
+%s
 Analyze the outline against ALL of the parameters above, giving special weight to these four pillars:
 1. Ideal reader profile — does every planned beat deliver what this reader came for? Promises kept? Genre expectations met without cliché?
 2. Inspirational pieces — is the outline living up to the comp titles' standard (scope, hooks, emotional register) without copying them?
@@ -220,10 +245,10 @@ Analyze the outline against ALL of the parameters above, giving special weight t
 Also weigh: premise hook & marketability, protagonist agency & arc, antagonist/stakes escalation, subplots, endings/payoff, chapter-level titles & blurbs (are they compelling back-cover lines?).
 
 Return STRICT JSON only (no markdown fences, no prose):
-{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":"%d","pillar_scores":[{"key":"reader_profile","score":%d,"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":%d,"note":"..."},{"key":"tone","score":%d,"note":"..."},{"key":"story_structure","score":%d,"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","title":"short imperative headline","detail":"what the outline currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and how","applies_to_chapters":[3,4]}]}
+{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the outline currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and how","applies_to_chapters":[3,4]}]}
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
-- Score each of the four pillars 0-100 against BESTSELLER level, not against "competent debut". 90+ means the PLAN is genuinely strong as-is: you would sign it without touching that pillar. Reserve 90+ for truly exceptional planning; most outlines land mid-range. The numeric examples in the JSON schema above are PLACEHOLDERS, not your answer — derive every score independently from this specific outline, and re-grading a changed outline must produce different numbers wherever the material changed. Grade hard: dead beats, vague stakes, generic hooks or an inconsistent tonal plan all cap scores below 85.
+- Score each of the four pillars 0-100 against BESTSELLER level, not against "competent debut". 90+ means the PLAN is genuinely strong as-is: you would sign it without touching that pillar. Reserve 90+ for truly exceptional planning; most outlines land mid-range. Derive every score independently from this specific outline: the pillar number must equal the average of its criteria_levels, so re-grading corrected material raises exactly the items that improved. Grade hard: dead beats, vague stakes, generic hooks or an inconsistent tonal plan all cap scores below 85.
 - Never penalize or praise things an outline cannot show (prose rhythm, dialogue quality, sentence variety). If a weakness could only be judged from the manuscript, it is out of scope — do not mention it.
 - pillar_scores MUST contain exactly the four keys reader_profile, inspirational_pieces, tone, story_structure.
 - Every pillar with score below 90 MUST have at least one corresponding suggestion (use its category: reader_profile→market, inspirational_pieces→other, tone→tone, story_structure→structure/pacing). A pillar scoring 90+ may have zero suggestions — then the UI shows "No changes needed" for it.
@@ -232,11 +257,11 @@ Rules:
 - 5 to 12 suggestions, ordered most impactful first. Every pillar above must be considered; include a suggestion only when there is something real to improve.
 - DO NOT include replacement chapter plans in this pass: return every suggestion WITHOUT a "recommendations" array (or with it empty). Concrete ready-to-apply replacements are generated later, ONLY after the author clicks "Propose outline changes" on a specific point — drafting them up front for every point risks inconsistent rewrites across sections.
 - applies_to_chapters may still name the editable chapters (never locked/accepted ones) most affected by each point.
-- action must describe WHAT to change and HOW at the outline level (beats/synopsis), so the author understands the advice before requesting concrete replacements.
+- action must describe WHAT to change and HOW at the outline level (beats/synopsis), framed as closing specific checklist items (e.g. "raise pacing_curve by merging the dead chapters 8–9"), so the author sees exactly which area of which pillar moves toward 100%%.
 - Write summary, titles, details and actions in the SAME language as the outline text above.
 - If the outline is genuinely strong, say so in the summary and return fewer, higher-value suggestions.`,
-		editorPersona(lang), meta.String(), structureName, written, outlineText, structureName,
-			rand.Intn(21)+60, gradeAnchorFor("reader_profile"), lang, gradeAnchorFor("inspirational_pieces"), gradeAnchorFor("tone"), gradeAnchorFor("story_structure"), lang)
+		editorPersona(lang), meta.String(), structureName, written, outlineText, prevChecklist,
+		pillarContractPromptBlockEN(structureName), structureName, lang, lang)
 }
 
 func editorPersona(lang string) string {
@@ -244,24 +269,6 @@ func editorPersona(lang string) string {
 		return "un célebre editor literario mundial"
 	}
 	return "a celebrated world-class literary editor"
-}
-
-// keptSuggestionsForPillar returns the suggestions whose category belongs to
-// the set of categories mapped to a pillar. Used to keep the editor honest:
-// a pillar cannot be marked "excellent / no changes needed" while an open
-// suggestion still targets it.
-func keptSuggestionsForPillar(suggestions []OutlineSuggestion, categories []string) []OutlineSuggestion {
-	in := make(map[string]bool, len(categories))
-	for _, c := range categories {
-		in[c] = true
-	}
-	var out []OutlineSuggestion
-	for _, s := range suggestions {
-		if in[s.Category] && s.Status != "applied" {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // AnalyzeFullOutline runs the bestseller-editor pass over the whole outline in
@@ -361,39 +368,20 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	if result.OverallScore < 0 || result.OverallScore > 100 {
 		result.OverallScore = 0
 	}
-	// Sanitize pillar scores: keep only the four known keys, clamp values,
-	// and guarantee every pillar is represented (missing ones default to a
-	// conservative score so "No changes needed" never shows without proof).
-	validPillar := map[string]bool{"reader_profile": true, "inspirational_pieces": true, "tone": true, "story_structure": true}
-	pillarDownstream := map[string][]string{
-		"reader_profile":       {"market"},
-		"inspirational_pieces": {"other", "hook"},
-		"tone":                 {"tone"},
-		"story_structure":      {"structure", "pacing"},
+	// Apply the rubric contract (see analysis_pillars.go): attach each
+	// pillar's fixed checklist, DERIVE the pillar score from the graded
+	// criteria levels, normalize every suggestion's declared pillar/criteria
+	// and cap its claimed impact at the pillar's remaining headroom.
+	finalIn := make([]FinalizableSuggestion, len(kept))
+	for i, s := range kept {
+		finalIn[i] = FinalizableSuggestion{Category: s.Category, Status: s.Status, Pillar: s.Pillar, Impact: s.ScoreImpact, Criteria: s.Criteria}
 	}
-	cleanPillars := make([]PillarAssessment, 0, 4)
-	seenPillar := map[string]bool{}
-	for _, p := range result.PillarScores {
-		if !validPillar[p.Key] || seenPillar[p.Key] {
-			continue
-		}
-		seenPillar[p.Key] = true
-		if p.Score < 0 || p.Score > 100 {
-			p.Score = 0
-		}
-		p.Note = strings.TrimSpace(p.Note)
-		// A pillar can only claim "no changes needed" if it clears the bar
-		// AND no suggestion targets its categories. The editor is graded
-		// against bestseller level, so this should be rare by design.
-		if p.IsStrong() && len(keptSuggestionsForPillar(kept, pillarDownstream[p.Key])) > 0 {
-			p.Score = strongPillarScore - 1
-		}
-		cleanPillars = append(cleanPillars, p)
-	}
-	for _, key := range []string{"reader_profile", "inspirational_pieces", "tone", "story_structure"} {
-		if !seenPillar[key] {
-			cleanPillars = append(cleanPillars, PillarAssessment{Key: key, Score: strongPillarScore - 1})
-		}
+	cleanPillars, finalOut := finalizePillarReport(result.PillarScores, finalIn)
+	for i := range kept {
+		kept[i].Pillar = finalOut[i].Pillar
+		kept[i].Criteria = finalOut[i].Criteria
+		kept[i].ScoreImpact = finalOut[i].Impact
+		kept[i].Priority = finalOut[i].Priority
 	}
 	result.PillarScores = cleanPillars
 	result.Summary = strings.TrimSpace(result.Summary)

@@ -203,67 +203,33 @@ func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string
 	return kept
 }
 
-// finalizePillars mirrors the outline/scene-plan pillar sanitization: keep
-// only the four known keys, clamp scores, demote a "strong" pillar that still
-// has an open suggestion downstream of it, and guarantee all four exist.
+// finalizePillars applies the shared rubric contract (analysis_pillars.go) to
+// a drafted-pass report: checklists attached, pillar scores DERIVED from the
+// graded criteria levels, suggestion pillar/criteria normalized and claimed
+// impacts capped at each pillar's remaining headroom. The concrete suggestion
+// structs are updated in place with the sanitized values.
 func finalizePillars(in []PillarAssessment, suggestions []DraftedSuggestion) []PillarAssessment {
-	pillarDownstream := map[string][]string{
-		"reader_profile":       {"market", "hook", "other"},
-		"inspirational_pieces": {"other", "emotion"},
-		"tone":                 {"emotion", "hook"},
-		"story_structure":      {"structure", "pacing", "scene_economy", "budget", "pov", "stakes"},
-	}
-	cleanPillars := make([]PillarAssessment, 0, 4)
-	seenPillar := map[string]bool{}
-	for _, p := range in {
-		if p.Key != "reader_profile" && p.Key != "inspirational_pieces" && p.Key != "tone" && p.Key != "story_structure" {
-			continue
-		}
-		if seenPillar[p.Key] {
-			continue
-		}
-		seenPillar[p.Key] = true
-		if p.Score < 0 || p.Score > 100 {
-			p.Score = 0
-		}
-		p.Note = strings.TrimSpace(p.Note)
-		if p.IsStrong() && len(keptDraftedSuggestionsForPillar(suggestions, pillarDownstream[p.Key])) > 0 {
-			p.Score = strongPillarScore - 1
-		}
-		cleanPillars = append(cleanPillars, p)
-	}
-	for _, key := range []string{"reader_profile", "inspirational_pieces", "tone", "story_structure"} {
-		if !seenPillar[key] {
-			cleanPillars = append(cleanPillars, PillarAssessment{Key: key, Score: strongPillarScore - 1})
-		}
-	}
-	return cleanPillars
+finalIn := make([]FinalizableSuggestion, len(suggestions))
+for i, s := range suggestions {
+finalIn[i] = FinalizableSuggestion{Category: s.Category, Status: s.Status, Pillar: s.Pillar, Impact: s.ScoreImpact, Criteria: s.Criteria}
 }
-
-func keptDraftedSuggestionsForPillar(suggestions []DraftedSuggestion, categories []string) []DraftedSuggestion {
-	in := make(map[string]bool, len(categories))
-	for _, c := range categories {
-		in[c] = true
-	}
-	var out []DraftedSuggestion
-	for _, s := range suggestions {
-		if s.Status == "applied" {
-			continue
-		}
-		if in[s.Category] {
-			out = append(out, s)
-		}
-	}
-	return out
+out, finalOut := finalizePillarReport(in, finalIn)
+for i := range suggestions {
+suggestions[i].Pillar = finalOut[i].Pillar
+suggestions[i].Criteria = finalOut[i].Criteria
+suggestions[i].ScoreImpact = finalOut[i].Impact
+suggestions[i].Priority = finalOut[i].Priority
+}
+return out
 }
 
 // draftedJSONSchemaEN builds the shared strict-JSON contract for both passes.
-// The numeric examples are randomized anchors (see gradeAnchorFor): with fixed
-// template numbers the model echoes the same scores across chapters, acts and
-// re-runs, which reads as "the critic never really recalculates".
+// Pillar scores are DERIVED from the per-criterion checklist levels (see
+// analysis_pillars.go): the model grades concrete sub-criteria, so re-grading
+// after corrections raises exactly the items that improved instead of drifting
+// around randomized example anchors like before.
 func draftedJSONSchemaEN() string {
-	return fmt.Sprintf(`{"summary":"...","overall_score":%d,"pillar_scores":[{"key":"reader_profile","score":%d,"note":"..."},{"key":"inspirational_pieces","score":%d,"note":"..."},{"key":"tone","score":%d,"note":"..."},{"key":"story_structure","score":%d,"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS trope unit only"}]}]}`,
-		rand.Intn(21)+60, gradeAnchorFor("reader_profile"), gradeAnchorFor("inspirational_pieces"), gradeAnchorFor("tone"), gradeAnchorFor("story_structure"))
+return `{"summary":"...","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"..."},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS trope unit only"}]}]}`
 }
 
 // interventionsRulesEN explains the intervention contract in the prompt.
@@ -318,6 +284,20 @@ type DraftedSuggestion struct {
 	AppliesToChapters []int                       `json:"applies_to_chapters,omitempty"`
 	Interventions     []TropeIntervention         `json:"interventions,omitempty"`
 	Recommendations   []OutlineRecommendation     `json:"recommendations,omitempty"` // always discarded: advice-only first pass
+// Pillar is the analysis pillar this point serves (reader_profile |
+// inspirational_pieces | tone | story_structure), declared by the editor or
+// inferred from the category during finalization.
+Pillar string `json:"pillar,omitempty"`
+// Criteria lists the pillar-checklist items this point repairs.
+Criteria []SuggestionCriterion `json:"criteria,omitempty"`
+// ScoreImpact is the points the pillar should gain once this point is fully
+// applied, capped at the pillar's remaining headroom.
+ScoreImpact int `json:"score_impact,omitempty"`
+// Priority is the 3-level importance badge (high | medium | low) derived
+// deterministically from ScoreImpact + how many checklist items the point
+// repairs (see deriveSuggestionPriority), so it always agrees with the
+// rubric numbers shown next to it in the UI.
+Priority string `json:"priority,omitempty"`
 }
 
 // findDraftedSuggestion locates a suggestion by id within a slice.
@@ -427,8 +407,10 @@ Analyze against ALL parameters above, giving special weight to these four pillar
 Return STRICT JSON only (no markdown fences, no prose): %s
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
-- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the chapter is genuinely strong as-is. Most drafted chapters land mid-range. The numeric examples in the JSON schema above are PLACEHOLDERS, not your answer — derive every score independently from THIS specific chapter; grading different chapters must produce clearly different numbers wherever their quality differs.
+- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the chapter is genuinely strong as-is. Most drafted chapters land mid-range. Derive every score independently from THIS specific chapter: grade each pillar's checklist item (criteria_levels, 0–100) and let the pillar score be their average, so re-grading corrected material raises exactly the items that improved; grading different chapters must produce clearly different numbers wherever their quality differs.
 - pillar_scores MUST contain exactly the four keys reader_profile, inspirational_pieces, tone, story_structure.
+- Each pillar_scores entry MUST include criteria_levels grading EVERY item of that pillar's checklist above ({"key":"...","level":0..100}) — the pillar score is derived from those levels, never guessed.
+- Every suggestion MUST declare its "pillar" (one of the four keys), the checklist "criteria" keys it repairs, and a realistic "score_impact" (points that pillar should gain once this point is fully applied).
 - Every pillar scoring below 90 MUST have at least one corresponding suggestion (reader_profile→hook/other, inspirational_pieces→other, tone→emotion/hook, story_structure→structure/pacing/scene_economy/stakes). A pillar scoring 90+ may have zero suggestions — then the UI shows "No changes needed" for it.
 
 Rules:
@@ -472,8 +454,10 @@ Analiza contra TODOS los parámetros, dando peso especial a estos cuatro pilares
 Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s
 
 Estándar de nota (eres despiadado — tu reputación descansa en libros que llegan a #1 mundial):
-- Puntúa cada uno de los cuatro pilares 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el capítulo es genuinamente fuerte tal cual. La mayoría de capítulos borroneados caen en la franja media. Los ejemplos numéricos del esquema JSON de arriba son MARCADORES DE POSICIÓN, no tu respuesta: deriva cada puntuación de forma independiente de ESTE capítulo concreto; evaluar capítulos distintos debe producir números claramente distintos allí donde su calidad difiera.
+- Puntúa cada uno de los cuatro pilares 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el capítulo es genuinamente fuerte tal cual. La mayoría de capítulos borroneados caen en la franja media. Deriva cada puntuación de forma independiente de ESTE capítulo concreto: califica cada ítem de la lista del pilar (criteria_levels, 0–100) y deja que la puntuación del pilar sea su promedio, así recalificar material corregido sube exactamente los ítems mejorados; evaluar capítulos distintos debe producir números claramente distintos allí donde su calidad difiera.
 - pillar_scores DEBE contener exactamente las cuatro claves reader_profile, inspirational_pieces, tone, story_structure.
+- Cada entrada de pillar_scores DEBE incluir criteria_levels calificando CADA ítem de la lista de ese pilar ({"key":"...","level":0..100}) — la puntuación del pilar se deriva de esos niveles, nunca se adivina.
+- Cada sugerencia DEBE declarar su "pillar" (una de las cuatro claves), las claves "criteria" de la lista que repara, y un "score_impact" realista (puntos que ese pilar debería ganar al aplicar por completo este punto).
 - Todo pilar por debajo de 90 DEBE tener al menos una sugerencia correspondiente (reader_profile→hook/other, inspirational_pieces→other, tone→emotion/hook, story_structure→structure/pacing/scene_economy/stakes). Un pilar con 90+ puede no tener sugerencias — entonces la UI muestra "Sin cambios necesarios".
 
 Reglas:
@@ -555,6 +539,7 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	result.ChapterNum = ch.Num
 	result.DraftFingerprint = fingerprint
 	ch.Analysis = &result
+	refreshTropeIssuesWithConflict(ch, state.PendingWritingConflict)
 	return nil
 }
 
@@ -619,6 +604,7 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 		}
 	}
 	rep.Suggestions[sIdx].Interventions = merged
+	refreshTropeIssuesForInterventions(state, merged)
 	out := rep.Suggestions[sIdx]
 	if err := SaveProgress(progressPath, state); err != nil {
 		return &out, nil // proposals in memory; persistence retried on next save
@@ -834,8 +820,10 @@ Analyze against ALL parameters above, giving special weight to these four pillar
 Return STRICT JSON only (no markdown fences, no prose): %s
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
-- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the act is genuinely strong as-is. Most drafted acts land mid-range. The numeric examples in the JSON schema above are PLACEHOLDERS, not your answer — derive every score independently from THIS specific act; grading different acts must produce clearly different numbers wherever their quality differs.
+- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the act is genuinely strong as-is. Most drafted acts land mid-range. Derive every score independently from THIS specific act: grade each pillar's checklist item (criteria_levels, 0–100) and let the pillar score be their average, so re-grading corrected material raises exactly the items that improved; grading different acts must produce clearly different numbers wherever their quality differs.
 - pillar_scores MUST contain exactly the four keys reader_profile, inspirational_pieces, tone, story_structure.
+- Each pillar_scores entry MUST include criteria_levels grading EVERY item of that pillar's checklist above ({"key":"...","level":0..100}) — the pillar score is derived from those levels, never guessed.
+- Every suggestion MUST declare its "pillar" (one of the four keys), the checklist "criteria" keys it repairs, and a realistic "score_impact" (points that pillar should gain once this point is fully applied).
 - Every pillar scoring below 90 MUST have at least one corresponding suggestion. A pillar scoring 90+ may have zero suggestions — then the UI shows "No changes needed" for it.
 
 Rules:
@@ -872,8 +860,10 @@ Analiza contra TODOS los parámetros, dando peso especial a estos cuatro pilares
 Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s
 
 Estándar de nota (eres despiadado — tu reputación descansa en libros que llegan a #1 mundial):
-- Puntúa cada pilar 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el acto es genuinamente fuerte tal cual. La mayoría de actos borroneados caen en la franja media. Los ejemplos numéricos del esquema JSON de arriba son MARCADORES DE POSICIÓN, no tu respuesta: deriva cada puntuación de forma independiente de ESTE acto concreto; evaluar actos distintos debe producir números claramente distintos allí donde su calidad difiera.
+- Puntúa cada pilar 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el acto es genuinamente fuerte tal cual. La mayoría de actos borroneados caen en la franja media. Deriva cada puntuación de forma independiente de ESTE acto concreto: califica cada ítem de la lista del pilar (criteria_levels, 0–100) y deja que la puntuación del pilar sea su promedio, así recalificar material corregido sube exactamente los ítems mejorados; evaluar actos distintos debe producir números claramente distintos allí donde su calidad difiera.
 - pillar_scores DEBE contener exactamente las cuatro claves reader_profile, inspirational_pieces, tone, story_structure.
+- Cada entrada de pillar_scores DEBE incluir criteria_levels calificando CADA ítem de la lista de ese pilar ({"key":"...","level":0..100}) — la puntuación del pilar se deriva de esos niveles, nunca se adivina.
+- Cada sugerencia DEBE declarar su "pillar" (una de las cuatro claves), las claves "criteria" de la lista que repara, y un "score_impact" realista (puntos que ese pilar debería ganar al aplicar por completo este punto).
 - Todo pilar por debajo de 90 DEBE tener al menos una sugerencia correspondiente. Un pilar con 90+ puede no tener sugerencias — entonces la UI muestra "Sin cambios necesarios".
 
 Reglas:
@@ -1132,9 +1122,11 @@ func applyInterventionSet(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 		iv.Status = "applied"
 		applied++
 		// Refresh word count and persist the touched chapter immediately so a
-		// later failure does not lose earlier successful repairs.
+		// later failure does not lose earlier successful repairs. Also re-derive
+		// the trope-issue dots: an applied intervention no longer paints its unit.
 		ch := &state.Chapters[idx]
 		ch.WordCount = prose.CountProseUnits(ch.Content)
+		refreshTropeIssuesWithConflict(ch, state.PendingWritingConflict)
 		if serr := SaveProgress(progressPath, state); serr != nil {
 			return applied, serr
 		}
@@ -1237,6 +1229,7 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 	sort.Slice(rep.Suggestions[sIdx].AppliesToChapters, func(i, j int) bool {
 		return rep.Suggestions[sIdx].AppliesToChapters[i] < rep.Suggestions[sIdx].AppliesToChapters[j]
 	})
+	refreshTropeIssuesForInterventions(state, merged)
 	out := rep.Suggestions[sIdx]
 	if err := SaveProgress(progressPath, state); err != nil {
 		return &out, nil
