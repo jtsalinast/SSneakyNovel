@@ -69,6 +69,87 @@ var messageCatalog = map[string]map[string]string{
 	"log.outline_analysis_cleared": {
 
 		LangEN: "Outline analysis cleared"},
+	// ---- Scene-plan bestseller critique (scene_plan_analysis.go) ----
+	"log.sceneplan_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over the pending scene plans..."},
+	"log.sceneplan_analyze_unchanged": {
+
+		LangEN: "Scene plans unchanged since the last editorial pass — scores reused, no new analysis needed"},
+	"log.sceneplan_analyze_cancelled": {
+
+		LangEN: "Scene-plan analysis cancelled"},
+	"log.sceneplan_analyze_failed": {
+
+		LangEN: "Scene-plan analysis failed: %s"},
+	"log.sceneplan_analyze_done": {
+
+		LangEN: "Scene-plan analysis complete — %d editorial suggestions"},
+	"log.sceneplan_analyze_proposing": {
+
+		LangEN: "Editor is drafting concrete scene replacements for this point..."},
+	"log.sceneplan_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d scene replacement(s) drafted"},
+	"log.sceneplan_analysis_applied": {
+
+		LangEN: "Editorial suggestion applied to %d scene(s)"},
+	"log.sceneplan_analysis_cleared": {
+
+		LangEN: "Scene-plan analysis cleared"},
+	// ---- Act bestseller critique (drafted_analysis.go, act pass) ----
+	"log.act_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over ACT %d..."},
+	"log.act_analyze_unchanged": {
+
+		LangEN: "Act %d unchanged since the last editorial pass — scores reused, no new analysis needed"},
+	"log.act_analyze_cancelled": {
+
+		LangEN: "Act analysis cancelled"},
+	"log.act_analyze_failed": {
+
+		LangEN: "Act analysis failed: %v"},
+	"log.act_analyze_done": {
+
+		LangEN: "Act analysis complete — %d editorial suggestions"},
+	"log.act_analyze_proposing": {
+
+		LangEN: "Editor is drafting small trope interventions for this act point..."},
+	"log.act_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d trope intervention(s) drafted"},
+	"log.act_analysis_cleared": {
+
+		LangEN: "Act analysis cleared"},
+	// ---- Chapter bestseller critique (drafted_analysis.go, chapter pass) ----
+	"log.chapter_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over chapter %d..."},
+	"log.chapter_analyze_unchanged": {
+
+		LangEN: "Chapter %d unchanged since the last editorial pass — scores reused, no new analysis needed"},
+	"log.chapter_analyze_cancelled": {
+
+		LangEN: "Chapter analysis cancelled"},
+	"log.chapter_analyze_failed": {
+
+		LangEN: "Chapter analysis failed: %v"},
+	"log.chapter_analyze_done": {
+
+		LangEN: "Chapter analysis complete — %d editorial suggestions"},
+	"log.chapter_analyze_proposing": {
+
+		LangEN: "Editor is drafting small trope interventions for this chapter point..."},
+	"log.chapter_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d trope intervention(s) drafted"},
+	"log.trope_intervention_done": {
+
+		LangEN: "Trope intervention applied on chapter %d, scene %d, unit %d"},
+	"log.trope_intervention_failed": {
+
+		LangEN: "Trope intervention failed on chapter %d, scene %d, unit %d: %v"},
 	"log.chapter_writing": {
 
 		LangEN: "Writing chapter %d..."},

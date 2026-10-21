@@ -9,6 +9,7 @@
   import KnowledgePanel from '../components/KnowledgePanel.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
   import ScenePlanEditor from '../components/ScenePlanEditor.svelte';
+  import BestsellerCritiqueCard from '../components/BestsellerCritiqueCard.svelte';
   import { settings } from '../lib/stores.js';
   let showKnowledge = false;
   let knowledgeName = '', knowledgeDescription = '', knowledgeTags = '';
@@ -79,6 +80,14 @@
     try {
       const sk = await api('GET', '/api/skills');
       hasPolishSkills = (sk || []).some(s => s.enabled && s.skill?.category === 'polish');
+    } catch (e) {}
+    try {
+      // Pre-planning act cards live in their own endpoint; the act-critic row
+      // needs them to offer per-act manual analysis.
+      const pp = await api('GET', '/api/outline/preplan');
+      preplanActs = (pp?.acts || []).map((a, i) => ({
+        no: i + 1, name: a.name || '', start_ch: a.start_ch || 0, end_ch: a.end_ch || 0,
+      }));
     } catch (e) {}
   });
 
@@ -278,6 +287,27 @@
     showScenePlan = true;
   }
   $: orphanWriting = !!(ch && isCurrent && ch.status === 'writing' && !writingConflict && !$taskRunning);
+
+  // --- Bestseller-editor critique passes (siblings of the outline one) ---
+  // Scene-plan pass: one report over all PENDING beat sheets.
+  $: scenePlanAnalysis = p?.scene_plan_analysis || null;
+  $: scenePlanPendingCount = chapters.filter(c => c.status !== 'accepted' && c.scene_plan?.scenes?.length).length;
+  // Act pass: reports keyed by pre-planning act number, rendered newest first.
+  $: actAnalyses = Object.entries(p?.act_analyses || {})
+    .map(([no, rep]) => ({ no: Number(no), rep }))
+    .filter(x => x.rep)
+    .sort((a, b) => b.no - a.no);
+  // Chapter pass: report lives on the selected chapter itself.
+  $: chapterAnalysis = ch?.analysis || null;
+  // Pre-planning acts (loaded once in onMount) drive the manual act-critic
+  // buttons; only acts whose last chapter is already accepted can be judged,
+  // since the critic reviews drafted prose.
+  let preplanActs = [];
+  function critiqueAct(no) {
+    api('POST', '/api/acts/analyze', { act_no: no })
+      .then(() => addToast($t('act.analysis.toasts.started'), 'info'))
+      .catch((e) => addToast(e.message, 'error'));
+  }
 
   async function resolveWritingConflict(action) {
     if ($taskRunning) return;
@@ -689,6 +719,46 @@
       </div>
     </div><!-- /WritingMetaRow -->
 
+    <!-- Bestseller critic over the PENDING scene plans (beat sheets): same
+         card as the outline analysis, but the editor knows it is reviewing
+         scene plans, not prose. Scene-level replacements are proposed per
+         chapter and applied back to each plan (re-opening its review gate). -->
+    <div id="CardSection_ScenePlanAnalysis" class="mt-3 space-y-1">
+      <BestsellerCritiqueCard
+        kind="sceneplan"
+        report={scenePlanAnalysis}
+        disabled={$taskRunning}
+        hasTargets={scenePlanPendingCount > 0}
+        scrollId="CardSection_ScenePlanAnalysis" />
+    </div>
+
+    <!-- Bestseller critic over FINISHED ACTS of the pre-planning: one report
+         per act, generated automatically right after the pipeline confirms
+         the act's last chapter (and manually here). Suggestions carry small
+         trope-unit interventions that rewriteSceneTrope repairs surgically. -->
+    {#each actAnalyses as a (a.no)}
+      <div id="CardSection_ActAnalysis_{a.no}" class="mt-3 space-y-1">
+        <BestsellerCritiqueCard
+          kind="act"
+          report={a.rep}
+          actNo={a.no}
+          disabled={$taskRunning}
+          hasTargets={true}
+          scrollId="CardSection_ActAnalysis_" + a.no />
+      </div>
+    {/each}
+    {#if preplanActs.length > 0}
+      <div class="flex flex-wrap gap-2 justify-end mt-2">
+        {#each preplanActs as act (act.no)}
+          <button class="btn btn-outline btn-xs" disabled={$taskRunning || !!p?.act_analyses?.[act.no]}
+            title={$t('act.analysis.manualBtnTip', { start: act.start_ch, end: act.end_ch })}
+            on:click={() => critiqueAct(act.no)}>
+            {$t('act.analysis.manualBtn', { no: act.no, name: act.name || '' })}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     <!-- Foreshadow tracker: own row below the chapter index -->
     {#if foreshadows.length > 0}
       <div id="CardSection_ForeshadowSummary" class="card bg-base-200 mt-3">
@@ -867,6 +937,21 @@
                   <button class="btn btn-ghost btn-xs join-item" on:click={nextChapter} disabled={$selectedChapter >= chapters.length - 1}>{$t('writing.btn.next')}</button>
                 </div>
               </div>
+
+              <!-- Bestseller critic over THIS drafted chapter: same card as the
+                   outline analysis, but the editor knows it is reviewing one
+                   chapter and its suggestions carry trope-unit interventions. -->
+              {#if hasContent && ch.status !== 'writing'}
+                <div id="CardSection_ChapterAnalysis_{ch.num}" class="pt-1">
+                  <BestsellerCritiqueCard
+                    kind="chapter"
+                    report={chapterAnalysis}
+                    chapterNum={ch.num}
+                    disabled={$taskRunning}
+                    hasTargets={true}
+                    scrollId="CardSection_ChapterAnalysis_" + ch.num />
+                </div>
+              {/if}
 
               {#if showRevise}
                 <div id="CardSection_ChapterRevise" class="bg-base-100 rounded-lg p-3 space-y-2">

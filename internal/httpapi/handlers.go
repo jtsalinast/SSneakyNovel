@@ -1054,6 +1054,12 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			h.logger.SuccessKey("log.chapter_autoconfirmed", chIdx+1, chTitle)
+			// Bestseller act critic: when this confirmed chapter closes a
+			// pre-planning act, queue the act analysis (it only launches if
+			// no other task owns the pipeline; the batch tail retries).
+			if chIdx < len(h.state.Chapters) {
+				h.maybeAnalyzeCompletedAct(h.state.Chapters[chIdx].Num)
+			}
 			if err := story.SyncPendingKnowledge(ctx, h.apiCfg, h.cfg, h.state, h.settings, h.progressPath, h.logger); err != nil {
 				h.logger.WarnKey("log.knowledge_failed", err)
 				if knowledgeSyncMustStop(ctx, err) {
@@ -1075,6 +1081,11 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 
 		h.logger.TaskEnd("chapter_generation", success)
 		h.broadcastProgress()
+		// Late trigger for acts whose last chapter was auto-confirmed while
+		// this batch owned the pipeline (maybeAnalyzeCompletedAct deferred).
+		if success {
+			h.maybeAnalyzeCompletedActIfIdle()
+		}
 	}()
 
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
@@ -1313,6 +1324,9 @@ func (h *Handlers) PostChapterConfirm(w http.ResponseWriter, r *http.Request) {
 
 	ch := h.state.Chapters[h.state.CurrentChapterIndex-1]
 	h.logger.SuccessKey("log.chapter_confirmed", ch.Num)
+	// Bestseller act critic: if this manual confirmation closes a
+	// pre-planning act, launch the act analysis in the background.
+	h.maybeAnalyzeCompletedAct(ch.Num)
 	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
 	h.startKnowledgeSync()
 }

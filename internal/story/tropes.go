@@ -107,11 +107,10 @@ func splitTropes(sceneProse string) ([]string, [][2]int) {
 // an ALREADY-SPLIT paragraph slice (so callers that segmented content with a
 // different separator — e.g. single newlines — keep their own join separator)
 // and returns beat texts joined with sep plus their [start,end) paragraph
-// ranges. Break-marker paragraphs are dropped from the unit TEXT but the
-// ranges still cover them (each break marker belongs to the span that ends at
-// it, i.e. flush(i+1)) so consecutive ranges tile the whole input without
-// gaps — gaps used to make recordedSceneParaSpans reject fresh bookkeeping
-// and silently fall back to one-block-per-paragraph.
+// ranges. Break-marker paragraphs are dropped from BOTH the unit text and the
+// spans: every span covers only kept prose paragraphs, so units never start
+// or end on a "***" line. When a break marker is the sole divider between two
+// beats they remain separate units (hard break = mini scene-shift).
 func splitTropesFromParas(paras []string, sceneProse, sep string) ([]string, [][2]int) {
 	if len(paras) == 0 {
 		return nil, nil
@@ -123,30 +122,42 @@ func splitTropesFromParas(paras []string, sceneProse, sep string) ([]string, [][
 	var ranges [][2]int
 	start := 0
 	mode := paraIsDialogue(paras[0])
+	// flush closes the current beat over paras[start:end]. The emitted span
+	// is [firstKept, lastKept+1] over non-break paragraphs; the marker-only
+	// edges are absorbed by re-anchoring start to the first kept paragraph
+	// after the cut so consecutive ranges still tile all PROSE paragraphs.
 	flush := func(end int) {
 		if end <= start {
 			return
 		}
-		// Unit text excludes pure break-marker paragraphs; the span covers them.
 		var kept []string
-		for _, p := range paras[start:end] {
+		first, last := -1, -1
+		for i, p := range paras[start : min(end, len(paras))] {
 			if paraIsBreak(p) {
 				continue
 			}
+			if first < 0 {
+				first = i
+			}
+			last = i
 			kept = append(kept, p)
 		}
 		text := strings.Join(kept, sep)
 		if strings.TrimSpace(text) != "" {
 			beats = append(beats, text)
-			ranges = append(ranges, [2]int{start, end})
+			ranges = append(ranges, [2]int{start + first, start + last + 1})
 		}
 		start = end
 	}
 	for i := 1; i < len(paras); i++ {
 		if paraIsBreak(paras[i]) {
-			// Hard break: close the current beat INCLUDING the marker line in
-			// its span so no paragraph falls between units.
-			flush(i + 1)
+			// Hard break: close the current beat at the marker (the marker
+			// itself belongs to no unit) and reset the mode from the next
+			// real paragraph.
+			flush(i)
+			for start < len(paras) && paraIsBreak(paras[start]) {
+				start++
+			}
 			if start < len(paras) {
 				mode = paraIsDialogue(paras[start])
 			}

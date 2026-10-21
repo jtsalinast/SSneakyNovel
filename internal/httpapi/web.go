@@ -68,6 +68,25 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/outline/analysis/edit-recommendation", h.PostOutlineAnalysisEditRecommendation)
 	mux.HandleFunc("POST /api/outline/analysis/propose", h.PostOutlineAnalysisPropose)
 	mux.HandleFunc("DELETE /api/outline/analysis", h.DeleteOutlineAnalysis)
+
+	// Bestseller critic: scene plans (pre-writing beat sheets).
+	mux.HandleFunc("POST /api/scene-plan/analyze", h.PostScenePlanAnalyze)
+	mux.HandleFunc("POST /api/scene-plan/analysis/propose", h.PostScenePlanAnalysisPropose)
+	mux.HandleFunc("POST /api/scene-plan/analysis/apply", h.PostScenePlanAnalysisApply)
+	mux.HandleFunc("POST /api/scene-plan/analysis/edit-recommendation", h.PostScenePlanAnalysisEditRecommendation)
+	mux.HandleFunc("DELETE /api/scene-plan/analysis", h.DeleteScenePlanAnalysis)
+
+	// Bestseller critic: finished acts (post-writing, trope-level interventions).
+	mux.HandleFunc("POST /api/acts/analyze", h.PostActAnalyze)
+	mux.HandleFunc("POST /api/acts/analysis/propose-interventions", h.PostActInterventionsPropose)
+	mux.HandleFunc("POST /api/acts/analysis/apply-interventions", h.PostActInterventionsApply)
+	mux.HandleFunc("DELETE /api/acts/analysis", h.DeleteActAnalysis)
+
+	// Bestseller critic: individual drafted chapters.
+	mux.HandleFunc("POST /api/chapters/{num}/analyze", h.PostChapterAnalyze)
+	mux.HandleFunc("POST /api/chapters/{num}/analysis/propose-interventions", h.PostChapterInterventionsPropose)
+	mux.HandleFunc("POST /api/chapters/{num}/analysis/apply-interventions", h.PostChapterInterventionsApply)
+	mux.HandleFunc("DELETE /api/chapters/{num}/critique", h.DeleteChapterAnalysis)
 	mux.HandleFunc("POST /api/outline/generate-continuation", h.PostOutlineGenerateContinuation)
 	mux.HandleFunc("POST /api/outline/preplan/generate", h.PostPrePlanGenerate)
 	mux.HandleFunc("GET /api/outline/preplan", h.GetPrePlan)
@@ -117,7 +136,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/proofread/chapters/{num}/blocks", h.PostProofreadBlock)
 	mux.HandleFunc("GET /api/proofread/export", h.GetProofreadExport)
 	mux.HandleFunc("DELETE /api/chapter", h.DeleteChapter)
-	mux.HandleFunc("DELETE /api/chapters/from/{num}", h.DeleteChaptersFrom)
+	mux.HandleFunc("DELETE /api/chapters-from/{num}", h.DeleteChaptersFrom)
 	mux.HandleFunc("DELETE /api/outline", h.DeleteOutline)
 
 	mux.HandleFunc("POST /api/task/stop", h.PostTaskStop)

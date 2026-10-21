@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -75,6 +76,16 @@ type PillarAssessment struct {
 	Note  string `json:"note,omitempty"`
 }
 
+// gradeAnchorFor returns the example anchor score the prompt template shows
+// for a pillar. The model tends to imitate the numeric examples embedded in
+// the schema line, so every grading pass randomizes these anchors per call:
+// without this, identical template numbers make different artifacts (and even
+// re-runs) echo back the exact same scores, which reads as "the critic never
+// really recalculates".
+func gradeAnchorFor(key string) int {
+	return 52 + rand.Intn(34) // 52..85
+}
+
 // strongPillarScore is the bar a pillar must clear to be considered
 // bestseller-ready (and therefore eligible for "no changes needed").
 const strongPillarScore = 90
@@ -113,6 +124,7 @@ func outlineFingerprint(state *Progress) string {
 		}
 		fmt.Fprintf(&b, "%d\x00%s\x00%s\x01", ch.Num, strings.TrimSpace(ch.Title), strings.TrimSpace(ch.Outline))
 	}
+	b.WriteString(gradeSalt()) // force a fresh LLM pass on every explicit re-analysis
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
@@ -208,10 +220,10 @@ Analyze the outline against ALL of the parameters above, giving special weight t
 Also weigh: premise hook & marketability, protagonist agency & arc, antagonist/stakes escalation, subplots, endings/payoff, chapter-level titles & blurbs (are they compelling back-cover lines?).
 
 Return STRICT JSON only (no markdown fences, no prose):
-{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":72,"pillar_scores":[{"key":"reader_profile","score":68,"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":61,"note":"..."},{"key":"tone","score":74,"note":"..."},{"key":"story_structure","score":55,"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","title":"short imperative headline","detail":"what the outline currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and how","applies_to_chapters":[3,4]}]}
+{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":"%d","pillar_scores":[{"key":"reader_profile","score":%d,"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":%d,"note":"..."},{"key":"tone","score":%d,"note":"..."},{"key":"story_structure","score":%d,"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","title":"short imperative headline","detail":"what the outline currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and how","applies_to_chapters":[3,4]}]}
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
-- Score each of the four pillars 0-100 against BESTSELLER level, not against "competent debut". 90+ means the PLAN is genuinely strong as-is: you would sign it without touching that pillar. Reserve 90+ for truly exceptional planning; most outlines land 55-80. Grade hard: dead beats, vague stakes, generic hooks or an inconsistent tonal plan all cap scores below 85.
+- Score each of the four pillars 0-100 against BESTSELLER level, not against "competent debut". 90+ means the PLAN is genuinely strong as-is: you would sign it without touching that pillar. Reserve 90+ for truly exceptional planning; most outlines land mid-range. The numeric examples in the JSON schema above are PLACEHOLDERS, not your answer — derive every score independently from this specific outline, and re-grading a changed outline must produce different numbers wherever the material changed. Grade hard: dead beats, vague stakes, generic hooks or an inconsistent tonal plan all cap scores below 85.
 - Never penalize or praise things an outline cannot show (prose rhythm, dialogue quality, sentence variety). If a weakness could only be judged from the manuscript, it is out of scope — do not mention it.
 - pillar_scores MUST contain exactly the four keys reader_profile, inspirational_pieces, tone, story_structure.
 - Every pillar with score below 90 MUST have at least one corresponding suggestion (use its category: reader_profile→market, inspirational_pieces→other, tone→tone, story_structure→structure/pacing). A pillar scoring 90+ may have zero suggestions — then the UI shows "No changes needed" for it.
@@ -223,7 +235,8 @@ Rules:
 - action must describe WHAT to change and HOW at the outline level (beats/synopsis), so the author understands the advice before requesting concrete replacements.
 - Write summary, titles, details and actions in the SAME language as the outline text above.
 - If the outline is genuinely strong, say so in the summary and return fewer, higher-value suggestions.`,
-		editorPersona(lang), meta.String(), structureName, written, outlineText, structureName, lang, lang)
+		editorPersona(lang), meta.String(), structureName, written, outlineText, structureName,
+			rand.Intn(21)+60, gradeAnchorFor("reader_profile"), lang, gradeAnchorFor("inspirational_pieces"), gradeAnchorFor("tone"), gradeAnchorFor("story_structure"), lang)
 }
 
 func editorPersona(lang string) string {

@@ -49,6 +49,11 @@ type ChapterState struct {
 	// chapter (see scene_plan.go). nil until the author (or auto mode)
 	// requests a plan. Persisted with the chapter so it survives reloads.
 	ScenePlan *ScenePlan `json:"scene_plan,omitempty"`
+	// Analysis is the bestseller-editor pass over THIS DRAFTED CHAPTER
+	// (POST /api/chapters/{num}/analyze): pillar scores plus suggestions
+	// whose interventions target concrete trope units of the written prose.
+	// nil until the author runs an analysis on this chapter.
+	Analysis *ChapterAnalysisReport `json:"analysis,omitempty"`
 }
 
 type ForeshadowStatus string
@@ -148,6 +153,15 @@ type Progress struct {
 	// OutlineAnalysis is the last bestseller-editor pass over the full outline
 	// (POST /api/outline/analyze); nil until the author runs an analysis.
 	OutlineAnalysis *OutlineAnalysisReport `json:"outline_analysis,omitempty"`
+	// ScenePlanAnalysis is the last bestseller-editor pass over the pending
+	// chapter scene plans (POST /api/scene-plan/analyze); nil until the author
+	// runs an analysis.
+	ScenePlanAnalysis *ScenePlanAnalysisReport `json:"scene_plan_analysis,omitempty"`
+	// ActAnalyses holds one bestseller-editor pass per pre-planning act whose
+	// chapters have just finished being drafted (the writing pipeline triggers
+	// it when the last chapter of an act is confirmed; POST /api/acts/analyze
+	// re-runs it on demand). Keyed by 1-based act number.
+	ActAnalyses map[int]*ActAnalysisReport `json:"act_analyses,omitempty"`
 	// AutoScenePlan enables automatic scene-plan approval: when true, chapter
 	// generation plans its scenes and proceeds to write without waiting for
 	// the author to review/edit the plan in the UI. When false (default),
