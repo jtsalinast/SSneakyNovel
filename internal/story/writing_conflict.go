@@ -13,6 +13,7 @@ import (
 	"showmethestory/internal/sse"
 	"sort"
 	"strings"
+	"time"
 )
 
 type WritingConflictError struct {
@@ -977,6 +978,307 @@ func finalizeConflict(state *Progress, idx int, c *WritingConflict, lang string)
 	}
 	c.SceneTargets = attachConflictSceneTargets(state, idx, c.Issues)
 	c.SuggestedActions = ensureSurgicalAction(c.SuggestedActions, c.SceneTargets, lang)
+	preserveSurgicalHistory(state, c)
+	if state != nil && idx >= 0 && idx < len(state.Chapters) {
+		refreshTropeIssuesWithConflict(&state.Chapters[idx], c)
+	}
+}
+
+// refreshTropeIssuesWithConflict rebuilds the per-trope-unit roll-up of OPEN
+// editorial findings for one chapter: unresolved fact-check/conflict issues
+// (located via the pending conflict's SceneTargets) plus PENDING bestseller
+// critic interventions. The block viewer uses it to paint colored dots on the
+// affected trope blocks (red = fact-check, violet = critic), each dot opening
+// a tooltip with the specific issue wordings. Call it whenever ch.Analysis or
+// the chapter's live conflict changes; pure and idempotent.
+func refreshTropeIssuesWithConflict(ch *ChapterState, conflict *WritingConflict) {
+	if ch == nil {
+		return
+	}
+	type key struct{ s, t int }
+	fact := map[key][]string{}
+	critic := map[key][]string{}
+	add := func(m map[key][]string, k key, s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || k.s < 0 || k.t < 0 {
+			return
+		}
+		for _, prev := range m[k] {
+			if normConflictIssue(prev) == normConflictIssue(s) {
+				return // dedupe identical wordings
+			}
+		}
+		m[k] = append(m[k], draftTruncate(s, 320))
+	}
+	if ch.Analysis != nil {
+		for _, sg := range ch.Analysis.Suggestions {
+			for _, iv := range sg.Interventions {
+				if iv.Status == "applied" {
+					continue
+				}
+				txt := iv.Feedback
+				if label := strings.TrimSpace(iv.TropeLabel); label != "" {
+					txt = "[" + label + "] " + txt
+				}
+				add(critic, key{iv.ScenePos, iv.TropeIndex}, txt)
+			}
+		}
+	}
+	if conflict != nil && conflict.ChapterNum == ch.Num {
+		for i, iss := range conflict.Issues {
+			if i >= len(conflict.SceneTargets) {
+				break
+			}
+			t := conflict.SceneTargets[i]
+			add(fact, key{t[0], t[1]}, iss)
+		}
+	}
+	keys := make([]key, 0, len(fact)+len(critic))
+	for k := range fact {
+		keys = append(keys, k)
+	}
+	for k := range critic {
+		if _, dup := fact[k]; !dup {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(a, b int) bool {
+		if keys[a].s != keys[b].s {
+			return keys[a].s < keys[b].s
+		}
+		return keys[a].t < keys[b].t
+	})
+	groups := make([]TropeIssueGroup, 0, len(keys))
+	for _, k := range keys {
+		g := TropeIssueGroup{ScenePos: k.s, TropeIndex: k.t}
+		if fs := fact[k]; len(fs) > 0 {
+			g.Fact = fs
+		}
+		if cs := critic[k]; len(cs) > 0 {
+			g.Critic = cs
+		}
+		groups = append(groups, g)
+	}
+	if len(groups) == 0 {
+		ch.TropeIssues = nil
+		return
+	}
+	ch.TropeIssues = groups
+}
+
+// RefreshTropeIssuesForChapter is the exported entry point used by the block
+// editor handlers: after a surgical single-block edit, rebuild that chapter's
+// trope_issues roll-up (fact dots from the live pending conflict + critic dots
+// from PENDING interventions) so the colored markers match the edited text.
+// It never mutates the conflict or analysis records themselves — only the
+// per-unit mapping — and is safe to call on chapters without either source.
+func RefreshTropeIssuesForChapter(state *Progress, ch *ChapterState) {
+	if state == nil || ch == nil {
+		return
+	}
+	refreshTropeIssuesWithConflict(ch, state.PendingWritingConflict)
+}
+
+// refreshTropeIssuesForInterventions re-derives the trope-issue dots for EVERY
+// chapter touched by the given intervention set, using each chapter's own live
+// conflict when available. Propose* paths only hold the pending conflict of
+// the chapter currently being written, so a plain per-chapter refresh would
+// silently drop the red fact-check dots of other chapters; this variant walks
+// the affected chapters and rebuilds each one against its own state.
+func refreshTropeIssuesForInterventions(state *Progress, interventions []TropeIntervention) {
+	if state == nil {
+		return
+	}
+	seen := map[int]bool{}
+	for _, iv := range interventions {
+		if seen[iv.ChapterNum] {
+			continue
+		}
+		seen[iv.ChapterNum] = true
+		for i := range state.Chapters {
+			if state.Chapters[i].Num != iv.ChapterNum {
+				continue
+			}
+			var conflict *WritingConflict
+			if state.PendingWritingConflict != nil &&
+				state.PendingWritingConflict.ChapterNum == iv.ChapterNum {
+				conflict = state.PendingWritingConflict
+			}
+			refreshTropeIssuesWithConflict(&state.Chapters[i], conflict)
+			break
+		}
+	}
+}
+
+// preserveSurgicalHistory carries the surgical-repair bookkeeping from the
+// conflict being replaced (state.PendingWritingConflict) onto a freshly built
+// one, so "rewrite from feedback" loops cannot silently reset the attempt
+// counter. When the same trope unit fails again after an already-applied
+// surgery, the loop is not a prose problem — the surgical option is demoted to
+// LAST and its description tells the author to fix the plan/facts instead of
+// clicking the same button again.
+func preserveSurgicalHistory(state *Progress, c *WritingConflict) {
+	prev := state.PendingWritingConflict
+	if prev == nil || c == nil || prev.ChapterIndex != c.ChapterIndex {
+		return
+	}
+	c.SurgicalAttempts = prev.SurgicalAttempts
+	c.LastSurgicalTarget = prev.LastSurgicalTarget
+	c.ReviseAttempts = prev.ReviseAttempts
+	if c.LastFailure == nil {
+		c.LastFailure = prev.LastFailure
+	}
+	if c.SurgicalAttempts <= 0 {
+		return
+	}
+	for i, a := range c.SuggestedActions {
+		if a.ID != "surgical_trope" {
+			continue
+		}
+		a.Description = fmt.Sprintf("Already repaired %d time(s) on the same trope unit without resolving the issue — this contradiction lives in the plan/facts, not in the local prose. Prefer revising the scene plan or the fact entries.", c.SurgicalAttempts)
+		c.SuggestedActions = append(append(c.SuggestedActions[:i], c.SuggestedActions[i+1:]...), a)
+		return
+	}
+}
+
+// RecordReviseAttempt bumps the whole-chapter "rewrite from feedback" counter
+// on the pending conflict BEFORE the pass starts, so the successor conflict
+// raised by finalizeConflict (via preserveSurgicalHistory) carries an accurate
+// attempt number and the UI can show "attempt #N" instead of pretending every
+// retry is fresh. Safe to call with no pending conflict.
+func RecordReviseAttempt(state *Progress) {
+	if state == nil || state.PendingWritingConflict == nil {
+		return
+	}
+	state.PendingWritingConflict.ReviseAttempts++
+}
+
+// recordReviseLoopFailure explains, on a successor conflict raised by the
+// "rewrite from feedback" pass, WHY the same issue came back even though the
+// pass ran to completion (no hard error). Without this note the UI shows a
+// fresh-looking conflict after every attempt and the author cannot tell
+// whether surgery was applied, failed, or is looping on the same trope unit.
+// prev is the snapshot taken at entry; repaired/failed are this pass's surgical
+// counters. No-op when nothing worth explaining happened.
+func recordReviseLoopFailure(cur, prev *WritingConflict, repaired, failed int) {
+	if cur == nil || prev == nil {
+		return
+	}
+	looping := SameSurgicalTargetFailedAgain(prev, cur)
+	if !looping && repaired == 0 && failed == 0 {
+		return // first plain rewrite: nothing to diagnose yet
+	}
+	reason := ""
+	switch {
+	case looping:
+		reason = fmt.Sprintf("The flagged contradiction survived %d surgical repair(s) on the SAME trope unit plus a full-chapter rewrite — it lives in the scene plan / established facts, not in the local prose. Edit the scene plan or the fact entries directly; retrying the rewrite will keep reproducing it.", prev.SurgicalAttempts)
+	case failed > 0 && repaired > 0:
+		reason = fmt.Sprintf("%d trope-unit repair(s) were applied but %d failed with API errors during this pass; the remaining issues went through the full rewrite, which did not clear them either. Retry the ones that errored, or edit the scene/facts manually.", repaired, failed)
+	case failed > 0:
+		reason = fmt.Sprintf("All %d trope-unit repair(s) errored out (API/provider failures), so only the full-chapter rewrite ran — and it reproduced the same issue. Check the API settings, then retry.", failed)
+	default:
+		reason = fmt.Sprintf("%d trope-unit repair(s) were applied successfully, yet the verification pass still flags the same scene — the contradiction most likely comes from the scene plan or an established fact, not the prose. Prefer editing those instead of rewriting again.", repaired)
+	}
+	f := &ConflictFailure{
+		Stage:            "revise",
+		Reason:           reason,
+		Time:             time.Now().UTC().Format(time.RFC3339),
+		KeptDraft:        true,
+		ChapterNum:       cur.ChapterNum,
+		FailedCount:      cur.ReviseAttempts + cur.SurgicalAttempts,
+		SurgicalRepaired: repaired,
+		SurgicalFailed:   failed,
+	}
+	cur.LastFailure = f
+}
+
+// RecordConflictFailure attaches a machine-readable explanation of WHY the
+// last repair attempt did not resolve the conflict to whichever conflict ends
+// up pending: if the pass raised a successor (still failing checks) the note
+// lands on it; if the pass errored out before raising one, the orphaned draft
+// gets a minimal conflict carrying just the failure + the always-available
+// actions, so the UI keeps offering Retry / Rewrite / Keep-for-review instead
+// of a dead end ("failed and won't let me retry").
+func RecordConflictFailure(state *Progress, progressPath string, stage string, cause error, logger *sse.LogBroadcaster) {
+	if state == nil {
+		return
+	}
+	reason := "unknown error"
+	if cause != nil {
+		if s := strings.TrimSpace(cause.Error()); s != "" {
+			reason = s
+		}
+	}
+	// The raw LLM/HTTP error text is opaque to the author; classify it so the
+	// panel can say WHY the repair failed (API misconfigured / network timeout /
+	// provider error / empty prose) and that retrying is always allowed.
+	if s := strings.ToLower(reason); isLLMConfigReason(s) {
+		reason = "The API configuration is invalid or missing (provider key/base URL). Fix it in Settings — retrying without changing it will fail again."
+	} else if isTimeoutReason(s) {
+		reason = "A network/API timeout interrupted the rewrite (the model call took too long). Your draft was kept untouched — you can retry safely."
+	}
+	f := &ConflictFailure{
+		Stage:     stage,
+		Reason:    reason,
+		Time:      time.Now().UTC().Format(time.RFC3339),
+		KeptDraft: true,
+	}
+	if c := state.PendingWritingConflict; c != nil {
+		// Successor conflict already raised: explain the loop on top of it.
+		f.FailedCount = c.ReviseAttempts + c.SurgicalAttempts
+		if c.ChapterIndex >= 0 && c.ChapterIndex < len(state.Chapters) {
+			f.ChapterNum = state.Chapters[c.ChapterIndex].Num
+		}
+		c.LastFailure = f
+		_ = SaveProgress(progressPath, state)
+		if logger != nil {
+			logger.WarnKey("log.conflict_failure_recorded", f.Stage, f.Reason)
+		}
+		return
+	}
+	idx := -1
+	for i := range state.Chapters {
+		if state.Chapters[i].Status == StatusWriting {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		// Nothing mid-writing: nowhere to attach the note; log only.
+		if logger != nil {
+			logger.WarnKey("log.conflict_failure_dropped", stage, reason)
+		}
+		return
+	}
+	ch := &state.Chapters[idx]
+	f.ChapterNum = ch.Num
+	c := buildWritingConflict(state, idx, nil, nil)
+	c.ReviseAttempts = 0
+	c.SurgicalAttempts = 0
+	c.LastFailure = f
+	finalizeConflict(state, idx, c, i18n.LangEN)
+	state.PendingWritingConflict = c
+	_ = SaveProgress(progressPath, state)
+	if logger != nil {
+		logger.WritingConflict(c)
+		logger.WarnKey("log.conflict_failure_recorded", f.Stage, f.Reason)
+	}
+}
+
+// isLLMConfigReason reports whether a failure string means the API config is
+// invalid/missing (retrying without fixing Settings will fail again).
+func isLLMConfigReason(s string) bool {
+	return strings.Contains(s, "api key") || strings.Contains(s, "configuraci") ||
+		strings.Contains(s, "config invalid") || strings.Contains(s, "missing api") ||
+		strings.Contains(s, "validate config") || strings.Contains(s, "base url")
+}
+
+// isTimeoutReason reports whether a failure string is a network/API timeout —
+// transient by nature, so the UI should always offer a safe retry.
+func isTimeoutReason(s string) bool {
+	return strings.Contains(s, "timeout") || strings.Contains(s, "timed out") ||
+		strings.Contains(s, "context deadline") || strings.Contains(s, "deadline exceeded") ||
+		strings.Contains(s, "i/o timeout") || strings.Contains(s, "connection reset")
 }
 
 // SurgicalTropeRepair rewrites ONLY the trope unit (scenePos, beatIdx) of the
@@ -1071,17 +1373,120 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 	}
 	feedbackIssues := append([]string(nil), conflict.Issues...)
 	feedbackSummary := conflict.Summary
+	surgicalBefore := conflict.SurgicalAttempts
+	// Snapshot of the incoming conflict: finalizeConflict clears
+	// state.PendingWritingConflict before this function reaches the successor
+	// check below, so the loop diagnosis at the end compares against this copy.
+	prevConflict := conflict
+
+	// Surgical-first: fact-check issues that quote offending prose have been
+	// located down to a single trope unit (SceneTargets). Rewriting those units
+	// surgically BEFORE any whole-chapter pass is what makes this path actually
+	// fix the flagged contradiction — a full rewrite regenerates the prose from
+	// the same outline and tends to reproduce the very same issue ("rewrite from
+	// feedback keeps failing on the same thing"). Only unlocatable issues (or
+	// leftovers after surgery) go through the classic full-chapter revision.
+	var surgicalTargets [][2]int
+	seenTarget := map[[2]int]bool{}
+	for _, t := range conflict.SceneTargets {
+		if t[0] >= 0 && t[1] >= 0 && !seenTarget[t] {
+			seenTarget[t] = true
+			surgicalTargets = append(surgicalTargets, t)
+		}
+	}
+	if len(surgicalTargets) > 8 {
+		surgicalTargets = surgicalTargets[:8] // cost guard: at most 8 unit rewrites
+	}
+	// Loop-diagnosis counters: how many trope-unit surgeries this pass
+	// completed vs. errored. Surfaced on the successor conflict's last_failure
+	// so the panel can explain WHY the same issue came back.
+	var surgicalRepaired, surgicalFailed int
+	ch := &state.Chapters[idx]
+	if len(surgicalTargets) > 0 && strings.TrimSpace(ch.Content) != "" {
+		logger.StepInfo(1, 4, "Applying surgical trope-unit repairs for the locatable issues before touching the rest...")
+		done := 0
+		failedTargets := map[[2]int]bool{}
+		for _, t := range surgicalTargets {
+			if ctx.Err() != nil {
+				return fmt.Errorf("generación cancelada")
+			}
+			var parts []string
+			if strings.TrimSpace(feedbackSummary) != "" {
+				parts = append(parts, feedbackSummary)
+			}
+			for i, iss := range feedbackIssues {
+				if i < len(conflict.SceneTargets) && conflict.SceneTargets[i] == t {
+					parts = append(parts, "- "+iss)
+				}
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			done++
+			chNum := ch.Num
+			factSkills := ResolveSkills(skills, cfg.SkillConfig, SkillScopeChapterFactCheck, cfg.Language)
+			factCtx := llm.WithPromptAddon(ctx, FormatSkillsContent(factSkills))
+			if _, err := SurgicalTropeRepair(factCtx, apiCfg, cfg, state, progressPath, idx, t[0], t[1], strings.Join(parts, "\n"), settings, logger); err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("generación cancelada")
+				}
+				logger.WarnKey("log.trope_intervention_failed", chNum, t[0], t[1], err)
+				failedTargets[t] = true
+				surgicalFailed++
+				continue
+			}
+			surgicalRepaired++
+			// Persist the attempt bookkeeping immediately: if the follow-up check
+			// raises a successor conflict, preserveSurgicalHistory carries these
+			// numbers over so the UI can flag a looping surgical repair.
+			conflict.SurgicalAttempts = surgicalBefore + done
+			conflict.LastSurgicalTarget = t
+			state.PendingWritingConflict = conflict
+			_ = SaveProgress(progressPath, state)
+			ch = &state.Chapters[idx]
+		}
+		if done > 0 {
+			// Issues whose unit was successfully repaired leave the full-revision
+			// backlog; failed/unlocatable ones stay and drive the classic rewrite.
+			var remaining []string
+			for i, iss := range feedbackIssues {
+				if i < len(conflict.SceneTargets) {
+					t := conflict.SceneTargets[i]
+					if seenTarget[t] && !failedTargets[t] {
+						continue
+					}
+				}
+				remaining = append(remaining, iss)
+			}
+			feedbackIssues = remaining
+			if len(feedbackIssues) == 0 {
+				feedbackSummary = ""
+			}
+		}
+	}
 
 	// Clear the conflict up front: if the revision regenerates a failing draft,
 	// buildWritingConflict will set a fresh one with the remaining issues.
+	// preserveSurgicalHistory (inside finalizeConflict) carries the surgical
+	// attempt bookkeeping onto the successor so repeated loops stay visible.
 	state.PendingWritingConflict = nil
 	if err := SaveProgress(progressPath, state); err != nil {
 		return err
 	}
 
-	ch := &state.Chapters[idx]
+	ch = &state.Chapters[idx]
 	if strings.TrimSpace(ch.Content) == "" {
 		return fmt.Errorf("the conflicted chapter has no draft content to revise")
+	}
+	if len(feedbackIssues) == 0 && strings.TrimSpace(feedbackSummary) == "" {
+		// Every issue was handled by surgical repairs — no full rewrite needed.
+		// Re-run the verification pass so the chapter ends review-ready or raises
+		// a fresh conflict with updated targets.
+		if err := FactCheckChapterAction(ctx, apiCfg, cfg, state, progressPath, settings, skills, ch.Num, logger); err != nil {
+			return err
+		}
+		logger.SuccessKey("log.chapter_revised")
+		return nil
 	}
 	ch.Status = StatusWriting
 	logger.InfoKey("log.chapter_modifying", ch.Num, ch.Title)
@@ -1161,6 +1566,7 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 		conflict := buildWritingConflict(state, idx, newIssues, analysis)
 		conflict.SuggestedActions = ensureConflictActions(conflict.SuggestedActions, cfg.Language)
 		finalizeConflict(state, idx, conflict, cfg.Language)
+		recordReviseLoopFailure(conflict, prevConflict, surgicalRepaired, surgicalFailed)
 		state.PendingWritingConflict = conflict
 		if err := SaveProgress(progressPath, state); err != nil {
 			return err

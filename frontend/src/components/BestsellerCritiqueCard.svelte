@@ -47,6 +47,18 @@
   let proposingSuggestionId = '';
   let applyingSuggestionId = '';
 
+  // Whole-card accordion: the critique card itself collapses to a single small
+  // horizontal strip (title + score badge only) with a smooth height animation,
+  // so long reports don't dominate the page. Inner sections render exactly as
+  // before once the card is expanded — no per-section collapsing.
+  // Default state: chapter cards start collapsed (they sit under every drafted
+  // chapter); scene-plan / act cards start expanded.
+  let cardOpen = null; // null = use per-kind default
+  $: cardIsOpen = cardOpen ?? kind !== 'chapter';
+  function toggleCard() {
+    cardOpen = !cardIsOpen;
+  }
+
   // Local (unsaved) edits in a proposed scene replacement's textarea, keyed
   // `${suggestionId}:${chapter}:${scene}:${field}` — same trick as the
   // outline card: debounced persistence so edits survive reloads and Apply
@@ -101,6 +113,67 @@
     grow();
     el.addEventListener('input', grow);
     return { destroy() { el.removeEventListener('input', grow); } };
+  }
+
+  // --- Rubric helpers (shared by every pass) -------------------------------
+  // Transparent sub-criteria: each pillar card lists its checklist items with
+  // the graded level, weakest first — literally "what to improve to reach
+  // 100%" since the pillar score is derived as their average.
+  function criterionLabel(key) {
+    const msg = $t('criteria.' + key);
+    return msg && msg !== 'criteria.' + key ? msg : key.replace(/_/g, ' ');
+  }
+  function sortedChecklist(pl) {
+    return [...(pl?.checklist || [])].sort((a, b) => a.level - b.level);
+  }
+
+  // 3-level importance badge, derived deterministically server-side from the
+  // rubric numbers (score impact + criteria repaired).
+  const PRIORITY_BADGE = { high: 'badge-error', medium: 'badge-warning', low: 'badge-ghost' };
+  function priorityLabel(p) {
+    const msg = $t('analysis.priority.' + p);
+    return msg && msg !== 'analysis.priority.' + p ? msg : p;
+  }
+
+  // Scene-plan merge UI state: per recommendation, whether the author wants
+  // this scene absorbed into another one, and which survivor to fold it into.
+  // Keyed `${suggestionId}:${chapter}:${scene}`. Persisted through the same
+  // debounced edit endpoint via field "merge_into_scene_id".
+  let mergeToggles = {};
+  function mergeKey(s, rec) { return s.id + ':' + rec.chapter_num + ':' + rec.scene_id; }
+  function mergeState(s, rec) {
+    const k = mergeKey(s, rec);
+    if (k in mergeToggles) return mergeToggles[k];
+    return { on: !!rec.merge_into_scene_id, target: rec.merge_into_scene_id || 0 };
+  }
+  function siblingSceneIds(s, rec) {
+    const ids = new Set();
+    for (const r of s.recommendations || []) {
+      if (r.chapter_num === rec.chapter_num && r.scene_id !== rec.scene_id) ids.add(r.scene_id);
+    }
+    // Also offer live plan scenes of that chapter (survivor need not be rewritten).
+    const ch = ($progress?.chapters || []).find((c) => c.num === rec.chapter_num);
+    for (const sc of ch?.scene_plan?.scenes || []) {
+      if (sc.id !== rec.scene_id) ids.add(sc.id);
+    }
+    return [...ids].sort((a, b) => a - b);
+  }
+  function setMerge(s, rec, on, target) {
+    const k = mergeKey(s, rec);
+    const st = { ...mergeState(s, rec), on, target: on ? (target || mergeState(s, rec).target || siblingSceneIds(s, rec)[0] || 0) : 0 };
+    if (st.on && !st.target) st.on = false;
+    mergeToggles = { ...mergeToggles, [k]: st };
+    api('POST', '/api/scene-plan/analysis/edit-recommendation', {
+      id: s.id, chapter_num: rec.chapter_num, scene_id: rec.scene_id,
+      field: 'merge_into_scene_id', value: '', merge_into_scene_id: st.on ? st.target : 0,
+    }).catch(() => {});
+  }
+  function mergedScenesOf(s) {
+    // Absorbed scenes declared by the editor (or toggled by the author).
+    return (s.recommendations || [])
+      .map((r) => ({ r, m: mergeState(s, r) }))
+      .filter(({ m }) => m.on && m.target)
+      .map(({ r, m }) => $t('sceneplan.analysis.sceneLabel', { id: r.scene_id }) + '→' + $t('sceneplan.analysis.sceneLabel', { id: m.target }));
   }
 
   function analyze() {
@@ -214,11 +287,39 @@
 
 {#if report}
   <div id={scrollId || undefined} class="card bg-base-200">
+    <!-- Collapsed strip: one small horizontal row with just the title + score. -->
+    {#if !cardIsOpen}
+      <button type="button" class="flex items-center gap-2 px-4 py-2.5 w-full text-left cursor-pointer select-none hover:bg-base-100/60 transition-colors" on:click={toggleCard}>
+        <span class="inline-block transition-transform duration-200 ease-out rotate-0 text-base-content/50 text-xs shrink-0">▶</span>
+        <span class="text-sm font-semibold truncate">{$t(`${kind}.analysis.title`)}</span>
+        {#if kind === 'act' && report.act_name}
+          <span class="text-xs text-base-content/60 shrink-0">{$t('act.analysis.actLabel', { no: report.act_no, name: report.act_name, start: report.start_ch, end: report.end_ch })}</span>
+        {:else if kind === 'chapter' && report.chapter_num}
+          <span class="text-xs text-base-content/60 shrink-0">{$t('chapter.analysis.chapterLabel', { num: report.chapter_num })}</span>
+        {/if}
+        {#if report.overall_score}
+          <span class="badge badge-sm shrink-0 {report.overall_score >= 80 ? 'badge-success' : report.overall_score >= 60 ? 'badge-warning' : 'badge-error'}">{$t(`${kind}.analysis.score`)}: {report.overall_score}/100</span>
+        {/if}
+        {#if report.suggestions?.length}
+          <span class="badge badge-outline badge-sm shrink-0">{report.suggestions.length}</span>
+        {/if}
+      </button>
+    {/if}
+    <!-- Animated expand/collapse: grid-rows trick keeps the transition smooth
+         for arbitrary content height without measuring in JS. -->
+    <div class="grid transition-[grid-template-rows] duration-300 ease-in-out" style="grid-template-rows: {cardIsOpen ? '1fr' : '0fr'};">
+      <div class="overflow-hidden min-h-0">
+    {#if cardIsOpen}
     <div class="card-body p-4 gap-3">
       <div class="flex items-start justify-between gap-2 flex-wrap">
-        <div>
-          <h3 class="card-title text-base">{$t(`${kind}.analysis.title`)}</h3>
-          <span class="field-label">{$t(`${kind}.analysis.subtitle`)}</span>
+        <div class="flex items-start gap-1.5 min-w-0">
+          <button type="button" class="btn btn-ghost btn-xs mt-0.5 shrink-0" aria-label={$t('analysis.collapseCard')} on:click={toggleCard}>
+            <span class="inline-block transition-transform duration-200 ease-out rotate-90 text-base-content/60 text-xs">▶</span>
+          </button>
+          <div class="min-w-0">
+            <h3 class="card-title text-base">{$t(`${kind}.analysis.title`)}</h3>
+            <span class="field-label">{$t(`${kind}.analysis.subtitle`)}</span>
+          </div>
         </div>
         <button class="btn btn-ghost btn-xs shrink-0" on:click={clearReport} disabled={disabled}>{$t(`${kind}.analysis.clear`)}</button>
       </div>
@@ -247,51 +348,102 @@
         {/if}
 
         {#if report.pillar_scores?.length}
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            {#each report.pillar_scores as pl (pl.key)}
-              {@const strong = pl.score >= 90 && !hasOpenSuggestionFor(pl.key)}
-              <div class="bg-base-100 rounded-lg p-2.5 space-y-1">
-                <div class="flex items-center justify-between gap-1">
-                  <span class="text-xs font-semibold truncate">{pillarLabel(pl.key)}</span>
-                  <span class="badge badge-sm {pl.score >= 90 ? 'badge-success' : pl.score >= 75 ? 'badge-info' : pl.score >= 60 ? 'badge-warning' : 'badge-error'}">{pl.score}</span>
-                </div>
-                {#if strong}
-                  <div class="text-xs text-success font-medium">✓ {$t(`${kind}.analysis.noChangesNeeded`)}</div>
-                {:else}
-                  <div class="w-full h-1.5 rounded-full bg-base-content/10 overflow-hidden">
-                    <div class="h-full rounded-full {pl.score >= 90 ? 'bg-success' : pl.score >= 75 ? 'bg-info' : pl.score >= 60 ? 'bg-warning' : 'bg-error'}" style="width: {pl.score}%"></div>
+          <section class="rounded-lg border border-base-content/10 bg-base-100/40 p-3 space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-semibold">{$t('analysis.pillarsTitle')}</span>
+              {#if report.overall_score}
+                <span class="badge badge-sm {report.overall_score >= 80 ? "badge-success" : report.overall_score >= 60 ? "badge-warning" : "badge-error"}">{$t(`${kind}.analysis.score`)}: {report.overall_score}/100</span>
+              {/if}
+            </div>
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+              {#each report.pillar_scores as pl (pl.key)}
+                {@const strong = pl.score >= 90 && !hasOpenSuggestionFor(pl.key)}
+                <div class="bg-base-100 rounded-lg p-2.5 space-y-1">
+                  <div class="flex items-center justify-between gap-1">
+                    <span class="text-xs font-semibold truncate">{pillarLabel(pl.key)}</span>
+                    <span class="badge badge-sm {pl.score >= 90 ? 'badge-success' : pl.score >= 75 ? 'badge-info' : pl.score >= 60 ? 'badge-warning' : 'badge-error'}">{pl.score}</span>
                   </div>
-                {/if}
-                {#if pl.note}<p class="text-[11px] leading-snug text-base-content/60 line-clamp-3">{pl.note}</p>{/if}
-              </div>
-            {/each}
-          </div>
+                  {#if strong}
+                    <div class="text-xs text-success font-medium">✓ {$t(`${kind}.analysis.noChangesNeeded`)}</div>
+                  {:else}
+                    <div class="w-full h-1.5 rounded-full bg-base-content/10 overflow-hidden">
+                      <div class="h-full rounded-full {pl.score >= 90 ? 'bg-success' : pl.score >= 75 ? 'bg-info' : pl.score >= 60 ? 'bg-warning' : 'bg-error'}" style="width: {pl.score}%"></div>
+                    </div>
+                  {/if}
+                  {#if pl.note}<p class="text-[11px] leading-snug text-base-content/60 line-clamp-3">{pl.note}</p>{/if}
+                  <!-- Transparent sub-criteria: the score IS the average of these
+                       levels, so this list is literally the roadmap to 100%. -->
+                  {#if pl.checklist?.length}
+                    <details class="text-[11px]">
+                      <summary class="cursor-pointer text-base-content/55 select-none">{$t('analysis.checklist.title')}</summary>
+                      <ul class="mt-1 space-y-0.5" title={$t('analysis.checklist.tip')}>
+                        {#each sortedChecklist(pl) as c (c.key)}
+                          <li class="flex items-center justify-between gap-1">
+                            <span class="truncate text-base-content/70">{criterionLabel(c.key)}</span>
+                            <span class="shrink-0 font-mono {c.level >= 85 ? 'text-success' : c.level >= 60 ? 'text-warning' : 'text-error'}">{c.level < 0 ? '—' : c.level}</span>
+                          </li>
+                        {/each}
+                      </ul>
+                    </details>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </section>
         {/if}
 
-        <div class="font-semibold text-sm">{$t(`${kind}.analysis.suggestions`)} ({report.suggestions?.length || 0})</div>
+        {#if report.suggestions?.length}
+        <div class="flex items-center gap-2 pt-1">
+          <span class="font-semibold text-sm">{$t(`${kind}.analysis.suggestions`)} ({report.suggestions.length})</span>
+        </div>
+        {/if}
         <div class="space-y-2">
           {#each report.suggestions || [] as s (s.id)}
             <section class="border border-base-content/10 rounded-lg p-3 space-y-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <span class="badge badge-outline badge-sm">{catLabel(s.category)}</span>
-                <h4 class="font-semibold text-sm flex-1 min-w-0">{s.title}</h4>
+                {#if s.priority}
+                  <span class="badge badge-sm {PRIORITY_BADGE[s.priority] || 'badge-ghost'}">{$t('analysis.priority.' + s.priority)}</span>
+                {/if}
+                <span class="font-semibold text-sm flex-1 min-w-0">{s.title}</span>
+                {#if s.score_impact}
+                  <span class="badge badge-success badge-sm shrink-0" title={$t('analysis.checklist.tip')}>{$t('analysis.scoreImpact', { n: s.score_impact })}</span>
+                {/if}
                 {#if s.status === 'applied'}
                   <span class="badge badge-success badge-sm">✓ {$t(`${kind}.analysis.applied`)}</span>
                 {/if}
               </div>
+              <div class="space-y-2">
+              {#if s.criteria?.length}
+                <p class="text-xs text-base-content/60">
+                  {$t('analysis.criteriaLabel')}
+                  {s.criteria.map((c) => criterionLabel(c.key)).join(', ')}
+                  {#if s.pillar} · {pillarLabel(s.pillar)}{/if}
+                </p>
+              {/if}
               {#if s.detail}<p class="text-sm text-base-content/80 whitespace-pre-wrap">{s.detail}</p>{/if}
               {#if s.action}<p class="text-sm text-base-content/70 italic whitespace-pre-wrap">{s.action}</p>{/if}
               {#if s.applies_to_chapters?.length}
                 <p class="text-xs text-base-content/60">{$t(`${kind}.analysis.chapters`, { list: s.applies_to_chapters.join(', ') })}</p>
+              {/if}
+              {#if kind === 'sceneplan' && mergedScenesOf(s).length}
+                <p class="text-xs text-error/80 font-medium">⚠ {$t('analysis.mergeSurvivor')}: {mergedScenesOf(s).join(', ')}</p>
               {/if}
 
               <!-- Scene-level replacements (sceneplan pass): editable accordions -->
               {#if s.recommendations?.length}
                 <div class="space-y-2">
                   {#each s.recommendations as rec (rec.chapter_num + ':' + rec.scene_id)}
-                    <details class="bg-base-100 rounded p-2.5 text-xs">
-                      <summary class="cursor-pointer font-semibold select-none">
-                        Ch. {rec.chapter_num} · {$t('sceneplan.analysis.sceneLabel', { id: rec.scene_id })}
+                    {@const ms = mergeState(s, rec)}
+                    {@const siblings = siblingSceneIds(s, rec)}
+                    <details class="bg-base-100 rounded p-2.5 text-xs" open={ms.on}>
+                      <summary class="cursor-pointer font-semibold select-none flex items-center gap-2 flex-wrap">
+                        <span>Ch. {rec.chapter_num} · {$t('sceneplan.analysis.sceneLabel', { id: rec.scene_id })}</span>
+                        {#if ms.on && ms.target}
+                          <span class="badge badge-error badge-xs normal-case">{$t('analysis.mergeChip', { id: ms.target })}</span>
+                        {:else if rec.merge_scene_ids?.includes(rec.scene_id)}
+                          <span class="badge badge-warning badge-xs normal-case">{$t('analysis.mergeSurvivor')}</span>
+                        {/if}
                       </summary>
                       <div class="space-y-1.5 pt-1.5">
                         {#if rec.new_title}
@@ -330,6 +482,31 @@
                             </label>
                           {/if}
                         </div>
+                        {#if kind === 'sceneplan' && siblings.length}
+                          <div class="pt-1 border-t border-base-300 flex flex-wrap items-center gap-2">
+                            <label class="flex items-center gap-1.5 cursor-pointer">
+                              <input type="checkbox" class="checkbox checkbox-xs"
+                                checked={ms.on}
+                                disabled={disabled || s.status === 'applied'}
+                                on:change={(e) => setMerge(s, rec, e.currentTarget.checked, ms.target)} />
+                              <span class="text-base-content/70">{$t('analysis.mergeToggleOn')}</span>
+                            </label>
+                            {#if ms.on}
+                              <label class="flex items-center gap-1.5">
+                                <span class="text-base-content/60">{$t('analysis.mergeTarget')}:</span>
+                                <select class="select select-xs select-bordered w-auto"
+                                  value={ms.target}
+                                  disabled={disabled || s.status === 'applied'}
+                                  on:change={(e) => setMerge(s, rec, true, parseInt(e.currentTarget.value, 10))}>
+                                  {#each siblings as sid (sid)}
+                                    <option value={sid}>{$t('sceneplan.analysis.sceneLabel', { id: sid })}</option>
+                                  {/each}
+                                </select>
+                              </label>
+                              <span class="text-[10px] text-error/80">{$t('analysis.mergeWarning', { absorbed: rec.scene_id, survivor: ms.target })}</span>
+                            {/if}
+                          </div>
+                        {/if}
                         <p class="text-[10px] text-base-content/45">{$t('sceneplan.analysis.editableHint')}</p>
                       </div>
                     </details>
@@ -376,9 +553,13 @@
                   {/if}
                 </div>
               {/if}
+              </div>
             </section>
           {/each}
         </div>
+      </div>
+    </div>
+    {/if}
       </div>
     </div>
   </div>

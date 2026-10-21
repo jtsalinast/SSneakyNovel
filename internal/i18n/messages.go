@@ -580,6 +580,12 @@ var messageCatalog = map[string]map[string]string{
 	"log.conflict_analyze_failed": {
 
 		LangEN: "Conflict analysis failed: %v — keeping current version"},
+	"log.conflict_failure_recorded": {
+
+		LangEN: "[Repair failure] Stage: %s — reason: %s. The conflict panel keeps Retry / Rewrite available; your draft was not lost."},
+	"log.conflict_failure_dropped": {
+
+		LangEN: "[Repair failure] Stage: %s — reason: %s (no chapter mid-writing to attach the note to)"},
 	"log.conflict_retry": {
 
 		LangEN: "Resolvable conflict detected — final attempt with extra constraints..."},

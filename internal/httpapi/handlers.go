@@ -208,6 +208,26 @@ func (h *Handlers) newTaskTokenTracker() *llm.TaskTokenUsage {
 	return usage
 }
 
+// taskCeiling maps apiCfg.TaskDurationMinutes to the wall-clock ceiling handed
+// to llm.NewTaskContext. Unset/0 keeps the historical 30-minute default; a
+// negative value returns 0, which NewTaskContext interprets as "no deadline"
+// (the task runs until it completes or the user presses Stop). Callers hold
+// taskMu (tryStartTask), so read h.apiCfg directly — PutAPIConfig swaps the
+// pointer under the same mutex and refuses while a task runs.
+func (h *Handlers) taskCeiling() time.Duration {
+	minutes := 0
+	if h.apiCfg != nil {
+		minutes = h.apiCfg.TaskDurationMinutes
+	}
+	if minutes < 0 {
+		return 0 // no ceiling
+	}
+	if minutes == 0 {
+		return llm.MaxTaskDuration
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
 func (h *Handlers) tryStartTask() bool {
 	// Fresh tracker first (its own short taskMu section): the previous run's
 	// tracker is orphaned once its context is cancelled, so /api/status must
@@ -224,10 +244,14 @@ func (h *Handlers) tryStartTask() bool {
 	h.forceKnowledgeSync = false
 	h.skipKnowledgeSync = false
 	h.activeWork = 1
-	// Hard wall-clock ceiling per task (llm.NewTaskContext): without it a
-	// persistently failing API endpoint could keep retrying forever and freeze
-	// the machine. Manual stop via taskCancel still works as before.
-	ctx, cancel := llm.NewTaskContext(context.Background())
+	// Per-task wall-clock ceiling (api.json task_duration_minutes): the old
+	// hard 30-minute deadline aborted long chapter batches mid-flight even
+	// though every LLM call was healthy. <=0 keeps the llm.MaxTaskDuration
+	// default; a negative value disables the ceiling entirely (run until done
+	// or manual Stop). Per-call HTTP timeouts still bound each request either
+	// way, so a hung endpoint cannot live forever. Manual stop via
+	// taskCancel still works as before.
+	ctx, cancel := llm.NewTaskContext(context.Background(), h.taskCeiling())
 	// Publish h.taskCtx WITH the tracker already attached: goroutines snapshot
 	// h.taskCtx right after tryStartTask returns, and any LLM call made through a
 	// context lacking a TaskTokenUsage reports no counts at all — the frontend
@@ -696,7 +720,15 @@ func (h *Handlers) PutChapterBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.blockEditChapter(w, r, num, func(ch *story.ChapterState) error {
-		return story.UpdateBlock(ch, id, body.Text)
+		if err := story.UpdateBlock(ch, id, body.Text); err != nil {
+			return err
+		}
+		// Surgical repair of a trope unit re-derives that chapter's fact/critic
+		// findings roll-up so the colored dots on the blocks reflect the edited
+		// text instead of the stale pre-edit state (the underlying conflict /
+		// analysis records are untouched; only the per-unit mapping is rebuilt).
+		story.RefreshTropeIssuesForChapter(h.state, ch)
+		return nil
 	})
 }
 
@@ -1163,6 +1195,7 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 		go func() {
 			defer h.endTask()
 			h.logger.TaskStart("chapter_revision")
+			story.RecordReviseAttempt(h.state)
 			ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterRevise, true)
 			err := story.ReviseFromConflictAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, h.logger)
 			if err != nil {
@@ -1171,8 +1204,15 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 				case ctx.Err() != nil:
 					h.logger.WarnKey("log.chapter_revise_cancelled")
 				case errors.As(err, &wcErr):
+					// Successor conflict raised: the pass ran to completion, it just
+					// did not clear the checks. preserveSurgicalHistory already carries
+					// the attempt counters; no failure note (nothing errored).
 					h.logger.WarnKey("log.chapter_write_conflict_pause")
 				default:
+					// Hard error (bad config / timeout / provider failure): persist WHY
+					// on a recreated conflict so the panel keeps offering Retry instead
+					// of dying silently.
+					story.RecordConflictFailure(h.state, h.progressPath, "revise", err, h.logger)
 					h.logger.ErrorKey("log.chapter_revise_failed", err)
 				}
 				h.logger.TaskEnd("chapter_revision", false)
@@ -1229,12 +1269,15 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 				scTitle = sc.Description
 			}
 		}
+		surgicalConflict := c // carried copy: restored on hard failure with counters + WHY
 		h.state.PendingWritingConflict = nil
 		if err := story.SaveProgress(h.progressPath, h.state); err != nil {
 			h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err)
 			return
 		}
 		if !h.tryStartTask() {
+			h.state.PendingWritingConflict = surgicalConflict
+			_ = story.SaveProgress(h.progressPath, h.state)
 			h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 			return
 		}
@@ -1246,8 +1289,13 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 			newContent, err := story.SurgicalTropeRepair(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, idx, target[0], target[1], joinedFB, h.settings, h.logger)
 			if err != nil {
 				if ctx.Err() != nil {
+					h.state.PendingWritingConflict = surgicalConflict
+					_ = story.SaveProgress(h.progressPath, h.state)
 					h.logger.WarnKey("log.chapter_write_cancelled")
 				} else {
+					// Hard failure: restore the conflict (with attempt counters + WHY)
+					// so the panel keeps offering Retry / Rewrite instead of a dead end.
+					story.RecordConflictFailure(h.state, h.progressPath, "surgical", err, h.logger)
 					h.logger.ErrorKey("log.surgical_trope_failed", err)
 				}
 				h.logger.TaskEnd("chapter_surgical_trope", false)
@@ -1260,10 +1308,15 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 				var wcErr *story.WritingConflictError
 				switch {
 				case errors.As(err, &wcErr):
+					// Re-check still failing: FactCheckChapterAction raised the successor
+					// conflict itself; preserveSurgicalHistory carried the counters over.
 					h.logger.WarnKey("log.chapter_write_conflict_pause")
 				case ctx.Err() != nil:
+					h.state.PendingWritingConflict = surgicalConflict
+					_ = story.SaveProgress(h.progressPath, h.state)
 					h.logger.WarnKey("log.chapter_write_cancelled")
 				default:
+					story.RecordConflictFailure(h.state, h.progressPath, "surgical", err, h.logger)
 					h.logger.ErrorKey("log.chapter_factcheck_failed", err)
 				}
 				h.logger.TaskEnd("chapter_surgical_trope", false)
