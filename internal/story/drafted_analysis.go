@@ -51,11 +51,24 @@ import (
 // pending | applied | failed.
 type TropeIntervention struct {
 	ChapterNum int    `json:"chapter_num"`
-	ScenePos   int    `json:"scene_pos"` // index into ScenePlan.Scenes
+	ScenePos   int    `json:"scene_pos"`   // index into ScenePlan.Scenes
 	TropeIndex int    `json:"trope_index"` // index into Scene.TropeUnits
 	TropeLabel string `json:"trope_label,omitempty"`
 	Feedback   string `json:"feedback"`
 	Status     string `json:"status"` // pending | applied | failed
+	// CurrentText is the exact prose of the targeted trope unit AT PROPOSAL
+	// TIME. The viewer uses it to highlight the passage inline (fuzzy-matched
+	// against the live chapter text) and to show the author what a click will
+	// replace before applying anything.
+	CurrentText string `json:"current_text,omitempty"`
+	// Quote is an optional short excerpt the editor quotes as evidence for the
+	// intervention; used as a secondary highlight anchor when CurrentText no
+	// longer matches after manual edits.
+	Quote string `json:"quote,omitempty"`
+	// Action states what the intervention does to the highlighted passage:
+	// rewrite (default) | delete | insert. Drives the popup wording ("replace
+	// with…", "delete this passage").
+	Action string `json:"action,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +125,14 @@ var analysisGradeSalt = func() string {
 func chapterTropeMapBlock(ch ChapterState, lang string) string {
 	en := normalizeLangEN(lang)
 	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+		// Chapters drafted WITHOUT a scene plan still tile into break-delimited
+		// pseudo-scenes and trope units in the reader (SyncChapterBlocks fallback
+		// + breakSceneSpans). Report that same tiling here so the editor model can
+		// target concrete scene_pos/trope_index values and the proposals carry a
+		// highlightable CurrentText anchor instead of being untargetable.
+		if mapStr := fallbackTropeMapBlock(ch, lang); mapStr != "" {
+			return mapStr
+		}
 		if en {
 			return "[Written structure]\nThis chapter was written without a scene plan — interventions cannot be targeted at concrete scenes.\n\n"
 		}
@@ -203,67 +224,33 @@ func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string
 	return kept
 }
 
-// finalizePillars mirrors the outline/scene-plan pillar sanitization: keep
-// only the four known keys, clamp scores, demote a "strong" pillar that still
-// has an open suggestion downstream of it, and guarantee all four exist.
+// finalizePillars applies the shared rubric contract (analysis_pillars.go) to
+// a drafted-pass report: checklists attached, pillar scores DERIVED from the
+// graded criteria levels, suggestion pillar/criteria normalized and claimed
+// impacts capped at each pillar's remaining headroom. The concrete suggestion
+// structs are updated in place with the sanitized values.
 func finalizePillars(in []PillarAssessment, suggestions []DraftedSuggestion) []PillarAssessment {
-	pillarDownstream := map[string][]string{
-		"reader_profile":       {"market", "hook", "other"},
-		"inspirational_pieces": {"other", "emotion"},
-		"tone":                 {"emotion", "hook"},
-		"story_structure":      {"structure", "pacing", "scene_economy", "budget", "pov", "stakes"},
+	finalIn := make([]FinalizableSuggestion, len(suggestions))
+	for i, s := range suggestions {
+		finalIn[i] = FinalizableSuggestion{Category: s.Category, Status: s.Status, Pillar: s.Pillar, Impact: s.ScoreImpact, Criteria: s.Criteria}
 	}
-	cleanPillars := make([]PillarAssessment, 0, 4)
-	seenPillar := map[string]bool{}
-	for _, p := range in {
-		if p.Key != "reader_profile" && p.Key != "inspirational_pieces" && p.Key != "tone" && p.Key != "story_structure" {
-			continue
-		}
-		if seenPillar[p.Key] {
-			continue
-		}
-		seenPillar[p.Key] = true
-		if p.Score < 0 || p.Score > 100 {
-			p.Score = 0
-		}
-		p.Note = strings.TrimSpace(p.Note)
-		if p.IsStrong() && len(keptDraftedSuggestionsForPillar(suggestions, pillarDownstream[p.Key])) > 0 {
-			p.Score = strongPillarScore - 1
-		}
-		cleanPillars = append(cleanPillars, p)
-	}
-	for _, key := range []string{"reader_profile", "inspirational_pieces", "tone", "story_structure"} {
-		if !seenPillar[key] {
-			cleanPillars = append(cleanPillars, PillarAssessment{Key: key, Score: strongPillarScore - 1})
-		}
-	}
-	return cleanPillars
-}
-
-func keptDraftedSuggestionsForPillar(suggestions []DraftedSuggestion, categories []string) []DraftedSuggestion {
-	in := make(map[string]bool, len(categories))
-	for _, c := range categories {
-		in[c] = true
-	}
-	var out []DraftedSuggestion
-	for _, s := range suggestions {
-		if s.Status == "applied" {
-			continue
-		}
-		if in[s.Category] {
-			out = append(out, s)
-		}
+	out, finalOut := finalizePillarReport(in, finalIn)
+	for i := range suggestions {
+		suggestions[i].Pillar = finalOut[i].Pillar
+		suggestions[i].Criteria = finalOut[i].Criteria
+		suggestions[i].ScoreImpact = finalOut[i].Impact
+		suggestions[i].Priority = finalOut[i].Priority
 	}
 	return out
 }
 
 // draftedJSONSchemaEN builds the shared strict-JSON contract for both passes.
-// The numeric examples are randomized anchors (see gradeAnchorFor): with fixed
-// template numbers the model echoes the same scores across chapters, acts and
-// re-runs, which reads as "the critic never really recalculates".
+// Pillar scores are DERIVED from the per-criterion checklist levels (see
+// analysis_pillars.go): the model grades concrete sub-criteria, so re-grading
+// after corrections raises exactly the items that improved instead of drifting
+// around randomized example anchors like before.
 func draftedJSONSchemaEN() string {
-	return fmt.Sprintf(`{"summary":"...","overall_score":%d,"pillar_scores":[{"key":"reader_profile","score":%d,"note":"..."},{"key":"inspirational_pieces","score":%d,"note":"..."},{"key":"tone","score":%d,"note":"..."},{"key":"story_structure","score":%d,"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS trope unit only"}]}]}`,
-		rand.Intn(21)+60, gradeAnchorFor("reader_profile"), gradeAnchorFor("inspirational_pieces"), gradeAnchorFor("tone"), gradeAnchorFor("story_structure"))
+	return `{"summary":"...","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"..."},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS trope unit only"}]}]}`
 }
 
 // interventionsRulesEN explains the intervention contract in the prompt.
@@ -308,19 +295,120 @@ func loadDraftedChapterFilesInto(progressPath string, state *Progress) {
 // outline/scene-plan passes it carries Interventions: concrete, small fixes
 // targeting trope units of the existing text, applicable via rewriteSceneTrope.
 type DraftedSuggestion struct {
-	ID                string                      `json:"id"`
-	Category          string                      `json:"category"` // hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other
-	Title             string                      `json:"title"`
-	Detail            string                      `json:"detail"`
-	Action            string                      `json:"action"`
-	Status            string                      `json:"status"` // pending | applied
-	AppliedAt         string                      `json:"applied_at,omitempty"`
-	AppliesToChapters []int                       `json:"applies_to_chapters,omitempty"`
-	Interventions     []TropeIntervention         `json:"interventions,omitempty"`
-	Recommendations   []OutlineRecommendation     `json:"recommendations,omitempty"` // always discarded: advice-only first pass
+	ID                string                  `json:"id"`
+	Category          string                  `json:"category"` // hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other
+	Title             string                  `json:"title"`
+	Detail            string                  `json:"detail"`
+	Action            string                  `json:"action"`
+	Status            string                  `json:"status"` // pending | applied
+	AppliedAt         string                  `json:"applied_at,omitempty"`
+	AppliesToChapters []int                   `json:"applies_to_chapters,omitempty"`
+	Interventions     []TropeIntervention     `json:"interventions,omitempty"`
+	Recommendations   []OutlineRecommendation `json:"recommendations,omitempty"` // always discarded: advice-only first pass
+	// Pillar is the analysis pillar this point serves (reader_profile |
+	// inspirational_pieces | tone | story_structure), declared by the editor or
+	// inferred from the category during finalization.
+	Pillar string `json:"pillar,omitempty"`
+	// Criteria lists the pillar-checklist items this point repairs.
+	Criteria []SuggestionCriterion `json:"criteria,omitempty"`
+	// ScoreImpact is the points the pillar should gain once this point is fully
+	// applied, capped at the pillar's remaining headroom.
+	ScoreImpact int `json:"score_impact,omitempty"`
+	// Priority is the 3-level importance badge (high | medium | low) derived
+	// deterministically from ScoreImpact + how many checklist items the point
+	// repairs (see deriveSuggestionPriority), so it always agrees with the
+	// rubric numbers shown next to it in the UI.
+	Priority string `json:"priority,omitempty"`
 }
 
-// findDraftedSuggestion locates a suggestion by id within a slice.
+// fallbackTropeMapBlock renders the SAME break-delimited pseudo-scene / trope
+// tiling that SyncChapterBlocks and breakSceneSpans use for chapters drafted
+// without a scene plan. The editor model can then target real scene_pos /
+// trope_index values; ProposeChapterInterventions records the derived units on
+// a synthetic ScenePlan so CurrentText anchoring (tropeUnitProseAt) resolves
+// them later. Returns "" when there is no prose to map.
+func fallbackTropeMapBlock(ch ChapterState, lang string) string {
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 || sep == "" {
+		sep = "\n\n"
+	}
+	spans := breakSceneSpans(paras)
+	if len(spans) == 0 {
+		return ""
+	}
+	en := normalizeLangEN(lang)
+	var sb strings.Builder
+	if en {
+		sb.WriteString("[Written structure — pseudo-scenes delimited by \"---\" breaks and their trope units (use THESE exact indexes for interventions)]\n")
+	} else {
+		sb.WriteString("[Estructura escrita — pseudo-escenas delimitadas por saltos \"---\" y sus unidades de tropo (usa ESTOS índices exactos para las intervenciones)]\n")
+	}
+	for pos, sp := range spans {
+		lo, hi := sp[0], sp[1]
+		if hi <= lo {
+			continue
+		}
+		sceneParas := paras[lo:hi]
+		beats, _ := splitTropesFromParas(sceneParas, "", sep)
+		if len(beats) == 0 {
+			beats = []string{strings.Join(sceneParas, sep)}
+		}
+		units := make([]string, 0, len(beats))
+		for i, b := range beats {
+			units = append(units, fmt.Sprintf("trope_index=%d:%s(%dw)", i, classifyTrope(b, i == 0, i == len(beats)-1), prose.CountProseUnits(b)))
+		}
+		if en {
+			fmt.Fprintf(&sb, "- scene_pos=%d (break-delimited section %d) — trope units: %s\n", pos, pos+1, strings.Join(units, " → "))
+		} else {
+			fmt.Fprintf(&sb, "- scene_pos=%d (sección %d delimitada por saltos) — unidades de tropo: %s\n", pos, pos+1, strings.Join(units, " → "))
+		}
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// ensureFallbackScenePlan records the break-derived pseudo-scene/trope tiling
+// on a SYNTHETIC ScenePlan for plan-less chapters, so intervention targets
+// (scene_pos + trope_index) resolve consistently across proposal time
+// (fallbackTropeMapBlock), apply time (rewriteSceneTrope) and highlight time
+// (tropeUnitProseAt). No-op when a real plan exists or there is no prose.
+func ensureFallbackScenePlan(ch *ChapterState) {
+	if ch.ScenePlan != nil && len(ch.ScenePlan.Scenes) > 0 {
+		return
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 {
+		return
+	}
+	if sep == "" {
+		sep = "\n\n"
+	}
+	spans := breakSceneSpans(paras)
+	if len(spans) == 0 {
+		return
+	}
+	scenes := make([]Scene, 0, len(spans))
+	for _, sp := range spans {
+		lo, hi := sp[0], sp[1]
+		if hi <= lo {
+			continue
+		}
+		sceneParas := paras[lo:hi]
+		beats, ranges := splitTropesFromParas(sceneParas, "", sep)
+		if len(beats) == 0 {
+			beats = []string{strings.Join(sceneParas, sep)}
+			ranges = [][2]int{{0, len(sceneParas)}}
+		}
+		sc := Scene{ID: len(scenes) + 1, ParaStart: lo, ParaEnd: hi}
+		applyTropeSegmentation(&sc, beats, ranges)
+		scenes = append(scenes, sc)
+	}
+	if len(scenes) == 0 {
+		return
+	}
+	ch.ScenePlan = &ScenePlan{Scenes: scenes}
+}
+
 func findDraftedSuggestion(list []DraftedSuggestion, id string) int {
 	for i, s := range list {
 		if s.ID == id {
@@ -337,12 +425,12 @@ func findDraftedSuggestion(list []DraftedSuggestion, id string) int {
 // ChapterAnalysisReport is the bestseller-editor pass over one drafted
 // chapter, persisted on ChapterState.Analysis.
 type ChapterAnalysisReport struct {
-	GeneratedAt      string             `json:"generated_at"`
-	BasedOnStructure string             `json:"based_on_structure,omitempty"`
-	ChapterNum       int                `json:"chapter_num"`
-	Summary          string             `json:"summary"`
-	OverallScore     int                `json:"overall_score,omitempty"`
-	PillarScores     []PillarAssessment `json:"pillar_scores,omitempty"`
+	GeneratedAt      string              `json:"generated_at"`
+	BasedOnStructure string              `json:"based_on_structure,omitempty"`
+	ChapterNum       int                 `json:"chapter_num"`
+	Summary          string              `json:"summary"`
+	OverallScore     int                 `json:"overall_score,omitempty"`
+	PillarScores     []PillarAssessment  `json:"pillar_scores,omitempty"`
 	Suggestions      []DraftedSuggestion `json:"suggestions"`
 	// DraftFingerprint identifies the exact prose + summary the scores above
 	// were computed from. Re-analyzing an unchanged chapter reuses the report;
@@ -427,8 +515,10 @@ Analyze against ALL parameters above, giving special weight to these four pillar
 Return STRICT JSON only (no markdown fences, no prose): %s
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
-- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the chapter is genuinely strong as-is. Most drafted chapters land mid-range. The numeric examples in the JSON schema above are PLACEHOLDERS, not your answer — derive every score independently from THIS specific chapter; grading different chapters must produce clearly different numbers wherever their quality differs.
+- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the chapter is genuinely strong as-is. Most drafted chapters land mid-range. Derive every score independently from THIS specific chapter: grade each pillar's checklist item (criteria_levels, 0–100) and let the pillar score be their average, so re-grading corrected material raises exactly the items that improved; grading different chapters must produce clearly different numbers wherever their quality differs.
 - pillar_scores MUST contain exactly the four keys reader_profile, inspirational_pieces, tone, story_structure.
+- Each pillar_scores entry MUST include criteria_levels grading EVERY item of that pillar's checklist above ({"key":"...","level":0..100}) — the pillar score is derived from those levels, never guessed.
+- Every suggestion MUST declare its "pillar" (one of the four keys), the checklist "criteria" keys it repairs, and a realistic "score_impact" (points that pillar should gain once this point is fully applied).
 - Every pillar scoring below 90 MUST have at least one corresponding suggestion (reader_profile→hook/other, inspirational_pieces→other, tone→emotion/hook, story_structure→structure/pacing/scene_economy/stakes). A pillar scoring 90+ may have zero suggestions — then the UI shows "No changes needed" for it.
 
 Rules:
@@ -472,8 +562,10 @@ Analiza contra TODOS los parámetros, dando peso especial a estos cuatro pilares
 Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s
 
 Estándar de nota (eres despiadado — tu reputación descansa en libros que llegan a #1 mundial):
-- Puntúa cada uno de los cuatro pilares 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el capítulo es genuinamente fuerte tal cual. La mayoría de capítulos borroneados caen en la franja media. Los ejemplos numéricos del esquema JSON de arriba son MARCADORES DE POSICIÓN, no tu respuesta: deriva cada puntuación de forma independiente de ESTE capítulo concreto; evaluar capítulos distintos debe producir números claramente distintos allí donde su calidad difiera.
+- Puntúa cada uno de los cuatro pilares 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el capítulo es genuinamente fuerte tal cual. La mayoría de capítulos borroneados caen en la franja media. Deriva cada puntuación de forma independiente de ESTE capítulo concreto: califica cada ítem de la lista del pilar (criteria_levels, 0–100) y deja que la puntuación del pilar sea su promedio, así recalificar material corregido sube exactamente los ítems mejorados; evaluar capítulos distintos debe producir números claramente distintos allí donde su calidad difiera.
 - pillar_scores DEBE contener exactamente las cuatro claves reader_profile, inspirational_pieces, tone, story_structure.
+- Cada entrada de pillar_scores DEBE incluir criteria_levels calificando CADA ítem de la lista de ese pilar ({"key":"...","level":0..100}) — la puntuación del pilar se deriva de esos niveles, nunca se adivina.
+- Cada sugerencia DEBE declarar su "pillar" (una de las cuatro claves), las claves "criteria" de la lista que repara, y un "score_impact" realista (puntos que ese pilar debería ganar al aplicar por completo este punto).
 - Todo pilar por debajo de 90 DEBE tener al menos una sugerencia correspondiente (reader_profile→hook/other, inspirational_pieces→other, tone→emotion/hook, story_structure→structure/pacing/scene_economy/stakes). Un pilar con 90+ puede no tener sugerencias — entonces la UI muestra "Sin cambios necesarios".
 
 Reglas:
@@ -524,7 +616,8 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 
 	logger.InfoKey("log.chapter_analyze_running", ch.Num)
 	var result ChapterAnalysisReport
-	for attempt := 0; attempt < 2; attempt++ {
+	const maxParseAttempts = 3
+	for attempt := 0; attempt < maxParseAttempts; attempt++ {
 		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, prompt, logger)
 		if raw == "" {
 			if ctx.Err() != nil {
@@ -532,13 +625,26 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 			}
 			return fmt.Errorf("API call failed or was canceled")
 		}
-		j := llm.ExtractJSON(raw)
 		result = ChapterAnalysisReport{}
-		if j != "" && json.Unmarshal([]byte(j), &result) == nil && (result.Summary != "" || len(result.Suggestions) > 0) {
+		ok := false
+		// Progressive salvage: strict extraction first, then a repair pass for
+		// responses whose final closers were cut off by max_tokens (the most
+		// common cause of "not valid chapter-analysis JSON" on long reports).
+		for _, j := range candidateChapterJSONs(raw) {
+			if json.Unmarshal([]byte(j), &result) == nil && (result.Summary != "" || len(result.Suggestions) > 0) {
+				ok = true
+				break
+			}
+			result = ChapterAnalysisReport{}
+		}
+		if ok {
 			break
 		}
-		if attempt == 1 {
+		if attempt == maxParseAttempts-1 {
 			return fmt.Errorf("model response is not valid chapter-analysis JSON")
+		}
+		if logger != nil {
+			logger.WarnKey("log.chapter_analyze_bad_json_retry", ch.Num, attempt+1)
 		}
 		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
 	}
@@ -555,7 +661,337 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	result.ChapterNum = ch.Num
 	result.DraftFingerprint = fingerprint
 	ch.Analysis = &result
+	refreshTropeIssuesWithConflict(ch, state.PendingWritingConflict)
+
+	// Auto-propose: immediately turn every advice-only chapter point into
+	// concrete trope-unit interventions so the reader shows highlighted
+	// suggestions right after the critique finishes (no per-suggestion click
+	// needed). Best-effort: a failed proposal never fails the analysis itself;
+	// the author can still trigger it manually from the critique card.
+	for _, s := range result.Suggestions {
+		if len(s.Interventions) > 0 || strings.TrimSpace(s.ID) == "" {
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if logger != nil {
+			logger.InfoKey("log.chapter_analyze_auto_proposal", draftTruncate(s.Title, 60))
+		}
+		if _, err := ProposeChapterInterventions(ctx, apiCfg, cfg, state, settings, chapterNum, s.ID, progressPath, logger); err != nil {
+			logger.WarnKey("log.chapter_analyze_auto_propose_failed", ch.Num, s.ID)
+		}
+	}
 	return nil
+}
+
+// candidateChapterJSONs extracts, in decreasing order of trustworthiness, every
+// plausible JSON object inside a raw model response for the chapter-analysis
+// schema. It handles: fenced code blocks, leading prose, trailing prose, and
+// responses truncated by max_tokens (the last case is repaired by progressively
+// closing open strings/objects/arrays so partially-written reports still parse).
+func candidateChapterJSONs(raw string) []string {
+	s := strings.TrimSpace(raw)
+	// Strip markdown fences if present ("```json ... ```").
+	if i := strings.Index(s, "```"); i >= 0 {
+		rest := s[i+3:]
+		if j := strings.IndexByte(rest, '\n'); j >= 0 {
+			// drop language tag line
+			rest = rest[j+1:]
+		}
+		if k := strings.LastIndex(rest, "```"); k >= 0 {
+			s = strings.TrimSpace(rest[:k])
+		} else {
+			s = strings.TrimSpace(rest)
+		}
+	}
+	var out []string
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return out
+	}
+	// 1) Balanced extraction from the first '{' (scan respecting strings).
+	if end := matchBrace(s, start); end > 0 {
+		out = append(out, s[start:end+1])
+		// Also try any later top-level objects (models sometimes emit several).
+		for next := strings.IndexByte(s[end+1:], '{'); next >= 0; {
+			ns := end + 1 + next
+			if ne := matchBrace(s, ns); ne > 0 {
+				out = append(out, s[ns:ne+1])
+				end = ne
+			} else {
+				break
+			}
+			if next = strings.IndexByte(s[end+1:], '{'); next < 0 {
+				break
+			}
+		}
+	}
+	// 2) Truncated response salvage: progressively close open structures from
+	// the tail. Try trimming at the last complete array/object element first,
+	// then brute-force closers.
+	tail := s[start:]
+	if trimmed := trimToLastCompleteElement(tail); trimmed != "" {
+		out = append(out, trimmed)
+	}
+	out = append(out, repairTruncatedJSON(tail)...)
+	return out
+}
+
+// matchBrace returns the index of the '}' matching the '{' at pos, honoring
+// JSON string escapes, or -1 when unbalanced.
+func matchBrace(s string, pos int) int {
+	depth := 0
+	inStr := false
+	esc := false
+	for i := pos; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			switch c {
+			case '\\':
+				esc = true
+			case '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+			if depth < 0 {
+				return -1
+			}
+		}
+	}
+	return -1
+}
+
+// trimToLastCompleteElement cuts a truncated object at its last structurally
+// complete top-level key/value and closes it.
+func trimToLastCompleteElement(t string) string {
+	if len(t) < 2 || t[0] != '{' {
+		return ""
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	lastComma := -1
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' {
+				esc = true
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+		case ',':
+			if depth == 1 {
+				lastComma = i
+			}
+		}
+	}
+	if inStr || lastComma <= 0 {
+		return ""
+	}
+	return t[:lastComma] + "\n}"
+}
+
+// repairTruncatedJSON generates salvage variants of a truncated JSON object by
+// closing dangling strings/brackets in different ways. The caller tries each
+// with json.Unmarshal and keeps the first that decodes into a usable report.
+func repairTruncatedJSON(t string) []string {
+	var out []string
+	if len(t) < 2 || t[0] != '{' {
+		return out
+	}
+	// Count unclosed structures (ignoring those inside strings).
+	depth := map[byte]int{'{': 0, '[': 0}
+	inStr := false
+	esc := false
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' {
+				esc = true
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth['{']++
+		case '}':
+			if depth['{'] > 0 {
+				depth['{']--
+			}
+		case '[':
+			depth['[']++
+		case ']':
+			if depth['['] > 0 {
+				depth['[']--
+			}
+		}
+	}
+	base := t
+	if inStr {
+		base += `"`
+	}
+	closeSeq := func(extra string) string {
+		var sb strings.Builder
+		sb.WriteString(base)
+		sb.WriteString(extra)
+		// Close remaining brackets in reverse nesting order (best effort).
+		d := map[byte]int{'{': 0, '[': 0}
+		inStr2 := false
+		esc2 := false
+		stack := []byte{}
+		for i := 0; i < sb.Len(); i++ {
+			c := sb.String()[i]
+			if inStr2 {
+				if esc2 {
+					esc2 = false
+					continue
+				}
+				if c == '\\' {
+					esc2 = true
+				} else if c == '"' {
+					inStr2 = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inStr2 = true
+			case '{', '[':
+				stack = append(stack, c)
+			case '}':
+				if len(stack) > 0 && stack[len(stack)-1] == '{' {
+					stack = stack[:len(stack)-1]
+				}
+			case ']':
+				if len(stack) > 0 && stack[len(stack)-1] == '[' {
+					stack = stack[:len(stack)-1]
+				}
+			}
+		}
+		_ = d
+		for i := len(stack) - 1; i >= 0; i-- {
+			if stack[i] == '{' {
+				sb.WriteString("}")
+			} else {
+				sb.WriteString("]")
+			}
+		}
+		return sb.String()
+	}
+	// Trim trailing partial token (e.g. `"titl` -> cut at last comma-ish point)
+	// then close; and plain close.
+	out = append(out, closeSeq(""))
+	if idx := strings.LastIndexAny(base, ",:[{"); idx >= 0 {
+		switch base[idx] {
+		case ',', ':', '[', '{':
+			out = append(out, closeSeq(base[idx:idx+1]))
+		}
+		out = append(out, closeSeq(base[:idx]))
+	}
+	return out
+}
+
+// tropeUnitProseAt returns the exact prose of one trope unit of a written
+// scene, using the same segmentation path the surgical rewriter uses
+// (sceneParaSpans + TropeUnits/spiltTropesFromParas over the chapter's own
+// paragraph separator). Used to stamp CurrentText on proposals so the viewer
+// can highlight the targeted passage inline. Returns "" when the target is
+// stale or out of range.
+func tropeUnitProseAt(ch *ChapterState, scenePos, tropeIdx int) string {
+	if scenePos < 0 {
+		return ""
+	}
+	paras, _ := splitBlockParagraphs(ch.Content)
+	spans := sceneParaSpans(ch, paras)
+	if spans == nil {
+		// No usable scene plan (or degenerate budgets): fall back to the SAME
+		// break-delimited pseudo-scene tiling SyncChapterBlocks uses for the
+		// reader chips, so proposals still carry a CurrentText anchor and the
+		// sheet can highlight them.
+		spans = breakSceneSpans(paras)
+	}
+	if scenePos >= len(spans) {
+		return ""
+	}
+	sp := spans[scenePos]
+	lo, hi := sp[0], sp[1]
+	if hi <= lo || hi > len(paras) {
+		return ""
+	}
+	// Keep break markers OUT of the unit text but preserve their positions so
+	// recorded TropeUnit ParaStart/ParaEnd (indexed over the RAW slice) still
+	// line up — filtering first used to silently misalign every recorded span.
+	var sceneParas []string
+	for _, p := range paras[lo:hi] {
+		sceneParas = append(sceneParas, p)
+	}
+	sep := ch.BlockSep
+	if sep == "" {
+		sep = "\n\n"
+	}
+	var units []TropeUnit
+	if ch.ScenePlan != nil && scenePos < len(ch.ScenePlan.Scenes) {
+		units = ch.ScenePlan.Scenes[scenePos].TropeUnits
+	}
+	if len(units) > 0 {
+		stillTiles := true
+		maxEnd := 0
+		for _, u := range units {
+			if u.ParaStart < 0 || u.ParaEnd <= u.ParaStart || u.ParaEnd > len(sceneParas) {
+				stillTiles = false
+				break
+			}
+			if u.ParaEnd > maxEnd {
+				maxEnd = u.ParaEnd
+			}
+		}
+		if stillTiles && maxEnd == len(sceneParas) && tropeIdx >= 0 && tropeIdx < len(units) {
+			u := units[tropeIdx]
+			return strings.Join(tropeTextsOfSpans(sceneParas, [][2]int{{u.ParaStart, u.ParaEnd}}, sep), sep)
+		}
+	}
+	beats, _ := splitTropesFromParas(sceneParas, "", sep)
+	if tropeIdx >= 0 && tropeIdx < len(beats) {
+		return beats[tropeIdx]
+	}
+	return ""
 }
 
 // ProposeChapterInterventions turns one advice-only chapter point into
@@ -590,6 +1026,9 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 		loadDraftedChapterFilesInto(progressPath, state)
 		ch = &state.Chapters[idx]
 	}
+	// Plan-less chapters get a synthetic break-derived scene/trope tiling so
+	// proposal, apply and highlight all resolve the same (scene_pos, trope_index).
+	ensureFallbackScenePlan(ch)
 	targets := draftedTargetValidator(state, []int{ch.Num})
 	planBuf := strings.Builder{}
 	fmt.Fprintf(&planBuf, "%s", chapterTropeMapBlock(*ch, cfg.Language))
@@ -618,7 +1057,32 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 			merged = append(merged, old)
 		}
 	}
+	// Stamp each fresh intervention with the exact prose of its trope unit AT
+	// PROPOSAL TIME (CurrentText) plus a normalized Action, so the reader can
+	// highlight the targeted passage inline and the popup can show what a
+	// click will replace/delete before applying anything.
+	for i := range merged {
+		iv := &merged[i]
+		if iv.ChapterNum != ch.Num {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(iv.Action)) {
+		case "delete", "remove":
+			iv.Action = "delete"
+		case "insert", "add":
+			iv.Action = "insert"
+		default:
+			iv.Action = "rewrite"
+		}
+		if iv.CurrentText == "" {
+			iv.CurrentText = tropeUnitProseAt(ch, iv.ScenePos, iv.TropeIndex)
+		}
+		if iv.Quote != "" {
+			iv.Quote = draftTruncate(iv.Quote, 200)
+		}
+	}
 	rep.Suggestions[sIdx].Interventions = merged
+	refreshTropeIssuesForInterventions(state, merged)
 	out := rep.Suggestions[sIdx]
 	if err := SaveProgress(progressPath, state); err != nil {
 		return &out, nil // proposals in memory; persistence retried on next save
@@ -677,15 +1141,15 @@ func ApplyChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, cf
 // once all its chapters exist as drafted prose. Persisted on
 // Progress.ActAnalyses keyed by 1-based act number.
 type ActAnalysisReport struct {
-	GeneratedAt      string             `json:"generated_at"`
-	BasedOnStructure string             `json:"based_on_structure,omitempty"`
-	ActNo            int                `json:"act_no"`
-	ActName          string             `json:"act_name,omitempty"`
-	StartCh          int                `json:"start_ch,omitempty"`
-	EndCh            int                `json:"end_ch,omitempty"`
-	Summary          string             `json:"summary"`
-	OverallScore     int                `json:"overall_score,omitempty"`
-	PillarScores     []PillarAssessment `json:"pillar_scores,omitempty"`
+	GeneratedAt      string              `json:"generated_at"`
+	BasedOnStructure string              `json:"based_on_structure,omitempty"`
+	ActNo            int                 `json:"act_no"`
+	ActName          string              `json:"act_name,omitempty"`
+	StartCh          int                 `json:"start_ch,omitempty"`
+	EndCh            int                 `json:"end_ch,omitempty"`
+	Summary          string              `json:"summary"`
+	OverallScore     int                 `json:"overall_score,omitempty"`
+	PillarScores     []PillarAssessment  `json:"pillar_scores,omitempty"`
 	Suggestions      []DraftedSuggestion `json:"suggestions"`
 	// DraftFingerprint identifies the exact set of drafted chapters (numbers +
 	// per-chapter fingerprints) the scores above were computed from.
@@ -834,8 +1298,10 @@ Analyze against ALL parameters above, giving special weight to these four pillar
 Return STRICT JSON only (no markdown fences, no prose): %s
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
-- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the act is genuinely strong as-is. Most drafted acts land mid-range. The numeric examples in the JSON schema above are PLACEHOLDERS, not your answer — derive every score independently from THIS specific act; grading different acts must produce clearly different numbers wherever their quality differs.
+- Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the act is genuinely strong as-is. Most drafted acts land mid-range. Derive every score independently from THIS specific act: grade each pillar's checklist item (criteria_levels, 0–100) and let the pillar score be their average, so re-grading corrected material raises exactly the items that improved; grading different acts must produce clearly different numbers wherever their quality differs.
 - pillar_scores MUST contain exactly the four keys reader_profile, inspirational_pieces, tone, story_structure.
+- Each pillar_scores entry MUST include criteria_levels grading EVERY item of that pillar's checklist above ({"key":"...","level":0..100}) — the pillar score is derived from those levels, never guessed.
+- Every suggestion MUST declare its "pillar" (one of the four keys), the checklist "criteria" keys it repairs, and a realistic "score_impact" (points that pillar should gain once this point is fully applied).
 - Every pillar scoring below 90 MUST have at least one corresponding suggestion. A pillar scoring 90+ may have zero suggestions — then the UI shows "No changes needed" for it.
 
 Rules:
@@ -872,8 +1338,10 @@ Analiza contra TODOS los parámetros, dando peso especial a estos cuatro pilares
 Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s
 
 Estándar de nota (eres despiadado — tu reputación descansa en libros que llegan a #1 mundial):
-- Puntúa cada pilar 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el acto es genuinamente fuerte tal cual. La mayoría de actos borroneados caen en la franja media. Los ejemplos numéricos del esquema JSON de arriba son MARCADORES DE POSICIÓN, no tu respuesta: deriva cada puntuación de forma independiente de ESTE acto concreto; evaluar actos distintos debe producir números claramente distintos allí donde su calidad difiera.
+- Puntúa cada pilar 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa que el acto es genuinamente fuerte tal cual. La mayoría de actos borroneados caen en la franja media. Deriva cada puntuación de forma independiente de ESTE acto concreto: califica cada ítem de la lista del pilar (criteria_levels, 0–100) y deja que la puntuación del pilar sea su promedio, así recalificar material corregido sube exactamente los ítems mejorados; evaluar actos distintos debe producir números claramente distintos allí donde su calidad difiera.
 - pillar_scores DEBE contener exactamente las cuatro claves reader_profile, inspirational_pieces, tone, story_structure.
+- Cada entrada de pillar_scores DEBE incluir criteria_levels calificando CADA ítem de la lista de ese pilar ({"key":"...","level":0..100}) — la puntuación del pilar se deriva de esos niveles, nunca se adivina.
+- Cada sugerencia DEBE declarar su "pillar" (una de las cuatro claves), las claves "criteria" de la lista que repara, y un "score_impact" realista (puntos que ese pilar debería ganar al aplicar por completo este punto).
 - Todo pilar por debajo de 90 DEBE tener al menos una sugerencia correspondiente. Un pilar con 90+ puede no tener sugerencias — entonces la UI muestra "Sin cambios necesarios".
 
 Reglas:
@@ -1132,9 +1600,11 @@ func applyInterventionSet(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 		iv.Status = "applied"
 		applied++
 		// Refresh word count and persist the touched chapter immediately so a
-		// later failure does not lose earlier successful repairs.
+		// later failure does not lose earlier successful repairs. Also re-derive
+		// the trope-issue dots: an applied intervention no longer paints its unit.
 		ch := &state.Chapters[idx]
 		ch.WordCount = prose.CountProseUnits(ch.Content)
+		refreshTropeIssuesWithConflict(ch, state.PendingWritingConflict)
 		if serr := SaveProgress(progressPath, state); serr != nil {
 			return applied, serr
 		}
@@ -1237,11 +1707,119 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 	sort.Slice(rep.Suggestions[sIdx].AppliesToChapters, func(i, j int) bool {
 		return rep.Suggestions[sIdx].AppliesToChapters[i] < rep.Suggestions[sIdx].AppliesToChapters[j]
 	})
+	refreshTropeIssuesForInterventions(state, merged)
 	out := rep.Suggestions[sIdx]
 	if err := SaveProgress(progressPath, state); err != nil {
 		return &out, nil
 	}
 	return &out, nil
+}
+
+// ApplySingleChapterIntervention executes exactly ONE pending intervention of
+// one chapter suggestion (addressed by its index inside the suggestion's
+// intervention list). This is what the reader popup triggers when the author
+// clicks a highlighted passage: only that trope unit gets rewritten — the rest
+// of the suggestion stays pending and highlighted. Returns the touched chapter
+// number so callers can refresh the right view.
+func ApplySingleChapterIntervention(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, chapterNum int, suggestionID string, ivIndex int, progressPath string, logger *sse.LogBroadcaster) (int, error) {
+	idx := -1
+	for i := range state.Chapters {
+		if state.Chapters[i].Num == chapterNum {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return 0, fmt.Errorf("chapter_not_found")
+	}
+	ch := &state.Chapters[idx]
+	rep := ch.Analysis
+	if rep == nil {
+		return 0, fmt.Errorf("no_chapter_analysis")
+	}
+	sIdx := findDraftedSuggestion(rep.Suggestions, suggestionID)
+	if sIdx == -1 {
+		return 0, fmt.Errorf("suggestion_not_found")
+	}
+	ivs := rep.Suggestions[sIdx].Interventions
+	if ivIndex < 0 || ivIndex >= len(ivs) {
+		return 0, fmt.Errorf("intervention_not_found")
+	}
+	iv := &ivs[ivIndex]
+	if iv.Status != "pending" {
+		return 0, fmt.Errorf("intervention_not_pending")
+	}
+	if strings.TrimSpace(ch.Content) == "" {
+		loadDraftedChapterFilesInto(progressPath, state)
+		ch = &state.Chapters[idx]
+		ivs = rep.Suggestions[sIdx].Interventions
+		iv = &ivs[ivIndex]
+	}
+	targetIdx := -1
+	for j := range state.Chapters {
+		if state.Chapters[j].Num == iv.ChapterNum {
+			targetIdx = j
+			break
+		}
+	}
+	if targetIdx == -1 || state.Chapters[targetIdx].ScenePlan == nil {
+		iv.Status = "failed"
+		_ = SaveProgress(progressPath, state)
+		return 0, fmt.Errorf("intervention_target_missing")
+	}
+	if _, err := rewriteSceneTrope(ctx, apiCfg, cfg, state, targetIdx, settings, iv.ScenePos, iv.TropeIndex, iv.Feedback, logger); err != nil {
+		iv.Status = "failed"
+		_ = SaveProgress(progressPath, state)
+		logger.WarnKey("log.trope_intervention_failed", iv.ChapterNum, iv.ScenePos, iv.TropeIndex, err)
+		return 0, err
+	}
+	iv.Status = "applied"
+	tch := &state.Chapters[targetIdx]
+	tch.WordCount = prose.CountProseUnits(tch.Content)
+	refreshTropeIssuesWithConflict(tch, state.PendingWritingConflict)
+	allDone := true
+	for _, o := range ivs {
+		if o.Status == "pending" {
+			allDone = false
+		}
+	}
+	if allDone {
+		rep.Suggestions[sIdx].Status = "applied"
+		rep.Suggestions[sIdx].AppliedAt = time.Now().Format(time.RFC3339)
+	}
+	if err := SaveProgress(progressPath, state); err != nil {
+		return 0, err
+	}
+	logger.SuccessKey("log.trope_intervention_done", iv.ChapterNum, iv.ScenePos, iv.TropeIndex)
+	return iv.ChapterNum, nil
+}
+
+// DismissChapterIntervention marks one pending intervention as dismissed
+// WITHOUT touching the prose: the highlight disappears from the reader and
+// bulk application skips it.
+func DismissChapterIntervention(state *Progress, chapterNum int, suggestionID string, ivIndex int, progressPath string) error {
+	idx := FindChapterIdx(state, chapterNum)
+	if idx < 0 {
+		return fmt.Errorf("chapter_not_found")
+	}
+	rep := state.Chapters[idx].Analysis
+	if rep == nil {
+		return fmt.Errorf("no_chapter_analysis")
+	}
+	sIdx := findDraftedSuggestion(rep.Suggestions, suggestionID)
+	if sIdx == -1 {
+		return fmt.Errorf("suggestion_not_found")
+	}
+	ivs := rep.Suggestions[sIdx].Interventions
+	if ivIndex < 0 || ivIndex >= len(ivs) {
+		return fmt.Errorf("intervention_not_found")
+	}
+	if ivs[ivIndex].Status != "pending" {
+		return fmt.Errorf("intervention_not_pending")
+	}
+	ivs[ivIndex].Status = "dismissed"
+	refreshTropeIssuesForInterventions(state, ivs)
+	return SaveProgress(progressPath, state)
 }
 
 // ApplyActInterventions runs every pending intervention of one act suggestion

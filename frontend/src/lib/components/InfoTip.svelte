@@ -14,6 +14,10 @@
 
   export let text = '';       // tooltip content (the ~200-char explanation)
   export let label = 'Info';  // aria-label for the trigger button
+  // Optional: when a `trigger` slot is provided, it replaces the default "i"
+  // circle as the clickable popover trigger (e.g. the colored trope-issue dots
+  // in Writing.svelte). The popover behavior (fixed positioning, click-outside,
+  // Escape) is identical either way.
 
   let open = false;
   let root;
@@ -55,15 +59,26 @@
 
 {#if text}
   <span bind:this={root} class="relative inline-block leading-none align-middle">
-    <button
-      type="button"
-      class="info-tip-btn inline-flex items-center justify-center w-4 h-4 rounded-full border border-base-content/30 text-[10px] font-bold opacity-60 hover:opacity-100 hover:border-base-content/60 transition-colors cursor-help p-0 select-none"
-      class:info-tip-active={open}
-      on:click={toggle}
-      aria-expanded={open}
-      aria-label={label}
-      title={label}
-    >i</button>
+    {#if $$slots.trigger}
+      <button
+        type="button"
+        class="info-tip-trigger inline-flex items-center justify-center p-0 border-0 bg-transparent cursor-help select-none leading-none"
+        on:click={toggle}
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+      ><slot name="trigger" /></button>
+    {:else}
+      <button
+        type="button"
+        class="info-tip-btn inline-flex items-center justify-center w-4 h-4 rounded-full border border-base-content/30 text-[10px] font-bold opacity-60 hover:opacity-100 hover:border-base-content/60 transition-colors cursor-help p-0 select-none"
+        class:info-tip-active={open}
+        on:click={toggle}
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+      >i</button>
+    {/if}
   </span>
 {/if}
 

@@ -9,6 +9,8 @@ func chWith(content string) *ChapterState {
 }
 
 func TestSyncChapterBlocksStableIDs(t *testing.T) {
+	// 4 paragraphs < 2*tropeMinParagraphs: the trope-merge fallback stays off
+	// at this size and each paragraph remains its own block (classic split).
 	ch := chWith("段落一。\n\n“对话。”\n\n---\n\n段落二。")
 	if len(ch.Blocks) != 4 {
 		t.Fatalf("期望 4 个 block，得到 %d", len(ch.Blocks))

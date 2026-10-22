@@ -59,18 +59,27 @@ func AttachTaskTokens(ctx context.Context, usage *TaskTokenUsage) context.Contex
 	return context.WithValue(ctx, taskTokenCtxKey{}, usage)
 }
 
-// MaxTaskDuration is the hard wall-clock ceiling for a single background
-// generation task. Without it, a persistently failing or hanging API endpoint
-// could keep a task (and its retry loops) alive forever, saturating CPU,
-// connections and log channels — the root cause of machine freezes during
-// generation. Callers must invoke the returned cancel func when the task ends
-// normally so resources are released early.
+// MaxTaskDuration is the DEFAULT hard wall-clock ceiling for a single
+// background generation task. Without it, a persistently failing or hanging
+// API endpoint could keep a task (and its retry loops) alive forever,
+// saturating CPU, connections and log channels — the root cause of machine
+// freezes during generation. Callers must invoke the returned cancel func when
+// the task ends normally so resources are released early.
 const MaxTaskDuration = 30 * time.Minute
 
 // NewTaskContext builds the root context for a background generation task:
-// cancellable on demand (manual stop) and bounded by MaxTaskDuration.
-func NewTaskContext(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, MaxTaskDuration)
+// cancellable on demand (manual stop) and bounded by maxDuration. A
+// non-positive maxDuration means NO wall-clock ceiling — the task runs until
+// it completes or the user presses Stop. This is what the configurable
+// task_duration_minutes setting maps to: long chapter batches that include
+// several rewrite passes legitimately exceed 30 minutes, and previously the
+// deadline killed them mid-flight even though every individual LLM call was
+// healthy (per-call HTTP timeouts still apply either way).
+func NewTaskContext(parent context.Context, maxDuration time.Duration) (context.Context, context.CancelFunc) {
+	if maxDuration <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, maxDuration)
 }
 
 func TaskTokensFromContext(ctx context.Context) *TaskTokenUsage {

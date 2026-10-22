@@ -703,15 +703,45 @@ func rewriteSceneTrope(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 		return "", fmt.Errorf("scene span not found for beat rewrite")
 	}
 	sceneText := strings.Join(paras[spanLo:spanHi], sep)
-	beats, _ := splitTropes(sceneText)
-	if beatIdx < 0 || beatIdx >= len(beats) {
+	// Segment the scene over the SAME paragraph slice the splicer uses, with the
+	// chapter's own separator, so beat indices and ParaStart/ParaEnd ranges stay
+	// consistent with the block/trope bookkeeping (avoids confusing tropes with
+	// beats when the content mixes blank-line and single-newline separators).
+	var sceneParas []string
+	for _, p := range paras[spanLo:spanHi] {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		sceneParas = append(sceneParas, p)
+	}
+	if ch.BlockSep != "" {
+		sep = ch.BlockSep
+	}
+	beats, beatRanges := splitTropesFromParas(sceneParas, sceneText, sep)
+	if len(beats) == 0 {
+		return "", fmt.Errorf("scene has no prose beats to rewrite")
+	}
+	// Out-of-range indexes are clamped to the nearest real beat instead of
+	// silently rewriting beat 1 — an intervention that points past the end of
+	// the scene almost always means "the last unit".
+	if beatIdx < 0 {
 		beatIdx = 0
+	}
+	if beatIdx >= len(beats) {
+		beatIdx = len(beats) - 1
 	}
 	if logger != nil {
 		logger.InfoKey("log.trope_rewrite_start", ch.Num, sc.ID, beatIdx+1, len(beats))
 	}
 	userPrompt, systemPrompt := buildTropeRewritePrompt(cfg, state, idx, settings, sceneTitleOf(sc, cfg.Language), sceneText, beats, beatIdx, feedback, cfg.Language)
 	origWords := prose.CountProseUnits(sceneText)
+	// Length guard tiers: the strict band (±25%) accepts immediately; a relaxed
+	// band (±45%) is kept as best-effort fallback so one chatty LLM answer
+	// cannot make the whole intervention fail. The rewrite only replaces ONE
+	// beat, so ±15% on the WHOLE scene was far too tight and rejected valid
+	// surgical fixes whenever the fixed beat grew or shrank a little.
+	const strictLo, strictHi = 75, 125
+	bestScene, bestDev := "", int(^uint(0) >> 1)
 	for attempt := 0; attempt <= maxTropeRewriteRetries; attempt++ {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
@@ -730,25 +760,139 @@ func rewriteSceneTrope(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 			continue
 		}
 		nw := prose.CountProseUnits(newScene)
-		if origWords > 0 && (nw*100 < origWords*85 || nw*100 > origWords*115) {
-			if logger != nil {
-				logger.WarnKey("log.trope_rewrite_length_guard", ch.Num, sc.ID, nw, origWords)
-			}
-			continue
+		pct := 100
+		if origWords > 0 {
+			pct = nw * 100 / origWords
 		}
-		replaced := make([]string, 0, len(paras)-(spanHi-spanLo)+paragraphCount(newScene))
-		replaced = append(replaced, paras[:spanLo]...)
-		newParas, _ := paragraphUnits(newScene)
-		replaced = append(replaced, newParas...)
-		replaced = append(replaced, paras[spanHi:]...)
-		newContent = strings.Join(replaced, sep)
+		dev := pct - 100
+		if dev < 0 {
+			dev = -dev
+		}
+		inStrict := pct >= strictLo && pct <= strictHi
+		if !inStrict && logger != nil {
+			logger.WarnKey("log.trope_rewrite_length_guard", ch.Num, sc.ID, nw, origWords)
+		}
+		if origWords > 0 && (!inStrict || dev < bestDev) {
+			// Remember the closest-to-original attempt: if no retry lands inside
+			// the strict band we still apply the best-effort rewrite below.
+			if !inStrict || dev < bestDev {
+				bestDev = dev
+				bestScene = newScene
+			}
+			if !inStrict {
+				continue
+			}
+		}
+		newContent = spliceSceneIntoContent(paras, sep, spanLo, spanHi, newScene)
 		SyncChapterBlocksSceneAware(ch, newContent)
+		resegmentTouchedScene(ch, scenePos, beatRanges)
 		if logger != nil {
 			logger.SuccessKey("log.trope_rewrite_done", ch.Num, sc.ID, beatIdx+1, nw)
 		}
 		return newContent, nil
 	}
+	// Every attempt missed the strict band but produced usable prose: apply the
+	// closest-to-target-length rewrite as a best effort instead of failing the
+	// intervention outright (the author can always re-run it from the UI).
+	if strings.TrimSpace(bestScene) != "" {
+		newContent := spliceSceneIntoContent(paras, sep, spanLo, spanHi, bestScene)
+		SyncChapterBlocksSceneAware(ch, newContent)
+		resegmentTouchedScene(ch, scenePos, beatRanges)
+		if logger != nil {
+			logger.WarnKey("log.trope_rewrite_besteffort", ch.Num, sc.ID, beatIdx+1)
+			logger.SuccessKey("log.trope_rewrite_done", ch.Num, sc.ID, beatIdx+1, prose.CountProseUnits(bestScene))
+		}
+		return newContent, nil
+	}
 	return "", fmt.Errorf("beat rewrite failed after %d attempts", maxTropeRewriteRetries+1)
+}
+
+// spliceSceneIntoContent replaces paras[lo:hi] with the rewritten scene text,
+// keeping every other paragraph untouched and joining with sep.
+func spliceSceneIntoContent(paras []string, sep string, lo, hi int, newScene string) string {
+	newParas, _ := paragraphUnits(newScene)
+	replaced := make([]string, 0, len(paras)-(hi-lo)+len(newParas))
+	replaced = append(replaced, paras[:lo]...)
+	replaced = append(replaced, newParas...)
+	replaced = append(replaced, paras[hi:]...)
+	return strings.Join(replaced, sep)
+}
+
+// resegmentTouchedScene refreshes the trope segmentation (TropeUnits /
+// TropeRanges with scene-local ParaStart/ParaEnd) of one scene right after a
+// surgical beat rewrite. Without it the recorded units keep pointing at the
+// pre-rewrite paragraph layout: syncSceneBlocks then fails its tiling check,
+// silently falls back to paragraph blocks and the viewer loses the per-trope
+// visual grouping ("everything merged after a rewrite"). The ranges come from
+// the exact segmentation used to build the rewrite prompt, so unit indexes
+// stay aligned with what the critic saw.
+func resegmentTouchedScene(ch *ChapterState, scenePos int, ranges [][2]int) {
+	if ch.ScenePlan == nil || scenePos < 0 || scenePos >= len(ch.ScenePlan.Scenes) || len(ranges) == 0 {
+		return
+	}
+	sc := &ch.ScenePlan.Scenes[scenePos]
+	lo, hi := sc.ParaStart, sc.ParaEnd
+	paras, _ := splitBlockParagraphs(ch.Content)
+	if lo < 0 || hi > len(paras) || hi <= lo {
+		// Span bookkeeping is stale after the rewrite: re-derive it from the
+		// refreshed block ranges before segmenting.
+		refreshSceneBlockRanges(ch)
+		lo, hi = sc.BlockStart, sc.BlockEnd
+		if hi >= len(ch.Blocks) || lo < 0 {
+			return
+		}
+		var sceneParas []string
+		for bi := lo; bi <= hi && bi < len(ch.Blocks); bi++ {
+			for _, p := range strings.Split(ch.Blocks[bi].Text, "\n\n") {
+				if strings.TrimSpace(p) != "" {
+					sceneParas = append(sceneParas, p)
+				}
+			}
+		}
+		if len(sceneParas) == 0 {
+			return
+		}
+		_, fresh := splitTropesFromParas(sceneParas, "", ch.BlockSep)
+		if len(fresh) > 0 {
+			applyTropeSegmentation(sc, tropeTextsOfSpans(sceneParas, fresh, ch.BlockSep), fresh)
+		}
+		return
+	}
+	sceneParas := paras[lo:hi]
+	if len(ranges) > len(sceneParas) {
+		// The rewritten scene changed its paragraph count: re-segment live over
+		// the current slice so units tile exactly.
+		_, fresh := splitTropesFromParas(sceneParas, "", ch.BlockSep)
+		if len(fresh) > 0 {
+			applyTropeSegmentation(sc, tropeTextsOfSpans(sceneParas, fresh, ch.BlockSep), fresh)
+		}
+		return
+	}
+	beats := tropeTextsOfSpans(sceneParas, ranges, ch.BlockSep)
+	applyTropeSegmentation(sc, beats, ranges)
+	sc.ParaStart, sc.ParaEnd = lo, hi
+}
+
+// tropeTextsOfSpans joins the paragraphs covered by each [start,end) span.
+func tropeTextsOfSpans(paras []string, spans [][2]int, sep string) []string {
+	if sep == "" {
+		sep = "\n\n"
+	}
+	out := make([]string, 0, len(spans))
+	for _, sp := range spans {
+		lo, hi := sp[0], sp[1]
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(paras) {
+			hi = len(paras)
+		}
+		if lo >= hi {
+			continue
+		}
+		out = append(out, strings.Join(paras[lo:hi], sep))
+	}
+	return out
 }
 
 // sceneSpanFromBlocks resolves the paragraph span of scene pos from its
@@ -759,6 +903,14 @@ func sceneSpanFromBlocks(ch *ChapterState, scenePos int, paras []string) (int, i
 		return 0, len(paras)
 	}
 	sc := plan.Scenes[scenePos]
+	// Preferred source: the EXACT absolute paragraph span recorded by the
+	// sequential writer when the scene was accepted. Trusting it first keeps
+	// trope/beat bookkeeping aligned with the real text even when block ranges
+	// were derived with a different granularity (avoids confusing tropes with
+	// beats or scenes with adjacent ones).
+	if sc.ParaEnd > sc.ParaStart && sc.ParaEnd <= len(paras) {
+		return sc.ParaStart, sc.ParaEnd
+	}
 	if sc.BlockEnd > 0 && len(ch.Blocks) > 0 && sc.BlockEnd < len(ch.Blocks) {
 		lo := FindParaOffsetOfBlock(ch, sc.BlockStart)
 		hi := FindParaOffsetOfBlock(ch, sc.BlockEnd)

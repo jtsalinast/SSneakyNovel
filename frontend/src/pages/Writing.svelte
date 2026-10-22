@@ -159,25 +159,249 @@
   let blockFeedback = '';
   let insertAfterId = null;    // id of the block after which a new block is inserted (0 = start)
 
-  // —— Scene marker chips (trope-granular story blocks) ——————————————
-  // The backend tags every block with its owning scene (scene_pos /
-  // scene_title) and trope unit (trope_label / trope_index / trope_count).
-  // Between two consecutive blocks whose scene changes we render an almost
-  // invisible chip: very light grey background, near-transparent white text,
-  // not selectable. On hover it reveals an ⓘ icon (same popover style as the
-  // SmartSelect/SmartCombobox summary tips) describing the incoming scene.
-  function sceneMarkerBefore(blocks, i) {
-    if (!blocks || i <= 0 || i >= blocks.length) return null;
-    const prev = blocks[i - 1], cur = blocks[i];
-    const p = prev.scene_pos ?? -1, c = cur.scene_pos ?? -1;
-    if (c < 0 || p === c) return null; // no bookkeeping or same scene
-    return { pos: c + 1, title: cur.scene_title || '', label: cur.trope_label || '', idx: cur.trope_index || 0, count: cur.trope_count || 0 };
+  // —— Continuous-sheet editor (Word-like) ——————————————————————————
+  // The chapter is one always-editable prose surface instead of a stack of
+  // per-block cards. Between paragraphs we render almost-invisible chips at
+  // every scene boundary and every trope-unit boundary; chip text is styled
+  // `user-select:none` so double-clicking prose never selects it. Editing is
+  // local until the sticky "Save" button (rendered OUTSIDE the reader card)
+  // serializes the sheet to PUT /api/chapters/{num}/sheet, which re-syncs
+  // blocks/scenes/tropes on the server.
+  let sheetBlocks = [];        // live working copy: {id, text}
+  let sheetDirty = false;
+  let sheetSaving = false;
+  let sheetEl = null;          // contenteditable root
+  let sheetFocused = false;    // pointer inside the sheet → static Save
+  let saveBtnVisible = true;   // reader still in viewport?
+  let readerAbove = false;     // user scrolled PAST the top of the reader card
+
+  $: if (chapterBlocks !== lastChapterBlocksRef) {
+    lastChapterBlocksRef = chapterBlocks;
+    sheetBlocks = chapterBlocks.map(b => ({ id: b.id, text: b.text }));
+    sheetDirty = false;
   }
-  function sceneMarkerTip(m) {
+  let lastChapterBlocksRef = null;
+
+  $: if (saveBtnSentinel && typeof IntersectionObserver !== 'undefined') {
+    const io = new IntersectionObserver(([e]) => { saveBtnVisible = e.isIntersecting; }, { rootMargin: '0px 0px -8px 0px' });
+    io.observe(saveBtnSentinel);
+  }
+  let saveBtnSentinel = null;
+  // Track whether the ChapterReader card has been scrolled ABOVE the viewport:
+  // if so the Save button floats fixed at the bottom-right; once the card is
+  // back in view (or we reach its end) it settles into the normal flow again.
+  function setReaderCard(node) {
+    if (typeof IntersectionObserver === 'undefined') return {};
+    const io = new IntersectionObserver(([e]) => {
+      readerAbove = !e.isIntersecting && e.boundingClientRect.top < 0;
+    }, { threshold: 0 });
+    io.observe(node);
+    return { destroy() { io.disconnect(); } };
+  }
+
+  // Block bookkeeping for chips: scene/trope membership comes from the
+  // ORIGINAL chapterBlocks (keyed by id); paragraphs typed into the sheet
+  // that don't map to a known block simply carry no chip.
+  const blockMetaById = () => {
+    const m = new Map();
+    for (const b of chapterBlocks) m.set(b.id, b);
+    return m;
+  };
+
+  // Chip shown BEFORE block i: scene marker when the scene changes (including
+  // at i===0 — the first scene's chip was previously swallowed by an `i<=0`
+  // guard), trope marker when the same scene moves to its next trope unit.
+  // Legacy tolerance: blocks synced before `scene_has_meta` existed leave the
+  // field undefined; treat that as "has meta" instead of silently dropping
+  // every scene chip. Only an explicit `false` (plan-less fallback scenes with
+  // no real metadata) suppresses the chip.
+  function markerBefore(blocks, i, meta) {
+    if (!blocks || i >= blocks.length) return null;
+    const cur = meta.get(blocks[i].id);
+    if (!cur || cur.scene_pos == null || cur.scene_pos < 0) return null;
+    const prev = i > 0 ? meta.get(blocks[i - 1].id) : null;
+    const ps = prev && prev.scene_pos != null ? prev.scene_pos : -1;
+    if (ps !== cur.scene_pos) {
+      if (cur.scene_has_meta !== false) {
+        return { kind: 'scene', pos: cur.scene_pos + 1, title: cur.scene_title || '', desc: cur.scene_description || '', label: cur.trope_label || '', idx: cur.trope_index || 0, count: cur.trope_count || 0 };
+      }
+      return null;
+    }
+    // Trope chip: any change of trope index inside the same scene marks a new
+    // trope unit. The backend tiles units 1-based (trope_index = ui+1), so the
+    // previous block legitimately has a HIGHER index after a re-tile; requiring
+    // `ct > pt` used to swallow every chip but the first. Any difference
+    // (ct !== pt) is a boundary; one trope unit per scene needs no chip.
+    const pt = prev && prev.trope_index != null ? prev.trope_index : 0;
+    const ct = cur.trope_index != null ? cur.trope_index : 0;
+    if (ct !== pt && (cur.trope_count || 0) >= 1 && (prev?.trope_count ?? 1) >= 1) {
+      return { kind: 'trope', pos: cur.scene_pos + 1, label: cur.trope_label || '', idx: ct, count: cur.trope_count || 0 };
+    }
+    return null;
+  }
+  function markerTip(m) {
     if (!m) return '';
-    let s = $t('writing.blockSceneMarker', [m.pos]) + '\n\n' + (m.title || '');
-    if (m.label && m.count > 0) s += '\n' + $t('writing.blockTropeHint', [m.label, m.idx, m.count]);
-    return s.trim();
+    if (m.kind === 'scene') {
+      // Tooltip shows the scene-plan description of the incoming scene.
+      let s = $t('writing.blockSceneMarker', [m.pos]);
+      if (m.desc) s += '\n\n' + m.desc;
+      else if (m.title) s += '\n\n' + m.title;
+      return s.trim();
+    }
+    return $t('writing.blockTropeHint', [m.label, m.idx, m.count]);
+  }
+
+  // Serialize the contenteditable sheet back into {id,text} paragraphs.
+  // Each top-level child carries data-bid (chip rows keep the bid of the
+  // paragraph they precede; unmarked rows are user-created paragraphs given
+  // negative ids, which the server treats as inserts during its re-sync).
+  function serializeSheet() {
+    if (!sheetEl) return;
+    const out = [];
+    for (const el of sheetEl.children) {
+      const raw = el.getAttribute('data-bid');
+      const text = (el.innerText || '').replace(/\u00a0/g, ' ').replace(/\s+\n/g, '\n').trim();
+      if (!text) continue;
+      if (raw == null) { out.push({ id: -(out.length + 1), text }); continue; }
+      const id = Number(raw);
+      if (id < 0) continue; // chip row — not editable prose
+      const last = out[out.length - 1];
+      if (last && last.id === id) last.text += '\n\n' + text; // split block piece
+      else out.push({ id, text });
+    }
+    const changed = out.length !== sheetBlocks.length || out.some((b, i) => !sheetBlocks[i] || sheetBlocks[i].id !== b.id || sheetBlocks[i].text !== b.text);
+    if (changed) { sheetBlocks = out; sheetDirty = true; }
+  }
+
+  // Svelte action for the continuous sheet surface: keeps the caret sane while
+  // typing (we never re-render from state on input — the DOM is the source of
+  // truth until Save) and dismisses the floating selection menu when the user
+  // clicks elsewhere or collapses the selection.
+  function sheetEditable(node) {
+    const onDocMouseUp = (e) => { if (!node.contains(e.target)) hideSelMenu(); };
+    const onDocSelection = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) hideSelMenu();
+    };
+    const onKeyDown = (e) => {
+      // Ctrl/Cmd+S triggers the sticky Save button without leaving the page.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveSheet();
+      }
+    };
+    document.addEventListener('mouseup', onDocMouseUp);
+    document.addEventListener('selectionchange', onDocSelection);
+    node.addEventListener('keydown', onKeyDown);
+    return {
+      destroy() {
+        document.removeEventListener('mouseup', onDocMouseUp);
+        document.removeEventListener('selectionchange', onDocSelection);
+        node.removeEventListener('keydown', onKeyDown);
+      },
+    };
+  }
+
+  async function saveSheet(confirmed = false) {
+    if (!ch || !sheetDirty || sheetSaving) return;
+    serializeSheet();
+    if (!sheetBlocks.length) return;
+    try {
+      const full = await api('PUT', `/api/chapters/${ch.num}/sheet`, { blocks: sheetBlocks }, factHeaders(confirmed === true));
+      applyChapter(ch.num, full);
+      sheetDirty = false;
+      addToast($t('writing.sheet.saved'), 'success');
+    } catch (e) {
+      if (e.message && e.message.includes('fact_impact_confirm') && confirmed !== true) {
+        confirmAction($t('facts.confirm'), () => saveSheet(true));
+      } else {
+        addToast(e.message, 'error');
+      }
+    }
+  }
+
+  // —— Floating selection menu over the sheet ————————————————————————
+  // Replaces the old per-block toolbar: appears when the user selects text
+  // inside the sheet; actions target the block(s) containing the selection.
+  let selMenu = null; // {x,y,text,blockIds[]}
+  function checkSheetSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !sheetEl) { selMenu = null; return; }
+    const text = sel.toString().trim();
+    if (!text || text.length < 2) { selMenu = null; return; }
+    const range = sel.getRangeAt(0);
+    if (!sheetEl.contains(range.commonAncestorContainer)) { selMenu = null; return; }
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) { selMenu = null; return; }
+    // Find the block ids whose DOM rows intersect the selection.
+    const ids = [];
+    for (const el of sheetEl.querySelectorAll('[data-bid]')) {
+      const id = Number(el.getAttribute('data-bid'));
+      if (id < 0) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom >= rect.top && r.top <= rect.bottom) ids.push(id);
+    }
+    selMenu = { x: rect.left + rect.width / 2, y: rect.top, text, blockIds: [...new Set(ids)] };
+  }
+  function hideSelMenu() { selMenu = null; }
+  // Clicking anywhere inside the sheet that is NOT a critic highlight closes
+  // the IV popup; clicks on a <mark> bubble to its own openIVPopup handler.
+  function onSheetClick(e) {
+    if (!e.target.closest('.iv-mark')) hideIVPopup();
+  }
+  function selBlockId() { return selMenu?.blockIds?.length ? selMenu.blockIds[0] : null; }
+  function selFromSheet(action) {
+    if (!selMenu) return;
+    const id = selBlockId();
+    if (id == null) return;
+    const b = chapterBlocks.find(x => x.id === id);
+    if (!b) return;
+    hideSelMenu();
+    if (action === 'edit') startBlockEdit(b);
+    else if (action === 'revise') startBlockRevise(b);
+    else if (action === 'insertAfter') startBlockInsert(b.id);
+    else if (action === 'delete') deleteBlock(b);
+  }
+
+  // —— Trope-issue dots (fact-check red / bestseller-critic violet) ————
+  // ch.trope_issues is a per-(scene_pos, trope_index) roll-up rebuilt by the
+  // backend whenever the pending conflict or the critic analysis changes. Each
+  // story block knows its owning unit, so we paint small colored dots on the
+  // affected blocks; clicking one opens an InfoTip popover (same style as the
+  // SmartSelect/SmartCombobox summary tips) listing the exact issue wordings.
+  function tropeIssueTipText(g, kind) {
+    if (!g) return '';
+    const items = (kind === 'fact' ? g.fact : g.critic) || [];
+    const head = $t(kind === 'fact' ? 'writing.tropeDots.factTitle' : 'writing.tropeDots.criticTitle');
+    return head + '\n\n' + items.map((s, i) => (i + 1) + '. ' + s).join('\n');
+  }
+  // Red dot shown inside the "Scene N starts here" chip when the FIRST trope
+  // unit of that scene carries a fact-check finding — so the reader sees the
+  // problem at the scene boundary too, not only next to the paragraph block.
+  function firstUnitIssuesOfScene(pos) {
+    if (pos == null || !ch?.trope_issues?.length) return null;
+    let best = null;
+    for (const g of ch.trope_issues) {
+      if (g.scene_pos !== pos) continue;
+      if (!best || (g.trope_index ?? 0) < (best.trope_index ?? 0)) best = g;
+    }
+    return best;
+  }
+  // Trope-issue dots beside a story block. Backend roll-ups (trope_issues) are
+  // keyed by the intervention base: trope_index is an index INTO the scene's
+  // TropeUnits (0-based), while blocks expose TropeIndex 1-based (ui+1).
+  // Normalize the block meta to 0-based before matching; fall back to the raw
+  // value when a group does not exist under the normalized key (defensive for
+  // legacy data written with the old basis).
+  const tropeIssueKey = (b) => (b.scene_pos >= 0 && b.trope_index != null ? b.scene_pos + ':' + (b.trope_index - 1 >= 0 ? b.trope_index - 1 : b.trope_index) : null);
+  function tropeIssuesFor(b) {
+    const k = tropeIssueKey(b);
+    if (!k || !ch?.trope_issues?.length) return null;
+    const g = ch.trope_issues.find(x => (x.scene_pos + ':' + x.trope_index) === k);
+    if (g) return g;
+    // Legacy fallback: same lookup without the 0-based normalization.
+    const kRaw = b.scene_pos + ':' + b.trope_index;
+    return ch.trope_issues.find(x => (x.scene_pos + ':' + x.trope_index) === kRaw) || null;
   }
   let insertText = '';
 
@@ -254,6 +478,233 @@
       addToast($t('writing.block.reviseStarted'), 'info');
       cancelBlockOps();
     } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  // —— Pending bestseller-critic interventions (inline highlights) —————
+  // After the chapter critique runs, proposals are auto-drafted (backend) and
+  // arrive as TropeIntervention entries with status "pending". Each one is
+  // located inside the sheet by fuzzy-matching its current_text/quote against
+  // the live paragraph text; matches render as a violet <mark>. Clicking a
+  // mark opens a floating popup showing the passage to replace (or delete)
+  // and the intervention feedback, with Apply / Dismiss buttons wired to
+  // POST /api/chapters/{num}/analysis/intervention-apply|dismiss.
+  let pendingIVs = [];
+  // Bumped whenever the pending-intervention signature changes so the sheet
+  // re-renders its <mark> segments even when only the ANALYSIS changed while
+  // the block list reference stayed identical (Svelte would otherwise keep
+  // stale markup produced before the critic finished).
+  let ivRev = 0;
+  let lastIvSig = '';
+  $: {
+    const list = [];
+    for (const s of chapterAnalysis?.suggestions || []) {
+      (s.interventions || []).forEach((iv, k) => {
+        if (iv.status === 'pending' && iv.chapter_num === ch?.num) list.push({ ...iv, sid: s.id, key: s.id + ':' + k });
+      });
+    }
+    pendingIVs = list;
+    const sig = list.map(iv => [iv.scene_pos, iv.trope_index, normText(iv.current_text || ''), normText(iv.quote || '')].join('|')).join(';');
+    if (sig !== lastIvSig) { lastIvSig = sig; ivRev = ivRev + 1; }
+  }
+  // Debug aid: log why proposals may not be highlighting (missing report,
+  // wrong status/chapter, or empty anchors).
+  $: if (chapterAnalysis) {
+    const all = (chapterAnalysis.suggestions || []).flatMap(s => s.interventions || []);
+    console.info('[critic-iv]', {
+      suggestions: (chapterAnalysis.suggestions || []).length,
+      interventions: all.length,
+      pendingOnSheet: pendingIVs.length,
+      chNum: ch?.num,
+      sample: all.slice(0, 3).map(iv => ({ st: iv.status, cn: iv.chapter_num, sp: iv.scene_pos, ti: iv.trope_index, cur: (iv.current_text || '').slice(0, 40), q: (iv.quote || '') })),
+    });
+  }
+  let ivPopup = null; // {x,y,iv}
+  let applyingIV = false;
+
+  // Normalize for fuzzy matching: collapse whitespace, strip soft hyphens.
+  const normText = (s) => (s || '').replace(/\u00ad/g, '').replace(/\s+/g, ' ').trim();
+
+  // Find [start,end) offsets of `needle` inside `hay` with graceful degradation:
+  // exact → case-insensitive → first 8 words prefix match. Returns null if none.
+  function locateSpan(hay, needle) {
+    if (!hay || !needle) return null;
+    let i = hay.indexOf(needle);
+    if (i >= 0) return [i, i + needle.length];
+    const lh = hay.toLowerCase(), ln = needle.toLowerCase();
+    i = lh.indexOf(ln);
+    if (i >= 0) return [i, i + needle.length];
+    const words = needle.split(' ');
+    for (let w = Math.min(words.length, 8); w >= 3; w--) {
+      const pre = words.slice(0, w).join(' ');
+      i = lh.indexOf(pre.toLowerCase());
+      if (i >= 0) return [i, Math.min(hay.length, i + pre.length)];
+    }
+    // Last resort: the anchor's FIRST sentence alone — current_text spans a
+    // whole trope unit and is often truncated/reworded by the model.
+    const firstSent = ln.split(/(?<=[.!?\u2026])\s/)[0] || '';
+    if (firstSent.length >= 25) {
+      i = lh.indexOf(firstSent);
+      if (i >= 0) return [i, Math.min(hay.length, i + firstSent.length)];
+    }
+    return null;
+  }
+
+  // Split one sheet paragraph into plain/highlight segments for all pending IVs
+  // that target it. Later matches on already-highlighted ranges are skipped.
+  // NOTE on indexing bases: interventions carry trope_index as an index INTO
+  // Scene.TropeUnits (0-based, see buildTropeUnits / draftedTargetValidator),
+  // while story blocks expose TropeIndex 1-based (ui+1 in SyncChapterBlocks).
+  // Always normalize the block meta to 0-based before comparing with an IV.
+  function ivSegmentsFor(text, blockId) {
+    const n = normText(text);
+    if (!n || !pendingIVs.length) return null;
+    const meta = blockMetaById().get(blockId);
+    if (!meta || meta.scene_pos == null || meta.scene_pos < 0) return null;
+    const metaTrope0 = meta.trope_index != null ? meta.trope_index - 1 : null;
+    const marks = [];
+    const addMark = (sp) => {
+      if (!sp) return;
+      if (marks.some(m => sp[0] < m[1] && m[0] < sp[1])) return; // overlap
+      marks.push(sp);
+    };
+    const sceneHay = normText(sheetSceneProse(meta.scene_pos));
+    const chapHay = normText(chapterContent || '');
+    for (const iv of pendingIVs) {
+      if (iv.scene_pos !== meta.scene_pos) continue;
+      const sameUnit = iv.trope_index != null && metaTrope0 != null && meta.trope_count > 1 && metaTrope0 !== iv.trope_index;
+      if (sameUnit) continue;
+      const cand = [normText(iv.current_text), normText(iv.quote)].filter(x => x);
+      let hit = false;
+      // Tier 1: anchor lands inside THIS block's text (exact/ci/prefix match).
+      for (const c of cand) {
+        const sp = locateSpan(n, c);
+        if (sp) { addMark(sp); hit = true; break; }
+      }
+      if (hit) continue;
+      // Tier 2: anchor lives somewhere in this block's SCENE prose (positional
+      // proof via iv.scene_pos). Re-locate loosely against the block; if only
+      // the unit-level target matches, highlight the whole single-unit block.
+      for (const c of cand) {
+        if (sceneHay && locateSpan(sceneHay, c)) {
+          const pre = c.split(' ').slice(0, 6).join(' ');
+          const sp = locateSpan(n, pre) || locateSpan(n, (c.split(/(?<=[.!?\u2026])\s/)[0] || ''));
+          if (sp) { addMark(sp); hit = true; break; }
+          if (iv.trope_index == null || !meta.trope_count || meta.trope_count <= 1) { addMark([0, n.length]); hit = true; break; }
+        }
+      }
+      if (hit) continue;
+      // Tier 3: anchor exists somewhere in the chapter (stale scene_pos?) —
+      // mark this block's opening sentence so the suggestion stays reachable.
+      for (const c of cand) {
+        if (c && chapHay.includes(c)) {
+          const sent = n.split(/(?<=[.!?\u2026])\s/)[0] || '';
+          if (sent.length >= 20) addMark([0, Math.min(n.length, sent.length)]);
+          else addMark([0, n.length]);
+          hit = true;
+          break;
+        }
+      }
+    }
+    if (!marks.length) return null;
+    marks.sort((a, b) => a[0] - b[0]);
+    // Map normalized offsets back onto the raw text via proportional scan of
+    // collapsed-whitespace boundaries (good enough for display splitting).
+    const segs = [];
+    let last = 0, nh = 0;
+    const raw = text;
+    const advance = (to) => { // move nh forward until reaching offset `to`, return raw index
+      let ri = last;
+      while (nh < to && ri < raw.length) {
+        const ch = raw[ri];
+        if (/\s/.test(ch)) {
+          let rj = ri; while (rj < raw.length && /\s/.test(raw[rj])) rj++;
+          nh += 1; ri = rj;
+        } else { nh += 1; ri += 1; }
+      }
+      return ri;
+    };
+    for (const [a, b] of marks) {
+      const rs = advance(a);
+      const re = advance(b);
+      if (rs > last) segs.push({ t: raw.slice(last, rs) });
+      segs.push({ t: raw.slice(rs, re), iv: true });
+      last = re;
+    }
+    if (last < raw.length) segs.push({ t: raw.slice(last) });
+    return segs;
+  }
+
+  // Concatenated prose of one scene straight from the blocks (no server call
+  // needed): used as the tier-2 haystack for intervention matching.
+  function sheetSceneProse(pos) {
+    return chapterBlocks.filter(b => b.scene_pos === pos).map(b => b.text).join('\n\n');
+  }
+
+  function openIVPopup(e, iv) {
+    e.preventDefault(); e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    ivPopup = { x: rect.left + rect.width / 2, y: rect.top, iv };
+  }
+  function hideIVPopup() { ivPopup = null; }
+
+  async function applyPendingIV(confirmed = false) {
+    if (!ivPopup || !ch || applyingIV) return;
+    const iv = ivPopup.iv;
+    applyingIV = true;
+    try {
+      const res = await api('POST', `/api/chapters/${ch.num}/analysis/intervention-apply`, { id: iv.sid, iv: pendingIvIndex(iv) }, factHeaders(confirmed === true));
+      if (res.chapter) applyChapter(ch.num, res.chapter);
+      hideIVPopup();
+      addToast($t('writing.iv.applied'), 'success');
+    } catch (e) {
+      if (String(e.message || '').includes('fact_impact_confirm') && confirmed !== true) {
+        confirmAction($t('facts.confirmAI'), () => applyPendingIV(true));
+      } else {
+        addToast(e.message, 'error');
+      }
+    } finally { applyingIV = false; }
+  }
+  async function dismissPendingIV() {
+    if (!ivPopup || !ch) return;
+    const iv = ivPopup.iv;
+    try {
+      await api('POST', `/api/chapters/${ch.num}/analysis/intervention-dismiss`, { id: iv.sid, iv: pendingIvIndex(iv) });
+      hideIVPopup();
+      addToast($t('writing.iv.dismissed'), 'info');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+  function pendingIvIndex(iv) {
+    const s = (chapterAnalysis?.suggestions || []).find(x => x.id === iv.sid);
+    if (!s) return 0;
+    const list = s.interventions || [];
+    let i = list.findIndex(x => x.key === iv.key);
+    if (i < 0) i = list.findIndex(x => x.scene_pos === iv.scene_pos && x.trope_index === iv.trope_index);
+    return Math.max(i, 0);
+  }
+
+  // The <mark> segments only carry their visible text, so on click we recover
+  // the intervention whose current_text/quote fuzzy-matches the highlighted
+  // fragment inside this block.
+  function findIvForSegment(segText) {
+    const n = normText(segText);
+    if (!n) return null;
+    for (const iv of pendingIVs) {
+      const cand = [normText(iv.current_text), normText(iv.quote)].filter(Boolean);
+      if (cand.some(c => c === n || c.startsWith(n) || n.startsWith(c))) return iv;
+    }
+    return pendingIVs[0] || null;
+  }
+
+  // Popup header describing what the intervention will do to the passage.
+  function ivActionLabelHtml(iv) {
+    if (!iv) return '';
+    const action = String(iv.action || '').toLowerCase();
+    let key = 'writing.iv.actionRewrite';
+    if (action.includes('delete') || action.includes('remove') || action.includes('cut')) key = 'writing.iv.actionDelete';
+    else if (action.includes('insert') || action.includes('add')) key = 'writing.iv.actionInsert';
+    const label = $t(key);
+    const repl = (iv.replacement || iv.proposed_text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    return '<b>' + label + '</b>' + (repl ? '<div class="mt-1 italic">“' + repl + '”</div>' : '');
   }
 
   // During streaming $streamingContent only holds the tail window (perf guard); full text is fetched after generation ends
@@ -371,6 +822,13 @@
     if (!text || text.length < 2) { quotePopover = null; return; }
     const range = sel.getRangeAt(0);
     if (!contentEl || !contentEl.contains(range.commonAncestorContainer)) {
+      quotePopover = null; return;
+    }
+    // The continuous sheet has its OWN floating menu (edit/revise/insert/
+    // delete). Suppress the legacy single-button quote popover there so both
+    // never fight over the same selection. Use the bound reference (sheetEl)
+    // instead of getElementById so it keeps working even if the id changes.
+    if (sheetEl && sheetEl.contains(range.commonAncestorContainer)) {
       quotePopover = null; return;
     }
     const rect = range.getBoundingClientRect();
@@ -653,6 +1111,27 @@
               </ul>
             </div>
           {/if}
+          {#if writingConflict.last_failure}
+            {@const lf = writingConflict.last_failure}
+            <div class="alert alert-warning text-xs py-2">
+              <div>
+                <div class="font-semibold">
+                  {$t('writing.conflict.lastFailure', { 0: $t(`writing.conflict.failureStage.${lf.stage}` || 'writing.conflict.failureStage.revise') })}
+                </div>
+                <div>{lf.reason}</div>
+                <div class="opacity-70 mt-0.5">{$t('writing.conflict.retryAlways')}</div>
+              </div>
+            </div>
+          {/if}
+          {#if (writingConflict.revise_attempts || 0) + (writingConflict.surgical_attempts || 0) > 0}
+            {@const st = writingConflict.last_surgical_target}
+            <div class="text-[11px] opacity-60">
+              {$t('writing.conflict.attempts', { 0: writingConflict.revise_attempts || 0, 1: writingConflict.surgical_attempts || 0 })}
+              {#if (writingConflict.surgical_attempts || 0) > 0 && st && st.length === 2 && st[0] >= 0}
+                <span class="ml-1">{$t('writing.conflict.lastSurgicalTarget', { 0: st[0] + 1, 1: st[1] + 1 })}</span>
+              {/if}
+            </div>
+          {/if}
           <div class="flex flex-wrap gap-2">
             {#each (writingConflict.suggested_actions || []) as action}
               {#if action.id === 'surgical_trope'}
@@ -798,7 +1277,7 @@
       <!-- Content area -->
       <div id="ChapterContentArea" class="min-w-0 w-full">
         {#if ch}
-          <div id="CardSection_ChapterReader" class="card bg-base-200">
+          <div id="CardSection_ChapterReader" class="card bg-base-200" use:setReaderCard>
             <div class="card-body p-4 gap-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch.num, title: ch.title })}</h2>
@@ -842,19 +1321,42 @@
                     {displayContent}
                     <span class="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-0.5 align-text-bottom"></span>
                   {:else if chapterBlocks.length > 0}
-                    <div class="space-y-3">
-                      {#each chapterBlocks as b, bi (b.id)}
-                        {#if sceneMarkerBefore(chapterBlocks, bi)}
-                          {@const m = sceneMarkerBefore(chapterBlocks, bi)}
-                          <div class="scene-marker-row flex justify-center -my-1" aria-hidden="true">
-                            <span class="scene-marker-chip group inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 select-none pointer-events-auto cursor-default">
-                              <span class="scene-marker-text text-[10px] font-semibold text-primary/90 tracking-wider uppercase select-none">{$t('writing.blockSceneMarker', [m.pos])}</span>
-                              <span class="opacity-60 group-hover:opacity-100 transition-opacity"><InfoTip text={sceneMarkerTip(m)} label={$t('writing.blockSceneMarker', [m.pos])} /></span>
+                    {@const sheetMeta = blockMetaById()}
+                    <!-- Continuous Word-like sheet: one always-editable surface;
+                         scene/trope chips sit between paragraphs and are NOT
+                         text-selectable (user-select:none + contenteditable=false). -->
+                    <div id="ChapterSheetEditor" class="space-y-1" bind:this={sheetEl}
+                         use:sheetEditable
+                         contenteditable={!$taskRunning && editingBlockId == null ? 'true' : 'false'}
+                         spellcheck="false"
+                         on:input={() => { serializeSheet(); }}
+                         on:keyup={checkSheetSelection}
+                         on:mouseup={checkSheetSelection}
+                         on:focusin={() => { sheetFocused = true; }}
+                         on:focusout={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { sheetFocused = false; hideSelMenu(); } }}
+    on:click={onSheetClick}
+                         on:scroll={hideSelMenu}>
+                      {#each chapterBlocks as b, bi (b.id + ':' + ivRev)}
+                        {#if markerBefore(chapterBlocks, bi, sheetMeta)}
+                          {@const m = markerBefore(chapterBlocks, bi, sheetMeta)}
+                          {@const smi = m.kind === 'scene' ? firstUnitIssuesOfScene(m.pos - 1) : null}
+                          <div class="sheet-chip-row flex justify-center py-0.5" data-bid={-bi - 1}>
+                            <span class="group inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope {m.kind === 'scene' ? 'bg-primary/10 border border-primary/20' : 'bg-secondary/10 border border-secondary/20'} cursor-default select-none" contenteditable="false">
+                              <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase {m.kind === 'scene' ? 'text-primary/70' : 'text-secondary/70'} select-none">
+                                {#if m.kind === 'scene'}{$t('writing.blockSceneMarker', [m.pos])}{:else}{$t('writing.tropeMarkerChip', [m.label || ('#' + m.idx), m.idx, m.count])}{/if}
+                              </span>
+                              {#if smi?.fact?.length}
+                                <InfoTip text={tropeIssueTipText(smi, 'fact')} label={$t('writing.tropeDots.factTitle')}>
+                                  <span slot="trigger" class="trope-dot trope-dot-fact" role="button" tabindex="-1" aria-label={$t('writing.tropeDots.factTitle')}></span>
+                                </InfoTip>
+                              {/if}
+                              <span class="opacity-40 group-hover:opacity-100 transition-opacity"><InfoTip text={markerTip(m)} label={m.kind === 'scene' ? $t('writing.blockSceneMarker', [m.pos]) : $t('writing.blockTropeHint', [m.label, m.idx, m.count])} /></span>
                             </span>
                           </div>
                         {/if}
-                        <div id={'story-block-' + b.id} class="relative rounded -mx-2 px-2 py-1 cursor-pointer transition-colors hover:bg-base-100/40 {highlightedBlock === b.id || activeFact?.references?.some(r => !r.stale && r.chapter === ch.num && r.block_id === b.id) ? 'story-block-highlight' : selectedBlockId === b.id ? 'story-block-selected' : ''}" role="button" tabindex="0" aria-pressed={selectedBlockId===b.id} on:click={() => selectBlock(b.id)} on:keydown={(e) => { if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectBlock(b.id); } }}>
-                          {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-2">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation={() => { activeFact = fact; highlightedBlock = b.id; knowledgeExpanded = true; }}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
+                        <div id={'story-block-' + b.id} class="sheet-para relative rounded -mx-2 px-2 py-1 leading-relaxed whitespace-pre-wrap {highlightedBlock === b.id || activeFact?.references?.some(r => !r.stale && r.chapter === ch.num && r.block_id === b.id) ? 'story-block-highlight' : selectedBlockId === b.id ? 'story-block-selected' : ''}"
+                             data-bid={b.id}
+                             contenteditable={editingBlockId === b.id ? 'false' : 'true'}>
                           {#if editingBlockId === b.id}
                             <textarea class="textarea textarea-sm w-full text-[15px] leading-relaxed" rows={Math.max(3, Math.ceil(b.text.length / 40))} bind:value={editingText} disabled={$taskRunning}></textarea>
                             <div class="flex gap-2 justify-end mt-1">
@@ -862,11 +1364,26 @@
                               <button class="btn btn-primary btn-xs" on:click={saveBlockEdit} disabled={$taskRunning || !editingText.trim()}>{$t('common.save')}</button>
                             </div>
                           {:else}
-                            <div class="whitespace-pre-wrap {b.type === 'scene_break' ? 'text-center text-base-content/65' : ''}">{b.text}</div>
-                            {#if selectedBlockId === b.id}<div class="absolute right-1 top-1 flex gap-1 bg-base-200 border border-base-content/20 rounded px-1 py-0.5"><button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => startBlockEdit(b)}>{$t('writing.block.edit')}</button><button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => startBlockRevise(b)}>{$t('writing.block.revise')}</button><button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => startBlockInsert(b.id)}>{$t('writing.block.insertAfter')}</button><button class="btn btn-error btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => deleteBlock(b)}>{$t('writing.block.delete')}</button></div>{/if}
+                            {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-1" contenteditable="false">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation={() => { activeFact = fact; highlightedBlock = b.id; knowledgeExpanded = true; }}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
+                            <span class="whitespace-pre-wrap">{#if ivSegmentsFor(b.text, b.id)}{#each ivSegmentsFor(b.text, b.id) as seg, si (si)}{#if seg.iv}<span class="iv-mark" contenteditable="false" role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation={(e) => openIVPopup(e, findIvForSegment(seg.t))} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, findIvForSegment(seg.t)); } }}>{seg.t}</span>{:else}{seg.t}{/if}{/each}{:else}{b.text}{/if}</span>
+                            {#if tropeIssuesFor(b)}
+                              {@const ti = tropeIssuesFor(b)}
+                              <span class="inline-flex items-center gap-1 align-top ml-1" contenteditable="false">
+                                {#if ti.fact?.length}
+                                  <InfoTip text={tropeIssueTipText(ti, 'fact')} label={$t('writing.tropeDots.factTitle')}>
+                                    <span slot="trigger" class="trope-dot trope-dot-fact" aria-label={$t('writing.tropeDots.factTitle')}></span>
+                                  </InfoTip>
+                                {/if}
+                                {#if ti.critic?.length}
+                                  <InfoTip text={tropeIssueTipText(ti, 'critic')} label={$t('writing.tropeDots.criticTitle')}>
+                                    <span slot="trigger" class="trope-dot trope-dot-critic" aria-label={$t('writing.tropeDots.criticTitle')}></span>
+                                  </InfoTip>
+                                {/if}
+                              </span>
+                            {/if}
                           {/if}
                           {#if revisingBlockId === b.id}
-                            <div class="bg-base-100 rounded p-2 mt-1 space-y-1">
+                            <div class="bg-base-100 rounded p-2 mt-1 space-y-1" contenteditable="false">
                               <textarea class="textarea textarea-sm w-full text-sm" bind:value={blockFeedback} placeholder={$t('writing.block.revisePlaceholder')} disabled={$taskRunning}></textarea>
                               <div class="flex gap-2 justify-end">
                                 <button class="btn btn-ghost btn-xs" on:click={cancelBlockOps}>{$t('common.cancel')}</button>
@@ -875,7 +1392,7 @@
                             </div>
                           {/if}
                           {#if insertAfterId === b.id}
-                            <div class="bg-base-100 rounded p-2 mt-1 space-y-1">
+                            <div class="bg-base-100 rounded p-2 mt-1 space-y-1" contenteditable="false">
                               <textarea class="textarea textarea-sm w-full text-sm" bind:value={insertText} placeholder={$t('writing.block.insertPlaceholder')} disabled={$taskRunning}></textarea>
                               <div class="flex gap-2 justify-end">
                                 <button class="btn btn-ghost btn-xs" on:click={cancelBlockOps}>{$t('common.cancel')}</button>
@@ -898,6 +1415,34 @@
                     title={$t('writing.revise.quoteBtn.tip')}>
                     {$t('writing.revise.quoteBtn')}
                   </button>
+                {/if}
+                {#if selMenu && editingBlockId == null}
+                  <div class="fixed z-50 flex gap-1 bg-base-200 border border-base-content/20 rounded-lg px-1.5 py-1 shadow-lg"
+                       style="left: {selMenu.x}px; top: {selMenu.y}px; transform: translate(-50%, -100%); margin-top: -6px;">
+                    <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('edit')}>{$t('writing.block.edit')}</button>
+                    <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('revise')}>{$t('writing.block.revise')}</button>
+                    <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('insertAfter')}>{$t('writing.block.insertAfter')}</button>
+                    <button class="btn btn-error btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('delete')}>{$t('writing.block.delete')}</button>
+                  </div>
+                {/if}
+                {#if ivPopup}
+                  <div class="fixed z-50 w-80 max-w-[90vw] bg-base-200 border border-secondary/40 rounded-lg p-3 shadow-xl space-y-2"
+                       style="left: {Math.min(ivPopup.x, (typeof window !== 'undefined' ? window.innerWidth - 170 : ivPopup.x))}px; top: {ivPopup.y}px; transform: translate(-50%, -100%); margin-top: -8px;">
+                    <div class="text-xs font-semibold text-secondary/90">{$t('writing.iv.popupTitle')}</div>
+                    <div class="text-[11px] opacity-70">{@html ivActionLabelHtml(ivPopup.iv)}</div>
+                    {#if ivPopup.iv.current_text}
+                      <div class="bg-base-100 rounded p-2 text-xs whitespace-pre-wrap line-clamp-6 opacity-80">{ivPopup.iv.current_text}</div>
+                    {:else}
+                      <div class="text-xs italic opacity-60">{$t('writing.iv.stale')}</div>
+                    {/if}
+                    {#if ivPopup.iv.feedback}
+                      <div class="text-xs leading-snug whitespace-pre-wrap">{ivPopup.iv.feedback}</div>
+                    {/if}
+                    <div class="flex gap-2 justify-end">
+                      <button class="btn btn-ghost btn-xs" on:click={dismissPendingIV} disabled={$taskRunning}>{$t('writing.iv.dismiss')}</button>
+                      <button class="btn btn-secondary btn-xs" on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
+                    </div>
+                  </div>
                 {/if}
               {:else if ch.status === 'pending'}
                 <div class="bg-base-100 rounded-lg p-6 text-center text-sm text-base-content/65">
@@ -1000,6 +1545,25 @@
               {/if}
             </div>
           </div>
+
+          <!-- Sticky sheet Save button — rendered OUTSIDE CardSection_ChapterReader.
+               Behavior: while the reader is in view it sits at the bottom of the
+               card flow (normal position via sticky offset); when the user scrolls
+               past the top of the reader it disappears; when they reach the end of
+               the reader area it settles back into its normal inline position.
+               It only appears when there are unsaved edits on the sheet. -->
+          <div bind:this={saveBtnSentinel} class="h-0"></div>
+          {#if ch && chapterBlocks.length > 0 && !isStreamingThis && (sheetDirty || sheetFocused || readerAbove)}
+            <div class="save-sheet-bar z-40 flex justify-end px-2 py-1.5 {readerAbove ? 'fixed right-4 bottom-4 shadow-xl rounded-full' : 'sticky bottom-3'}">
+              <button class="btn btn-primary btn-sm shadow-lg"
+                      title={sheetDirty ? $t('writing.sheet.dirtyTip') : ''}
+                      disabled={!sheetDirty || sheetSaving || $taskRunning}
+                      on:click={() => saveSheet()}>
+                {#if sheetSaving}<span class="loading loading-spinner loading-xs"></span>{/if}
+                {$t(sheetSaving ? 'writing.sheet.saving' : 'writing.sheet.save')}
+              </button>
+            </div>
+          {/if}
         {:else}
           <div class="text-center py-16 text-base-content/65 text-base">{$t('writing.emptySelection')}</div>
         {/if}
@@ -1009,3 +1573,74 @@
 
   <ScenePlanEditor bind:open={showScenePlan} chapterNum={scenePlanChapter ?? ch?.num ?? scenePlanPendingNum} />
 {/if}
+
+<style>
+  /* Trope-issue dots — small colored markers painted on story blocks (and on
+     the "Scene N starts here" chip) when the fact-check and/or the bestseller
+     critic found something to repair in that trope unit. They are rendered as
+     the `trigger` slot of InfoTip, so clicking one opens the same fixed-
+     position popover style used by the SmartSelect/SmartCombobox summary tips,
+     listing the exact issue wordings for that unit. */
+  .trope-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 9999px;
+    cursor: help;
+    flex-shrink: 0;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+  .trope-dot:hover {
+    transform: scale(1.35);
+  }
+  .trope-dot-fact {
+    background: var(--fallback-error, oklch(var(--error)));
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--fallback-er, oklch(var(--er))) 25%, transparent);
+  }
+  .trope-dot-critic {
+    background: var(--fallback-secondary, oklch(var(--secondary)));
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--fallback-sc, oklch(var(--sc))) 25%, transparent);
+  }
+
+  /* —— Continuous sheet (Word-like) styles ——————————————— */
+  /* Chips between scenes/tropes are almost imperceptible until hovered and
+     can never be captured by text selection (request 7). */
+  .sheet-chip-row {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .chip-scene-or-trope {
+    opacity: 0.35;
+    transition: opacity 0.15s ease;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .chip-scene-or-trope:hover { opacity: 1; }
+  .sheet-chip-text {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #ChapterSheetEditor :global(.iv-mark) {
+    background: color-mix(in oklab, var(--fallback-secondary, oklch(var(--secondary))) 22%, transparent);
+    border-bottom: 1.5px dashed var(--fallback-secondary, oklch(var(--secondary)));
+    color: inherit;
+    padding: 0 1px;
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  #ChapterSheetEditor :global(.iv-mark:hover) {
+    background: color-mix(in oklab, var(--fallback-secondary, oklch(var(--secondary))) 38%, transparent);
+  }
+    .save-sheet-bar.sticky {
+    bottom: 0.75rem;
+  }
+  /* The continuous sheet must never show a focus ring — it is always editable. */
+  #ChapterSheetEditor,
+  #ChapterSheetEditor:focus,
+  #ChapterSheetEditor:focus-visible,
+  #ChapterSheetEditor [data-bid]:focus,
+  #ChapterSheetEditor [data-bid]:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+</style>

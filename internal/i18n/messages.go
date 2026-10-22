@@ -132,6 +132,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_analyze_cancelled": {
 
 		LangEN: "Chapter analysis cancelled"},
+	"log.chapter_analyze_bad_json_retry": {
+
+		LangEN: "Chapter %d: editor reply was not valid JSON (attempt %d) — asking the model again"},
 	"log.chapter_analyze_failed": {
 
 		LangEN: "Chapter analysis failed: %v"},
@@ -141,6 +144,11 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_analyze_proposing": {
 
 		LangEN: "Editor is drafting small trope interventions for this chapter point..."},
+	"log.chapter_analyze_auto_proposal": {
+
+		LangEN: "Editor is auto-drafting concrete trope interventions for chapter point \"%s\"..."},
+	"log.chapter_analyze_auto_propose_failed": {
+		LangEN: "Auto-proposal of trope interventions failed for chapter %d (point %s) — the author can still propose them manually"},
 	"log.chapter_analyze_proposed": {
 
 		LangEN: "Proposals ready — %d trope intervention(s) drafted"},
@@ -305,6 +313,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.trope_rewrite_start": {
 
 		LangEN: "[Fact-check] Chapter %d: repairing scene %d, trope unit %d/%d only (rest of scene kept verbatim)..."},
+	"log.trope_rewrite_besteffort": {
+
+		LangEN: "[Fact-check] Trope rewrite for scene %d (chapter %d, unit %d) drifted from the target length — applying the closest attempt as best effort instead of failing"},
 	"log.trope_rewrite_length_guard": {
 
 		LangEN: "[Fact-check] Trope rewrite for scene %d (chapter %d) changed length too much (%d vs %d words) — retrying"},
@@ -580,6 +591,12 @@ var messageCatalog = map[string]map[string]string{
 	"log.conflict_analyze_failed": {
 
 		LangEN: "Conflict analysis failed: %v — keeping current version"},
+	"log.conflict_failure_recorded": {
+
+		LangEN: "[Repair failure] Stage: %s — reason: %s. The conflict panel keeps Retry / Rewrite available; your draft was not lost."},
+	"log.conflict_failure_dropped": {
+
+		LangEN: "[Repair failure] Stage: %s — reason: %s (no chapter mid-writing to attach the note to)"},
 	"log.conflict_retry": {
 
 		LangEN: "Resolvable conflict detected — final attempt with extra constraints..."},

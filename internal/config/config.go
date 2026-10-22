@@ -17,7 +17,8 @@ type APIConfig struct {
 	Model               string `json:"model"`
 	MaxTokens           int    `json:"max_tokens,omitempty"` // 0 = model default; new configs default to 32768; Agent calls recommend >= 8192
 	HTTPTimeoutSeconds  int    `json:"http_timeout_seconds"`
-	ContextBudgetTokens int    `json:"context_budget_tokens"` // model context budget, default 300000
+	ContextBudgetTokens int    `json:"context_budget_tokens"`      // model context budget, default 300000
+	TaskDurationMinutes int    `json:"task_duration_minutes,omitempty"` // per-task wall-clock ceiling in minutes; 0/unset = llm.MaxTaskDuration default (30); NEGATIVE = no ceiling (task runs until it finishes or the user presses Stop). Long chapter batches with several rewrite passes legitimately exceed 30 min — the old hard deadline aborted them mid-flight.
 }
 
 type Config struct {
