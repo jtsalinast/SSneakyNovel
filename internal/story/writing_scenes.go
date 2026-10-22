@@ -116,19 +116,37 @@ func scenePlanChecklistBlock(plan *ScenePlan, lang string, chapterTargetTotal in
 // buildSceneWritingPrompt assembles the user prompt for ONE scene call:
 // shared chapter context + beat sheet + already-written scenes (verbatim tail
 // for continuity) + the assigned scene with its hard ±band word budget.
-func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, plan *ScenePlan, pos int, written string, extraConstraints, retryFeedback string, chapterTargetTotal int) (userPrompt, systemPrompt string) {
+// hardSceneOverride lets a caller replace the scene's own description with
+// corrective instructions while keeping every other piece of scene context
+// (voice samples, history, constraints, continuation tail). The conflict
+// revision path uses it to write the scenes a whole-chapter rewrite LOST to
+// output-cap truncation: the replacement text carries the fact-check feedback
+// plus an explicit "this is new material, do not repeat the fragment" note.
+type hardSceneOverride struct {
+	Description string
+	Title       string
+}
+
+func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, plan *ScenePlan, pos int, written string, extraConstraints, retryFeedback string, chapterTargetTotal int, override ...hardSceneOverride) (userPrompt, systemPrompt string) {
 	lang := cfg.Language
 	sc := plan.Scenes[pos]
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	bandMin, bandMax := calcSceneLengthRange(sc.WordsBudget)
 
 	title := strings.TrimSpace(sc.Title)
+	if len(override) > 0 && strings.TrimSpace(override[0].Title) != "" {
+		title = strings.TrimSpace(override[0].Title)
+	}
 	if title == "" {
 		if en {
 			title = fmt.Sprintf("Scene %d", sc.ID)
 		} else {
 			title = fmt.Sprintf("Escena %d", sc.ID)
 		}
+	}
+	scDesc := strings.TrimSpace(sc.Description)
+	if len(override) > 0 && strings.TrimSpace(override[0].Description) != "" {
+		scDesc = strings.TrimSpace(override[0].Description)
 	}
 
 	var sb strings.Builder
@@ -154,7 +172,7 @@ func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, setti
 			fmt.Fprintf(&sb, " (about %d%% of the chapter)", targetPct)
 		}
 		sb.WriteString(", in prose.\n\n")
-		fmt.Fprintf(&sb, "Outline for this scene — %s:\n%s\n\n", title, strings.TrimSpace(sc.Description))
+		fmt.Fprintf(&sb, "Outline for this scene — %s:\n%s\n\n", title, scDesc)
 		if sc.PoV != "" {
 			fmt.Fprintf(&sb, "Point of view: %s\n\n", sc.PoV)
 		}
@@ -184,7 +202,7 @@ func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, setti
 			fmt.Fprintf(&sb, " (cerca del %d%% del capítulo)", targetPct)
 		}
 		sb.WriteString(", en prosa.\n\n")
-		fmt.Fprintf(&sb, "Argumento de esta escena — %s:\n%s\n\n", title, strings.TrimSpace(sc.Description))
+		fmt.Fprintf(&sb, "Argumento de esta escena — %s:\n%s\n\n", title, scDesc)
 		if sc.PoV != "" {
 			fmt.Fprintf(&sb, "Punto de vista: %s\n\n", sc.PoV)
 		}

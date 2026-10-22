@@ -57,15 +57,28 @@ func TestResetChapterActionGuards(t *testing.T) {
 	pp := filepath.Join(dir, "progress.json")
 	st := newRecoveryState(t, dir)
 
-	if err := ResetChapterAction(st, pp, 2, newTestLogger()); err == nil {
-		t.Fatal("expected error resetting a non-current chapter")
-	}
 	if err := ResetChapterAction(st, pp, 99, newTestLogger()); err == nil {
 		t.Fatal("expected error for unknown chapter")
 	}
+	// Clearing a future (pending, contentless) chapter is now allowed — the
+	// user may want to wipe/reset any chapter once generation finished. It
+	// must not corrupt state though: chapter 2 was already pending/empty, so
+	// resetting it is a no-op that still persists cleanly.
+	if err := ResetChapterAction(st, pp, 2, newTestLogger()); err != nil {
+		t.Fatalf("resetting a pending chapter should succeed: %v", err)
+	}
+	// Accepted chapters can also be cleared ("empezar de cero"), rewinding
+	// the cursor to them.
 	st.Chapters[0].Status = StatusAccepted
-	if err := ResetChapterAction(st, pp, 1, newTestLogger()); err == nil {
-		t.Fatal("expected error resetting an accepted chapter")
+	st.Chapters[0].Content = "Prosa aceptada."
+	if err := ResetChapterAction(st, pp, 1, newTestLogger()); err != nil {
+		t.Fatalf("resetting an accepted chapter should succeed: %v", err)
+	}
+	if st.Chapters[0].Status != StatusPending || st.Chapters[0].Content != "" {
+		t.Fatalf("accepted chapter not fully cleared: %+v", st.Chapters[0])
+	}
+	if st.CurrentChapterIndex != 0 {
+		t.Fatalf("cursor not rewound to reset chapter: %d", st.CurrentChapterIndex)
 	}
 }
 

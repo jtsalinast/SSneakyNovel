@@ -1304,6 +1304,11 @@ func SurgicalTropeRepair(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	ch = &state.Chapters[idx]
 	ch.Content = newContent
 	SyncChapterBlocksSceneAware(ch, newContent)
+	// Re-derive the colored fact/critic dots against the REWRITTEN text before
+	// persisting. Without this, the just-repaired unit keeps showing its old
+	// dot (or none at all) until a full analysis pass runs again — which is why
+	// "the dots next to the tropes" never appeared after surgical repairs.
+	RefreshTropeIssuesForChapter(state, ch)
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 	if err := SaveProgress(progressPath, state); err != nil {
 		return "", err
@@ -1462,6 +1467,57 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 			if len(feedbackIssues) == 0 {
 				feedbackSummary = ""
 			}
+			// Anti-loop hard constraint: once a trope unit has been surgically
+			// repaired (this pass or earlier ones), its contradiction lives in the
+			// plan/facts, not in local wording. Without this note every subsequent
+			// rewrite re-reads the SAME outline that produced the violation and
+			// faithfully reproduces it — the "keeps failing on the same thing" loop.
+			// The block below pins each repaired unit's stored beats as untouchable
+			// canon and forbids re-introducing the quoted contradicting prose.
+			var pinLines []string
+			for t := range seenTarget {
+				if failedTargets[t] || t[0] < 0 || t[1] < 0 {
+					continue
+				}
+				if t[0] >= len(ch.ScenePlan.Scenes) {
+					continue
+				}
+				// (Scene.TropeUnits is a field, not a method — this call-site typo
+				// broke the whole package build and silently killed the anti-loop
+				// pin block below.)
+				units := ch.ScenePlan.Scenes[t[0]].TropeUnits
+				if t[1] >= len(units) {
+					continue
+				}
+				// TropeUnit carries no stored beats; reconstruct the unit's prose
+				// from its scene-local paragraph range over the current content so
+				// the pin block quotes what was actually repaired.
+				sc := &ch.ScenePlan.Scenes[t[0]]
+				u := units[t[1]]
+				allParas, _ := splitBlockParagraphs(ch.Content)
+				absStart := sc.ParaStart + u.ParaStart
+				absEnd := sc.ParaStart + u.ParaEnd
+				if absEnd > len(allParas) {
+					absEnd = len(allParas)
+				}
+				if absStart < 0 || absStart >= absEnd {
+					continue
+				}
+				beats := strings.Join(allParas[absStart:absEnd], " ")
+				if strings.TrimSpace(beats) == "" {
+					continue
+				}
+				pinLines = append(pinLines, fmt.Sprintf("- Scene %d, beat %d is already REPAIRED and accepted; keep its events intact (%s). Do NOT reintroduce any of the previously quoted contradicting sentences there.", t[0]+1, t[1]+1, Truncate(beats, 220)))
+			}
+			if len(pinLines) > 0 {
+				sort.Strings(pinLines)
+				pinBlock := "[REPAIR HISTORY — ALREADY-APPLIED SURGICAL FIXES]\n" + strings.Join(pinLines, "\n") +
+					"\nThe listed units were rewritten on purpose to resolve the fact-check issues above; the ORIGINAL draft text shown to you still contains the OLD contradicting sentences in those spots. Treat the repair notes as canon overrides of the old draft and of any outline detail that conflicts with them."
+				if strings.TrimSpace(feedbackSummary) != "" {
+					feedbackSummary += "\n\n"
+				}
+				feedbackSummary += pinBlock
+			}
 		}
 	}
 
@@ -1531,6 +1587,7 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 	origContent := ch.Content
 	targetWords, _ := resolveChapterTargetWords(state, cfg)
 	minLen, maxLen := calcChapterLengthRange(targetWords)
+	revParas, _ := splitBlockParagraphs(revisedContent)
 	revisedContent, _, err = enforceRevisionLength(ctx, apiCfg, cfg, origContent, revisedContent, feedback, minLen, maxLen, logger,
 		func(guardedFeedback string) (string, error) {
 			return reviseChapterContentStream(ctx, apiCfg, cfg, state, idx, guardedFeedback, settings, logger, arcCtx.String())
@@ -1538,7 +1595,37 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 	if err != nil {
 		return fmt.Errorf("chapter revision: %w", err)
 	}
+	// Anti-truncation completion pass. The whole-chapter rewrite is ONE LLM call
+	// over the full draft; with 4k-word targets it routinely hits the model's
+	// output cap and comes back as only the first scenes (the author sees "2100
+	// words of a 4000 target" after clicking rewrite). enforceRevisionLength
+	// cannot fix that — every fresh rewrite gets cut at roughly the same spot —
+	// so continue the fragment scene by scene against the chapter's own scene
+	// plan, exactly like the writer's truncation path does.
+	if prose.CountProseUnits(revisedContent) < minLen {
+		if cont, ok := continueConflictRevisionFragment(ctx, apiCfg, cfg, state, idx, settings, arcCtx.String(), revisedContent, minLen, logger, feedbackSummary, feedbackIssues, prevConflict); ok {
+			revisedContent = cont
+		}
+	}
 	ch.Content = revisedContent
+	// Re-anchor the scene bookkeeping over the FINAL prose and rebuild the blocks
+	// from those spans; without this the viewer keeps stale paragraph ranges,
+	// fails the tiling check in recordedSceneParaSpans and silently drops back to
+	// one block per paragraph — losing trope grouping, scene chips and feedback
+	// dots right after a rewrite.
+	if ch.ScenePlan != nil && len(ch.ScenePlan.Scenes) > 0 {
+		ReanchorSceneSpans(ch, revisedContent, scenePartsFromSpans(revParas, ch.ScenePlan))
+	}
+	SyncChapterBlocksSceneAware(ch, revisedContent)
+	RefreshTropeIssuesForChapter(state, &state.Chapters[idx])
+	// The conflict panel and the viewer read chapter state through the saved
+	// progress file; persist immediately so the freshly re-tiled blocks (scene
+	// chips + feedback dots) reach the UI even if a later step of this action
+	// fails or is cancelled mid-way.
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+	ch = &state.Chapters[idx]
 	logger.InfoKey("log.prose_revised", prose.CountProseUnits(revisedContent))
 
 	logger.StepInfo(2, 4, "Resumiendo este capítulo para el historial...")
@@ -1590,4 +1677,238 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 	}
 	logger.SuccessKey("log.chapter_revised")
 	return nil
+}
+
+// scenePartsFromSpans reconstructs the per-scene prose parts from the exact
+// ParaStart/ParaEnd spans recorded on the scene plan. The conflict revision
+// path needs those parts to re-anchor spans over the final prose after a
+// whole-chapter rewrite (ReanchorSceneSpans). When the recorded spans no
+// longer tile revParas exactly — the rewrite changed the paragraph count —
+// fall back to proportional word-budget slicing so every scene still gets an
+// approximate part; locatePartSpan's fuzzy matching then corrects the drift.
+func scenePartsFromSpans(revParas []string, plan *ScenePlan) []string {
+	if plan == nil || len(plan.Scenes) == 0 || len(revParas) == 0 {
+		return nil
+	}
+	tiles := true
+	prevEnd := 0
+	for _, sc := range plan.Scenes {
+		if sc.ParaEnd <= 0 || sc.ParaStart < prevEnd || sc.ParaStart >= sc.ParaEnd || sc.ParaEnd > len(revParas) {
+			tiles = false
+			break
+		}
+		prevEnd = sc.ParaEnd
+	}
+	if tiles && prevEnd == len(revParas) {
+		parts := make([]string, 0, len(plan.Scenes))
+		for _, sc := range plan.Scenes {
+			parts = append(parts, strings.Join(revParas[sc.ParaStart:sc.ParaEnd], "\n\n"))
+		}
+		return parts
+	}
+	totalBudget := 0
+	for _, sc := range plan.Scenes {
+		w := sc.WordsBudget
+		if w < 1 {
+			w = 1
+		}
+		totalBudget += w
+	}
+	parts := make([]string, 0, len(plan.Scenes))
+	acc := 0
+	for pos, sc := range plan.Scenes {
+		end := acc
+		if pos == len(plan.Scenes)-1 {
+			end = len(revParas)
+		} else {
+			w := sc.WordsBudget
+			if w < 1 {
+				w = 1
+			}
+			end = acc + w*len(revParas)/totalBudget
+			if end <= acc {
+				end = acc + 1
+			}
+			if end > len(revParas) {
+				end = len(revParas)
+			}
+		}
+		if end > acc {
+			parts = append(parts, strings.Join(revParas[acc:end], "\n\n"))
+		} else {
+			parts = append(parts, "")
+		}
+		acc = end
+	}
+	return parts
+}
+
+// continueConflictRevisionFragment finishes a whole-chapter rewrite that hit
+// the model's output cap mid-way: instead of accepting a fragment with half
+// the scenes missing ("I asked for 4000 words and only see 2100"), it walks
+// the chapter's own scene plan, locates how far the fragment reaches by fuzzy
+// paragraph matching, and generates each unreached scene sequentially against
+// the fragment's tail — exactly the writer's scene-by-scene continuation, but
+// with the fact-check feedback pinned into every remaining scene prompt.
+// Returns ok=false when nothing could be recovered, leaving the caller with
+// the (warned-about) fragment rather than losing the rewrite entirely.
+func continueConflictRevisionFragment(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, arcConstraints, fragment string, minLen int, logger *sse.LogBroadcaster, feedbackSummary string, feedbackIssues []string, conflict *WritingConflict) (string, bool) {
+	ch := &state.Chapters[idx]
+	plan := ch.ScenePlan
+	if plan == nil || len(plan.Scenes) == 0 {
+		return "", false
+	}
+	en := i18n.NormalizeLanguage(cfg.Language) == i18n.LangEN
+	fragParas, _ := splitBlockParagraphs(fragment)
+	if len(fragParas) == 0 {
+		return "", false
+	}
+	// Locate how many leading scenes the fragment actually covers, advancing
+	// through the paragraph list with the same fuzzy matcher the sequential
+	// writer uses after length adjustments.
+	cum, covered := 0, 0
+	for _, part := range scenePartsFromSpans(fragParas, plan) {
+		pp, _ := splitBlockParagraphs(part)
+		if len(pp) == 0 {
+			break
+		}
+		n := locatePartSpan(fragParas, cum, pp)
+		if n <= 0 {
+			break
+		}
+		cum += n
+		covered++
+	}
+	if covered >= len(plan.Scenes) {
+		return "", false // not truncation — simply short; expansion can't help
+	}
+	if logger != nil {
+		logger.WarnKey("log.conflict_rewrite_truncated", idx+1, covered, len(plan.Scenes))
+	}
+	// Feedback block injected into EVERY remaining scene call: without it the
+	// continuation would dramatize the original outline again and reintroduce
+	// the very contradiction the rewrite was supposed to remove (the loop this
+	// whole path exists to break).
+	var fb strings.Builder
+	if s := strings.TrimSpace(feedbackSummary); s != "" {
+		fb.WriteString(s)
+	}
+	if len(feedbackIssues) > 0 {
+		list := make([]string, 0, len(feedbackIssues))
+		for _, it := range feedbackIssues {
+			if t := strings.TrimSpace(it); t != "" {
+				list = append(list, "- "+t)
+			}
+		}
+		if len(list) > 0 {
+			if fb.Len() > 0 {
+				fb.WriteString("\n")
+			}
+			fb.WriteString(strings.Join(list, "\n"))
+		}
+	}
+	if f := strings.TrimSpace(conflict.RootCause); f != "" {
+		if fb.Len() > 0 {
+			fb.WriteString("\n\n")
+		}
+		fb.WriteString(f)
+	}
+	if s := strings.TrimSpace(arcConstraints); s != "" {
+		if fb.Len() > 0 {
+			fb.WriteString("\n\n")
+		}
+		fb.WriteString(s)
+	}
+	written := strings.Join(fragParas[:min(cum, len(fragParas))], "\n\n")
+	appended := false
+	for pos := covered; pos < len(plan.Scenes); pos++ {
+		if ctx.Err() != nil {
+			break
+		}
+		sc := plan.Scenes[pos]
+		bandMin, bandMax := calcSceneLengthRange(sc.WordsBudget)
+		title := strings.TrimSpace(sc.Title)
+		if title == "" {
+			if en {
+				title = fmt.Sprintf("Scene %d", sc.ID)
+			} else {
+				title = fmt.Sprintf("Escena %d", sc.ID)
+			}
+		}
+		var ov hardSceneOverride
+		if fb.Len() > 0 {
+			if en {
+				ov.Description = "CONTINUATION SCENE (new material — the previous rewrite of this chapter was cut off before reaching it; never repeat or paraphrase the already-written text above).\n" +
+					strings.TrimSpace(sc.Description) + "\n\n" +
+					"FACT-CHECK CORRECTIONS THAT MUST HOLD IN THIS SCENE:\n" + fb.String() + "\n\n" +
+					"Dramatize this scene moment to moment within these corrections."
+			} else {
+				ov.Description = "ESCENA DE CONTINUACIÓN (material nuevo — la reescritura anterior de este capítulo se cortó antes de llegar aquí; nunca repitas ni parafrasees el texto ya escrito arriba).\n" +
+					strings.TrimSpace(sc.Description) + "\n\n" +
+					"CORRECCIONES DE FACT-CHECK QUE DEBEN CUMPLIRSE EN ESTA ESCENA:\n" + fb.String() + "\n\n" +
+					"Desarrolla esta escena momento a momento respetando estas correcciones."
+			}
+		}
+		retryFeedback := ""
+		var best string
+		bestDist := -1
+		attemptsLeft := sceneBudgetMaxRetries
+		for {
+			if ctx.Err() != nil {
+				break
+			}
+			userPrompt, systemPrompt := buildSceneWritingPrompt(cfg, state, idx, settings, plan, pos, written, arcConstraints, retryFeedback, sc.WordsBudget, ov)
+			text, truncated := streamSceneCall(ctx, apiCfg, cfg, idx, userPrompt, systemPrompt, logger)
+			if text == "" {
+				if attemptsLeft <= 0 {
+					break
+				}
+				attemptsLeft--
+				continue
+			}
+			text = stripChapterMetaProse(text, cfg.Language)
+			n := prose.CountProseUnits(text)
+			dist := n - sc.WordsBudget
+			if dist < 0 {
+				dist = -dist
+			}
+			if bestDist < 0 || dist < bestDist {
+				bestDist, best = dist, text
+			}
+			if truncated && n < bandMin && attemptsLeft > 0 {
+				// Output-cap cut inside a single scene: keep the partial draft as
+				// continuation context and ask for the rest in the next attempt.
+				attemptsLeft--
+				written = strings.Join(append(splitNonEmpty(written), text), "\n\n")
+				continue
+			}
+			if n >= bandMin && n <= bandMax {
+				break
+			}
+			if attemptsLeft <= 0 {
+				break
+			}
+			attemptsLeft--
+			retryFeedback = formatSceneLengthRetryFeedback(title, n, bandMin, bandMax, sceneBudgetMaxRetries-attemptsLeft, sceneBudgetMaxRetries, cfg.Language)
+		}
+		if strings.TrimSpace(best) == "" {
+			continue // skip the unreachable scene; the total check below judges
+		}
+		written += "\n\n" + best
+		appended = true
+		if prose.CountProseUnits(written) >= minLen {
+			break
+		}
+	}
+	if !appended {
+		return "", false
+	}
+	return written, true
+}
+
+// splitNonEmpty splits joined prose into non-empty paragraphs (helper for the
+// continuation loop above).
+func splitNonEmpty(content string) []string {
+	paras, _ := splitBlockParagraphs(content)
+	return paras
 }

@@ -30,8 +30,28 @@ func TestApplyChapterMemoryResultRejectsDifferentContent(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"new_memories": []any{
 		map[string]any{"id": 8, "content": "The countess poisoned the wine at the ball in front of everyone.", "category": "event", "block_ids": []int{1}},
 	}})
-	if err := applyChapterMemoryResult(&next, ch, map[int]bool{8: true}, string(raw)); err == nil || !strings.Contains(err.Error(), "preserve the supplied content") {
-		t.Fatalf("substantially different content must still fail identity check, got: %v", err)
+	// A substantially different rewrite of an existing fact must NOT abort the
+	// batch anymore (that hard failure made memory sync permanent after any
+	// chapter rewrite). The row falls back to the stored content instead.
+	if err := applyChapterMemoryResult(&next, ch, map[int]bool{8: true}, string(raw)); err != nil {
+		t.Fatalf("different content should fall back to stored text, not abort: %v", err)
+	}
+	if len(next.MemoryEntries) != 1 || next.MemoryEntries[0].Content != "Cordelia burned the letter" {
+		t.Fatalf("stored content must be preserved on fallback: %+v", next.MemoryEntries)
+	}
+	if len(next.MemoryEntries[0].References) != 1 {
+		t.Fatalf("evidence references must still attach: %+v", next.MemoryEntries[0].References)
+	}
+}
+
+func TestApplyChapterMemoryResultRejectsNegationFlip(t *testing.T) {
+	ch := ChapterState{Num: 1, Blocks: []Block{{ID: 1, Text: "Cordelia burned the letter."}}}
+	next := Progress{MemoryEntries: []MemoryEntry{{ID: 8, Content: "Cordelia burned the letter", Category: "event"}}}
+	raw, _ := json.Marshal(map[string]any{"new_memories": []any{
+		map[string]any{"id": 8, "content": "Cordelia did not burn the letter", "category": "event", "block_ids": []int{1}},
+	}})
+	if err := applyChapterMemoryResult(&next, ch, map[int]bool{8: true}, string(raw)); err == nil || !strings.Contains(err.Error(), "negation flipped") {
+		t.Fatalf("negation flip must remain fatal, got: %v", err)
 	}
 }
 

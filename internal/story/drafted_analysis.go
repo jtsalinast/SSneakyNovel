@@ -123,6 +123,7 @@ func chapterTropeMapBlock(ch ChapterState, lang string) string {
 	} else {
 		sb.WriteString("[Estructura escrita — escenas y sus unidades de tropo (usa ESTOS índices exactos para las intervenciones)]\n")
 	}
+	ensureTropeSegmentation(&ch)
 	for pos, sc := range ch.ScenePlan.Scenes {
 		title := sceneTitleOf(sc, lang)
 		if len(sc.TropeUnits) == 0 {
@@ -221,6 +222,183 @@ suggestions[i].ScoreImpact = finalOut[i].Impact
 suggestions[i].Priority = finalOut[i].Priority
 }
 return out
+}
+
+// salvageChapterAnalysisJSON parses a chapter-analysis payload that failed a
+// plain json.Unmarshal — typically because the model truncated the long rubric
+// answer mid-stream and ExtractJSON's bracket-repair left dangling commas or
+// empty containers ({"a":1,} / {"items":[{"k":1,) are syntactically invalid).
+// It progressively drops the innermost incomplete object/array element and
+// cleans the seam, retrying until the payload parses. Purely structural: it
+// never fabricates content, so an unrecoverable payload still fails.
+func salvageChapterAnalysisJSON(j string) string {
+	for attempt := 0; attempt < 24; attempt++ {
+		if json.Valid([]byte(j)) {
+			return j
+		}
+		open := strings.LastIndexByte(j, '{')
+		if open == -1 {
+			return ""
+		}
+		end := len(j)
+		if c := strings.LastIndexByte(j, '}'); c > open {
+			end = c + 1
+		}
+		frag := j[open:end]
+		cut := len(frag)
+		// Drop trailing garbage after the last complete value of the fragment.
+		for cut > 0 && !isJSONFragmentTailClean(frag[:cut]) {
+			cut--
+		}
+		if cut == 0 {
+			// No valid prefix inside this object — remove the whole element.
+			j = removeJSONElementAt(j, open, end)
+		} else {
+			j = j[:open] + frag[:cut] + j[end:]
+		}
+		j = cleanJSONSeams(j)
+	}
+	if json.Valid([]byte(j)) {
+		return j
+	}
+	return ""
+}
+
+// isJSONFragmentTailClean reports whether s ends at a position where a JSON
+// value is complete (closing } / ] or a finished literal), i.e. no dangling
+// comma/colon/opened container trails it.
+func isJSONFragmentTailClean(s string) bool {
+	t := strings.TrimRight(s, " \t\r\n")
+	if t == "" {
+		return false
+	}
+	last := t[len(t)-1]
+	if last == '}' || last == ']' || last == '"' || last == 'e' /*true*/ ||
+		last == 'l' /*null*/ || last == '0' || (last >= '1' && last <= '9') {
+		// Also reject if any container remains unclosed in t.
+		depth := 0
+		inStr := false
+		esc := false
+		for i := 0; i < len(t); i++ {
+			c := t[i]
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' && inStr {
+				esc = true
+				continue
+			}
+			if c == '"' {
+				inStr = !inStr
+				continue
+			}
+			if inStr {
+				continue
+			}
+			if c == '{' || c == '[' {
+				depth++
+			} else if c == '}' || c == ']' {
+				depth--
+			}
+		}
+		return depth == 0 && !inStr
+	}
+	return false
+}
+
+// removeJSONElementAt deletes the substring [open,end) plus one adjacent
+// separator comma, keeping the enclosing container syntactically intact.
+func removeJSONElementAt(j string, open, end int) string {
+	// Prefer consuming a following comma; otherwise a preceding one.
+	e := end
+	for e < len(j) && (j[e] == ' ' || j[e] == '\n' || j[e] == '\r' || j[e] == '\t') {
+		e++
+	}
+	if e < len(j) && j[e] == ',' {
+		return j[:open] + j[e+1:]
+	}
+	s := open
+	for s > 0 && (j[s-1] == ' ' || j[s-1] == '\n' || j[s-1] == '\r' || j[s-1] == '\t') {
+		s--
+	}
+	if s > 0 && j[s-1] == ',' {
+		return j[:s-1] + j[end:]
+	}
+	return j[:open] + j[end:]
+}
+
+// cleanJSONSeams strips the artifacts left by element removal: ",," → ",",
+// "{,"/"[," before a closer, and ":," after a key awaiting its value.
+func cleanJSONSeams(j string) string {
+	prev := ""
+	for prev != j {
+		prev = j
+		j = strings.ReplaceAll(j, ",,", ",")
+		j = strings.ReplaceAll(j, ", }", "}")
+		j = strings.ReplaceAll(j, ",}", "}")
+		j = strings.ReplaceAll(j, ", ]", "]")
+		j = strings.ReplaceAll(j, ",]", "]")
+		j = strings.ReplaceAll(j, "{,", "{")
+		j = strings.ReplaceAll(j, "[,", "[")
+		j = strings.ReplaceAll(j, ":,", ": null,")
+		j = strings.ReplaceAll(j, ":}", ": null}")
+	}
+	return j
+}
+
+// analysisHasContent reports whether a salvaged/parsed drafted-analysis
+// payload carries at least one usable editorial signal. Shared by the chapter
+// and act parsers so both accept partial-but-real answers instead of throwing
+// them away (which previously surfaced as "model response is not valid
+// chapter-analysis JSON" after mere truncation).
+func analysisHasContent(summary string, suggestions int, pillars int) bool {
+	return strings.TrimSpace(summary) != "" || suggestions > 0 || pillars > 0
+}
+
+// parseChapterAnalysisReport first tries a strict parse; on failure it runs
+// the structural salvage above so a truncated-but-mostly-complete editor
+// answer still yields a real, evidence-based report instead of an error.
+func parseChapterAnalysisReport(raw string) (*ChapterAnalysisReport, bool) {
+	// Models frequently wrap the payload in markdown fences or add a lead-in
+	// sentence; ExtractJSON isolates the outermost balanced object first.
+	j := llm.ExtractJSON(raw)
+	if j == "" {
+		return nil, false
+	}
+	r := &ChapterAnalysisReport{}
+	if json.Unmarshal([]byte(j), r) == nil && analysisHasContent(r.Summary, len(r.Suggestions), len(r.PillarScores)) {
+		return r, true
+	}
+	if salvaged := salvageChapterAnalysisJSON(j); salvaged != "" {
+		r2 := &ChapterAnalysisReport{}
+		if json.Unmarshal([]byte(salvaged), r2) == nil && analysisHasContent(r2.Summary, len(r2.Suggestions), len(r2.PillarScores)) {
+			return r2, true
+		}
+	}
+	return nil, false
+}
+
+// parseActAnalysisReport mirrors parseChapterAnalysisReport for the ACT pass:
+// strict parse first, then the same structural salvage for truncated payloads.
+// Without this the act critique failed outright whenever the model's answer
+// was cut mid-JSON, even though most of the report was perfectly usable.
+func parseActAnalysisReport(raw string) (*ActAnalysisReport, bool) {
+	j := llm.ExtractJSON(raw)
+	if j == "" {
+		return nil, false
+	}
+	r := &ActAnalysisReport{}
+	if json.Unmarshal([]byte(j), r) == nil && analysisHasContent(r.Summary, len(r.Suggestions), len(r.PillarScores)) {
+		return r, true
+	}
+	if salvaged := salvageChapterAnalysisJSON(j); salvaged != "" {
+		r2 := &ActAnalysisReport{}
+		if json.Unmarshal([]byte(salvaged), r2) == nil && analysisHasContent(r2.Summary, len(r2.Suggestions), len(r2.PillarScores)) {
+			return r2, true
+		}
+	}
+	return nil, false
 }
 
 // draftedJSONSchemaEN builds the shared strict-JSON contract for both passes.
@@ -497,38 +675,75 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 		return nil
 	}
 	lang := cfg.Language
+	// Re-derive the trope segmentation from the LIVE prose before building the
+	// written-structure map. After a rewrite / fact-check revision the stored
+	// TropeUnits are stale (they address paragraphs that no longer exist), so
+	// the map used to degrade into "no trope segmentation recorded" and every
+	// intervention target — and with it the colored feedback dots beside the
+	// tropes — became impossible to produce or validate.
+	ensureTropeSegmentation(ch)
+	// The critic is advice-only on the first pass, but the schema example still
+	// shows an interventions array; models frequently fill it with GUESSED
+	// triplets. sanitizeDraftedSuggestions drops those because the validator
+	// snapshot below never saw them: re-segmenting a chapter mutates the plan
+	// scenes in place, so the validator built earlier over state.Chapters was
+	// reading the OLD units. Build the validator AFTER ensureTropeSegmentation
+	// and let the initial pass keep only interventions that address real units.
+	targets := draftedTargetValidator(state, []int{ch.Num})
 	settingsForPrompt := settings
 	if settings != nil {
 		if selected, _ := retrieveSettings(settings, collectAllOutlines(state), settingsContextRunes); selected != nil {
 			settingsForPrompt = selected
 		}
 	}
-	prompt := buildChapterEditorPrompt(cfg, state, settingsForPrompt, idx, lang)
+	basePrompt := buildChapterEditorPrompt(cfg, state, settingsForPrompt, idx, lang)
 	system := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing ONE DRAFTED CHAPTER (actual manuscript prose) of a novel in progress. Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.chapter_analyze_running", ch.Num)
 	var result ChapterAnalysisReport
-	for attempt := 0; attempt < 2; attempt++ {
+	var lastErr string
+	// Up to 3 attempts: an empty/invalid first answer usually means the model
+	// truncated the long rubric JSON under its output cap, so later retries
+	// shrink the payload demands instead of repeating the identical request.
+	for attempt := 0; attempt < 3; attempt++ {
+		prompt := basePrompt
+		switch attempt {
+		case 1:
+			prompt += "\n\nYour previous response could not be parsed as JSON. Return ONLY one complete JSON object (no markdown fences, no commentary) following the schema above EXACTLY, with this size discipline: summary ≤ 60 words, each suggestion title ≤ 8 words / detail ≤ 45 words / action ≤ 45 words, max 5 suggestions. Keep every pillar_scores entry with its full criteria_levels."
+		case 2:
+			prompt += "\n\nSTRICT COMPACT MODE (previous responses were too long and got cut off): return at most 3 suggestions with detail/action ≤ 30 words each, summary ≤ 40 words, and NO text outside the single JSON object. criteria_levels keys must match the checklist verbatim."
+		}
 		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, prompt, logger)
 		if raw == "" {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return fmt.Errorf("API call failed or was canceled")
+			lastErr = "API call failed or was canceled"
+			continue
 		}
-		j := llm.ExtractJSON(raw)
-		result = ChapterAnalysisReport{}
-		if j != "" && json.Unmarshal([]byte(j), &result) == nil && (result.Summary != "" || len(result.Suggestions) > 0) {
+		res, ok := parseChapterAnalysisReport(raw)
+		if ok {
+			result = *res
+			if attempt > 0 {
+				logger.InfoKey("log.chapter_analyze_retry_ok", ch.Num, attempt+1)
+			}
+			lastErr = ""
 			break
 		}
-		if attempt == 1 {
-			return fmt.Errorf("model response is not valid chapter-analysis JSON")
-		}
-		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
+		lastErr = "model response is not valid chapter-analysis JSON"
+		result = ChapterAnalysisReport{}
+	}
+	if lastErr != "" {
+		return fmt.Errorf("%s", lastErr)
 	}
 
 	now := time.Now().Unix()
-	result.Suggestions = sanitizeDraftedSuggestions(result.Suggestions, now, fmt.Sprintf("chpa_%d", ch.Num), nil, false)
+	// Keep only interventions that address REAL (scene_pos, trope_index)
+	// triplets of the freshly segmented chapter. The critic is advice-only in
+	// spirit, but models often emit a few concrete targets anyway; when they
+	// match the written-structure map they are trustworthy evidence and the UI
+	// can show their dots immediately — guessed ones still get dropped.
+	result.Suggestions = sanitizeDraftedSuggestions(result.Suggestions, now, fmt.Sprintf("chpa_%d", ch.Num), targets, true)
 	if result.OverallScore < 0 || result.OverallScore > 100 {
 		result.OverallScore = 0
 	}
@@ -575,6 +790,12 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 		loadDraftedChapterFilesInto(progressPath, state)
 		ch = &state.Chapters[idx]
 	}
+	// Re-derive trope segmentation from the live prose BEFORE building the map /
+	// validator so scenes that lost their units after a rewrite become valid
+	// intervention targets again (otherwise every triplet is rejected and no
+	// critic dots ever appear). chapterTropeMapBlock calls this too, but the
+	// validator snapshot must see the same fresh units.
+	ensureTropeSegmentation(ch)
 	targets := draftedTargetValidator(state, []int{ch.Num})
 	planBuf := strings.Builder{}
 	fmt.Fprintf(&planBuf, "%s", chapterTropeMapBlock(*ch, cfg.Language))
@@ -910,6 +1131,19 @@ func AnalyzeFinishedAct(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		return nil
 	}
 	lang := cfg.Language
+	// Refresh trope segmentation of every drafted chapter in the act BEFORE
+	// building the written-structure map and the intervention validator, so
+	// critique dots can target real units even after rewrites (same rationale
+	// as in AnalyzeDraftedChapter).
+	actNums := make([]int, 0, end-start+1)
+	for i := range state.Chapters {
+		ch := &state.Chapters[i]
+		if ch.Num >= start && ch.Num <= end && strings.TrimSpace(ch.Content) != "" {
+			ensureTropeSegmentation(ch)
+			actNums = append(actNums, ch.Num)
+		}
+	}
+	actTargets := draftedTargetValidator(state, actNums)
 	settingsForPrompt := settings
 	if settings != nil {
 		if selected, _ := retrieveSettings(settings, collectAllOutlines(state), settingsContextRunes); selected != nil {
@@ -921,27 +1155,37 @@ func AnalyzeFinishedAct(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 
 	logger.InfoKey("log.act_analyze_running", actNo)
 	var result ActAnalysisReport
-	for attempt := 0; attempt < 2; attempt++ {
-		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, prompt, logger)
+	for attempt := 0; attempt < 3; attempt++ {
+		curPrompt := prompt
+		switch attempt {
+		case 1:
+			curPrompt += "\n\nYour previous response could not be parsed as JSON. Return ONLY one complete JSON object (no markdown fences, no commentary) following the schema above EXACTLY, with this size discipline: summary ≤ 60 words, each suggestion title ≤ 8 words / detail ≤ 45 words / action ≤ 45 words, max 5 suggestions. Keep every pillar_scores entry with its full criteria_levels."
+		case 2:
+			curPrompt += "\n\nSTRICT COMPACT MODE (previous responses were too long and got cut off): return at most 3 suggestions with detail/action ≤ 30 words each, summary ≤ 40 words, and NO text outside the single JSON object. criteria_levels keys must match the checklist verbatim."
+		}
+		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, curPrompt, logger)
 		if raw == "" {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return fmt.Errorf("API call failed or was canceled")
+			continue
 		}
-		j := llm.ExtractJSON(raw)
-		result = ActAnalysisReport{}
-		if j != "" && json.Unmarshal([]byte(j), &result) == nil && (result.Summary != "" || len(result.Suggestions) > 0) {
+		res, ok := parseActAnalysisReport(raw)
+		if ok {
+			result = *res
+			if attempt > 0 {
+				logger.InfoKey("log.chapter_analyze_retry_ok", actNo, attempt+1)
+			}
 			break
 		}
-		if attempt == 1 {
+		result = ActAnalysisReport{}
+		if attempt == 2 {
 			return fmt.Errorf("model response is not valid act-analysis JSON")
 		}
-		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
 	}
 
 	now := time.Now().Unix()
-	result.Suggestions = sanitizeDraftedSuggestions(result.Suggestions, now, fmt.Sprintf("acta_%d", actNo), nil, false)
+	result.Suggestions = sanitizeDraftedSuggestions(result.Suggestions, now, fmt.Sprintf("acta_%d", actNo), actTargets, true)
 	if result.OverallScore < 0 || result.OverallScore > 100 {
 		result.OverallScore = 0
 	}
@@ -1113,6 +1357,14 @@ func applyInterventionSet(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 		if strings.TrimSpace(state.Chapters[idx].Content) == "" {
 			loadDraftedChapterFilesInto(progressPath, state)
 		}
+		// The intervention targets were validated against the trope segmentation
+		// recorded at proposal time. If prose changed since (a rewrite, a polish,
+		// an older draft without units), that segmentation is stale and
+		// rewriteSceneTrope would repair a DIFFERENT unit than the one flagged —
+		// the loop where applying feedback never clears its dot. Re-derive the
+		// segmentation over the current prose before rewriting so the target
+		// (scene_pos, trope_index) addresses exactly what the critic saw.
+		ensureTropeSegmentation(&state.Chapters[idx])
 		_, err := rewriteSceneTrope(ctx, apiCfg, cfg, state, idx, settings, iv.ScenePos, iv.TropeIndex, iv.Feedback, logger)
 		if err != nil {
 			iv.Status = "failed"
@@ -1175,6 +1427,9 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		return nil, fmt.Errorf("act_not_drafted")
 	}
 	loadDraftedChapterFilesInto(progressPath, state)
+	for i := range state.Chapters {
+		ensureTropeSegmentation(&state.Chapters[i])
+	}
 	targets := draftedTargetValidator(state, chapterNums)
 
 	var material strings.Builder

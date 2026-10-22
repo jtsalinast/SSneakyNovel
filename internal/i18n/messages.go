@@ -138,6 +138,12 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_analyze_done": {
 
 		LangEN: "Chapter analysis complete — %d editorial suggestions"},
+	"log.chapter_analyze_retry_ok": {
+
+		LangEN: "Chapter %d analysis recovered on attempt %d (previous responses were truncated/invalid JSON)"},
+	"log.chapter_analyze_unrecoverable": {
+
+		LangEN: "Model response could not be parsed as valid JSON even after repair — retrying with a compact rubric"},
 	"log.chapter_analyze_proposing": {
 
 		LangEN: "Editor is drafting small trope interventions for this chapter point..."},

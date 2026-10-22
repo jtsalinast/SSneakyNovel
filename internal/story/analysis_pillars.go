@@ -244,6 +244,71 @@ func criterionNameSet(pillarKey string) (keys map[string]bool, byName map[string
 	return keys, byName
 }
 
+// normalizeCriterionToken lowercases and strips every non-alphanumeric rune,
+// so "Reader-hooks per arc", "reader hooks per arc" and "ReaderHooksPerArc"
+// all collapse to the same token for fuzzy matching.
+func normalizeCriterionToken(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// resolveCriterionKey maps a model-supplied criterion key/name back onto the
+// pillar's fixed checklist. Exact key → exact name → normalized-token match →
+// unique prefix/substring match. Returns "" when nothing unambiguous matches,
+// so callers never guess: an unresolved criterion stays dropped (evidence rule).
+func resolveCriterionKey(pillarKey, rawKey, rawName string) string {
+	keys, _ := criterionNameSet(pillarKey)
+	k := strings.TrimSpace(rawKey)
+	if keys[k] {
+		return k
+	}
+	normKey := normalizeCriterionToken(rawKey)
+	normName := normalizeCriterionToken(rawName)
+	checklist := PillarChecklist(pillarKey)
+	// Pass 1: full normalized equality on key or display name.
+	for _, c := range checklist {
+		ck := normalizeCriterionToken(c.Key)
+		cn := normalizeCriterionToken(c.Name)
+		if (normKey != "" && (ck == normKey || cn == normKey)) ||
+			(normName != "" && (ck == normName || cn == normName)) {
+			return c.Key
+		}
+	}
+	// Pass 2: unique containment either way ("pacing" ⊂ "pacing_curve",
+	// "genre promise kept" ⊃ "genre_promise"). Only accept if exactly one
+	// checklist item matches — ambiguity must not be resolved by invention.
+	match := ""
+	count := 0
+	for _, c := range checklist {
+		ck := normalizeCriterionToken(c.Key)
+		cn := normalizeCriterionToken(c.Name)
+		hit := false
+		for _, probe := range []string{normKey, normName} {
+			if probe == "" {
+				continue
+			}
+			if strings.Contains(ck, probe) || strings.Contains(probe, ck) ||
+				strings.Contains(cn, probe) || strings.Contains(probe, cn) {
+				hit = true
+				break
+			}
+		}
+		if hit {
+			match = c.Key
+			count++
+		}
+	}
+	if count == 1 {
+		return match
+	}
+	return ""
+}
+
 // normalizeSuggestionPillar fills in a missing/invalid declared pillar from
 // the suggestion's category. Returns the sanitized pillar key (possibly "").
 func normalizeSuggestionPillar(pillar, category string) string {
@@ -262,19 +327,12 @@ func sanitizeSuggestionCriteria(pillarKey string, crits []SuggestionCriterion) [
 	if pillarKey == "" || len(crits) == 0 {
 		return nil
 	}
-	keys, byName := criterionNameSet(pillarKey)
 	out := make([]SuggestionCriterion, 0, len(crits))
 	seen := map[string]bool{}
 	for _, c := range crits {
-		k := strings.TrimSpace(c.Key)
-		if !keys[k] {
-			if resolved, ok := byName[strings.ToLower(k)]; ok {
-				k = resolved
-			} else if resolved, ok := byName[strings.ToLower(strings.TrimSpace(c.Name))]; ok {
-				k = resolved
-			} else {
-				continue
-			}
+		k := resolveCriterionKey(pillarKey, c.Key, c.Name)
+		if k == "" {
+			continue
 		}
 		if seen[k] {
 			continue
@@ -385,7 +443,17 @@ func finalizePillarReport(in []PillarAssessment, suggestions []FinalizableSugges
 			if lv > 100 {
 				lv = 100
 			}
-			g.levels[key] = lv
+			// The model sometimes answers with the display name ("Pacing curve
+			// (no dead zones)") or a paraphrase instead of the checklist key.
+			// Resolve it back onto the fixed rubric; genuinely unknown items
+			// stay dropped — never invented, never averaged in from nothing.
+			resolved := resolveCriterionKey(k, key, "")
+			if resolved == "" {
+				continue
+			}
+			if _, dup := g.levels[resolved]; !dup {
+				g.levels[resolved] = lv
+			}
 		}
 		graded[k] = g
 	}
@@ -460,7 +528,7 @@ CHECKLISTS:
 - inspirational_pieces: comp_scope, comp_hook_strength, comp_emotional_register, comp_pacing_momentum, comp_originality
 - tone: tone_consistency, tone_escalation, tone_scene_coloring, tone_distinctiveness, tone_mood_contrast
 - story_structure (%[1]s): hook_opening, beat_coverage, pacing_curve, stakes_escalation, arc_payoffs, chapter_end_hooks, scene_economy
-Return "criteria_levels" inside EVERY pillar_scores entry, with exactly those keys and your 0-100 level per item.
+Return "criteria_levels" inside EVERY pillar_scores entry as an array of objects: {"key":"<checklist key verbatim>","level":<0-100>} — one object for EVERY item of that pillar, keys copied exactly from the lists above (never the display name, never a paraphrase). If you genuinely cannot grade an item from the material shown, still include it with your best evidence-based level; do not omit items.
 Every suggestion MUST also declare: "pillar" (one of reader_profile|inspirational_pieces|tone|story_structure), "criteria" (the checklist keys it repairs) and "score_impact" (points you expect that pillar gains once this point is fully applied — realistic, consistent with the levels you graded: applying ALL points of a pillar must bring it to 100). Never invent criteria outside the lists above.
 The UI shows every checklist item ("mini category") with its exact level next to the pillar score, and badges each suggestion with a High/Medium/Low importance derived from its declared impact and the number of items it repairs — so grade levels honestly and reserve the biggest score_impact for the points that truly gate bestseller level.`, structureName)
 }
