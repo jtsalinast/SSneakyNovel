@@ -173,6 +173,7 @@
   let sheetEl = null;          // contenteditable root
   let sheetFocused = false;    // pointer inside the sheet → static Save
   let saveBtnVisible = true;   // reader still in viewport?
+  let readerAbove = false;     // user scrolled PAST the top of the reader card
 
   $: if (chapterBlocks !== lastChapterBlocksRef) {
     lastChapterBlocksRef = chapterBlocks;
@@ -182,10 +183,21 @@
   let lastChapterBlocksRef = null;
 
   $: if (saveBtnSentinel && typeof IntersectionObserver !== 'undefined') {
-    const io = new IntersectionObserver(([e]) => { saveBtnVisible = e.isIntersecting; });
+    const io = new IntersectionObserver(([e]) => { saveBtnVisible = e.isIntersecting; }, { rootMargin: '0px 0px -8px 0px' });
     io.observe(saveBtnSentinel);
   }
   let saveBtnSentinel = null;
+  // Track whether the ChapterReader card has been scrolled ABOVE the viewport:
+  // if so the Save button floats fixed at the bottom-right; once the card is
+  // back in view (or we reach its end) it settles into the normal flow again.
+  function setReaderCard(node) {
+    if (typeof IntersectionObserver === 'undefined') return {};
+    const io = new IntersectionObserver(([e]) => {
+      readerAbove = !e.isIntersecting && e.boundingClientRect.top < 0;
+    }, { threshold: 0 });
+    io.observe(node);
+    return { destroy() { io.disconnect(); } };
+  }
 
   // Block bookkeeping for chips: scene/trope membership comes from the
   // ORIGINAL chapterBlocks (keyed by id); paragraphs typed into the sheet
@@ -205,8 +217,15 @@
     if (!cur || cur.scene_pos == null || cur.scene_pos < 0) return null;
     const prev = i > 0 ? meta.get(blocks[i - 1].id) : null;
     const ps = prev && prev.scene_pos != null ? prev.scene_pos : -1;
+    // Scene chips are shown ONLY when the incoming scene carries real plan
+    // metadata (title/description). Blocks synced from a chapter without a
+    // usable scene plan have scene_has_meta === false: painting "Scene N
+    // starts here" chips over every paragraph there is noise, so we skip.
     if (ps !== cur.scene_pos) {
-      return { kind: 'scene', pos: cur.scene_pos + 1, title: cur.scene_title || '', desc: cur.scene_description || '', label: cur.trope_label || '', idx: cur.trope_index || 0, count: cur.trope_count || 0 };
+      if (cur.scene_has_meta === true) {
+        return { kind: 'scene', pos: cur.scene_pos + 1, title: cur.scene_title || '', desc: cur.scene_description || '', label: cur.trope_label || '', idx: cur.trope_index || 0, count: cur.trope_count || 0 };
+      }
+      return null;
     }
     const pt = prev && prev.trope_index != null ? prev.trope_index : 0;
     const ct = cur.trope_index != null ? cur.trope_index : 0;
@@ -320,6 +339,11 @@
     selMenu = { x: rect.left + rect.width / 2, y: rect.top, text, blockIds: [...new Set(ids)] };
   }
   function hideSelMenu() { selMenu = null; }
+  // Clicking anywhere inside the sheet that is NOT a critic highlight closes
+  // the IV popup; clicks on a <mark> bubble to its own openIVPopup handler.
+  function onSheetClick(e) {
+    if (!e.target.closest('.iv-mark')) hideIVPopup();
+  }
   function selBlockId() { return selMenu?.blockIds?.length ? selMenu.blockIds[0] : null; }
   function selFromSheet(action) {
     if (!selMenu) return;
@@ -459,6 +483,18 @@
     }
     pendingIVs = list;
   }
+  // Debug aid: log why proposals may not be highlighting (missing report,
+  // wrong status/chapter, or empty anchors).
+  $: if (chapterAnalysis) {
+    const all = (chapterAnalysis.suggestions || []).flatMap(s => s.interventions || []);
+    console.info('[critic-iv]', {
+      suggestions: (chapterAnalysis.suggestions || []).length,
+      interventions: all.length,
+      pendingOnSheet: pendingIVs.length,
+      chNum: ch?.num,
+      sample: all.slice(0, 3).map(iv => ({ st: iv.status, cn: iv.chapter_num, sp: iv.scene_pos, ti: iv.trope_index, cur: (iv.current_text || '').slice(0, 40), q: (iv.quote || '') })),
+    });
+  }
   let ivPopup = null; // {x,y,iv}
   let applyingIV = false;
 
@@ -480,6 +516,13 @@
       i = lh.indexOf(pre.toLowerCase());
       if (i >= 0) return [i, Math.min(hay.length, i + pre.length)];
     }
+    // Last resort: the anchor's FIRST sentence alone — current_text spans a
+    // whole trope unit and is often truncated/reworded by the model.
+    const firstSent = ln.split(/(?<=[.!?\u2026])\s/)[0] || '';
+    if (firstSent.length >= 25) {
+      i = lh.indexOf(firstSent);
+      if (i >= 0) return [i, Math.min(hay.length, i + firstSent.length)];
+    }
     return null;
   }
 
@@ -488,18 +531,50 @@
   function ivSegmentsFor(text, blockId) {
     const n = normText(text);
     if (!n || !pendingIVs.length) return null;
+    const meta = blockMetaById().get(blockId);
+    if (!meta || meta.scene_pos == null || meta.scene_pos < 0) return null;
     const marks = [];
+    const addMark = (sp) => {
+      if (!sp) return;
+      if (marks.some(m => sp[0] < m[1] && m[0] < sp[1])) return; // overlap
+      marks.push(sp);
+    };
+    const sceneHay = normText(sheetSceneProse(meta.scene_pos));
+    const chapHay = normText(chapterContent || '');
     for (const iv of pendingIVs) {
-      const meta = blockMetaById().get(blockId);
-      if (!meta || meta.scene_pos !== iv.scene_pos) continue;
-      if (iv.trope_index != null && meta.trope_index != null && meta.trope_count > 1 && meta.trope_index !== iv.trope_index) continue;
+      if (iv.scene_pos !== meta.scene_pos) continue;
+      const sameUnit = iv.trope_index != null && meta.trope_index != null && meta.trope_count > 1 && meta.trope_index !== iv.trope_index;
+      if (sameUnit) continue;
       const cand = [normText(iv.current_text), normText(iv.quote)].filter(x => x);
+      let hit = false;
+      // Tier 1: anchor lands inside THIS block's text (exact/ci/prefix match).
       for (const c of cand) {
         const sp = locateSpan(n, c);
-        if (!sp) continue;
-        if (marks.some(m => sp[0] < m[1] && m[0] < sp[1])) break; // overlap
-        marks.push(sp);
-        break;
+        if (sp) { addMark(sp); hit = true; break; }
+      }
+      if (hit) continue;
+      // Tier 2: anchor lives somewhere in this block's SCENE prose (positional
+      // proof via iv.scene_pos). Re-locate loosely against the block; if only
+      // the unit-level target matches, highlight the whole single-unit block.
+      for (const c of cand) {
+        if (sceneHay && locateSpan(sceneHay, c)) {
+          const pre = c.split(' ').slice(0, 6).join(' ');
+          const sp = locateSpan(n, pre) || locateSpan(n, (c.split(/(?<=[.!?\u2026])\s/)[0] || ''));
+          if (sp) { addMark(sp); hit = true; break; }
+          if (iv.trope_index == null || !meta.trope_count || meta.trope_count <= 1) { addMark([0, n.length]); hit = true; break; }
+        }
+      }
+      if (hit) continue;
+      // Tier 3: anchor exists somewhere in the chapter (stale scene_pos?) —
+      // mark this block's opening sentence so the suggestion stays reachable.
+      for (const c of cand) {
+        if (c && chapHay.includes(c)) {
+          const sent = n.split(/(?<=[.!?\u2026])\s/)[0] || '';
+          if (sent.length >= 20) addMark([0, Math.min(n.length, sent.length)]);
+          else addMark([0, n.length]);
+          hit = true;
+          break;
+        }
       }
     }
     if (!marks.length) return null;
@@ -529,6 +604,12 @@
     }
     if (last < raw.length) segs.push({ t: raw.slice(last) });
     return segs;
+  }
+
+  // Concatenated prose of one scene straight from the blocks (no server call
+  // needed): used as the tier-2 haystack for intervention matching.
+  function sheetSceneProse(pos) {
+    return chapterBlocks.filter(b => b.scene_pos === pos).map(b => b.text).join('\n\n');
   }
 
   function openIVPopup(e, iv) {
@@ -713,6 +794,12 @@
     if (!text || text.length < 2) { quotePopover = null; return; }
     const range = sel.getRangeAt(0);
     if (!contentEl || !contentEl.contains(range.commonAncestorContainer)) {
+      quotePopover = null; return;
+    }
+    // The continuous sheet has its OWN floating menu (edit/revise/insert/
+    // delete). Suppress the legacy single-button quote popover there so both
+    // never fight over the same selection.
+    if (typeof document !== 'undefined' && document.getElementById('ChapterSheetEditor')?.contains(range.commonAncestorContainer)) {
       quotePopover = null; return;
     }
     const rect = range.getBoundingClientRect();
@@ -1161,7 +1248,7 @@
       <!-- Content area -->
       <div id="ChapterContentArea" class="min-w-0 w-full">
         {#if ch}
-          <div id="CardSection_ChapterReader" class="card bg-base-200">
+          <div id="CardSection_ChapterReader" class="card bg-base-200" use:setReaderCard>
             <div class="card-body p-4 gap-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch.num, title: ch.title })}</h2>
@@ -1209,7 +1296,7 @@
                     <!-- Continuous Word-like sheet: one always-editable surface;
                          scene/trope chips sit between paragraphs and are NOT
                          text-selectable (user-select:none + contenteditable=false). -->
-                    <div id="ChapterSheetEditor" class="space-y-1"
+                    <div id="ChapterSheetEditor" class="space-y-1" bind:this={sheetEl}
                          use:sheetEditable
                          contenteditable={!$taskRunning && editingBlockId == null ? 'true' : 'false'}
                          spellcheck="false"
@@ -1218,6 +1305,7 @@
                          on:mouseup={checkSheetSelection}
                          on:focusin={() => { sheetFocused = true; }}
                          on:focusout={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { sheetFocused = false; hideSelMenu(); } }}
+    on:click={onSheetClick}
                          on:scroll={hideSelMenu}>
                       {#each chapterBlocks as b, bi (b.id)}
                         {#if markerBefore(chapterBlocks, bi, sheetMeta)}
@@ -1436,8 +1524,8 @@
                the reader area it settles back into its normal inline position.
                It only appears when there are unsaved edits on the sheet. -->
           <div bind:this={saveBtnSentinel} class="h-0"></div>
-          {#if ch && chapterBlocks.length > 0 && !isStreamingThis && saveBtnVisible && (sheetDirty || sheetFocused)}
-            <div class="sticky save-sheet-bar z-40 -mt-1 flex justify-end px-2 py-1.5">
+          {#if ch && chapterBlocks.length > 0 && !isStreamingThis && (sheetDirty || sheetFocused)}
+            <div class="save-sheet-bar z-40 flex justify-end px-2 py-1.5 {readerAbove ? 'fixed right-4 bottom-4 shadow-xl rounded-full' : 'sticky'}">
               <button class="btn btn-primary btn-sm shadow-lg"
                       title={sheetDirty ? $t('writing.sheet.dirtyTip') : ''}
                       disabled={!sheetDirty || sheetSaving || $taskRunning}
@@ -1514,7 +1602,16 @@
   #ChapterSheetEditor :global(.iv-mark:hover) {
     background: color-mix(in oklab, var(--fallback-secondary, oklch(var(--secondary))) 38%, transparent);
   }
-  .save-sheet-bar {
+    .save-sheet-bar.sticky {
     bottom: 0.75rem;
+  }
+  /* The continuous sheet must never show a focus ring — it is always editable. */
+  #ChapterSheetEditor,
+  #ChapterSheetEditor:focus,
+  #ChapterSheetEditor:focus-visible,
+  #ChapterSheetEditor [data-bid]:focus,
+  #ChapterSheetEditor [data-bid]:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
   }
 </style>

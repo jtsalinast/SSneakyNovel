@@ -583,11 +583,18 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 // can highlight the targeted passage inline. Returns "" when the target is
 // stale or out of range.
 func tropeUnitProseAt(ch *ChapterState, scenePos, tropeIdx int) string {
-	if ch.ScenePlan == nil || scenePos < 0 || scenePos >= len(ch.ScenePlan.Scenes) {
+	if scenePos < 0 {
 		return ""
 	}
 	paras, _ := splitBlockParagraphs(ch.Content)
 	spans := sceneParaSpans(ch, paras)
+	if spans == nil {
+		// No usable scene plan (or degenerate budgets): fall back to the SAME
+		// break-delimited pseudo-scene tiling SyncChapterBlocks uses for the
+		// reader chips, so proposals still carry a CurrentText anchor and the
+		// sheet can highlight them.
+		spans = breakSceneSpans(paras)
+	}
 	if scenePos >= len(spans) {
 		return ""
 	}

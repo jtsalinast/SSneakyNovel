@@ -40,6 +40,11 @@ type Block struct {
 	TropeLabel       string `json:"trope_label,omitempty"`
 	TropeIndex       int    `json:"trope_index,omitempty"`
 	TropeCount       int    `json:"trope_count,omitempty"`
+	// SceneHasMeta states whether the owning scene carries REAL plan metadata
+	// (title/description). Blocks built from paragraph fallbacks without a
+	// usable scene plan leave it nil, so the reader can tell "no info" apart
+	// from "scene exists but is unnamed".
+	SceneHasMeta *bool `json:"scene_has_meta,omitempty"`
 }
 
 // splitBlockParagraphs splits content the same way segment revision does:
@@ -128,6 +133,31 @@ func SyncChapterBlocks(ch *ChapterState) {
 		next = 1
 	}
 	blocks := make([]Block, 0, len(groups))
+	// Fallback scene map: pseudo-scenes delimited by HARD BREAK markers. Every
+	// block's first paragraph resolves to the scene it belongs to (shared id
+	// across all groups of one scene → exactly one "Scene N" chip per break),
+	// and fbSceneOpen remembers each scene's [lo,hi) para span so trope units
+	// can be tiled once per scene with the writer's own splitter.
+	fbSceneStart := make([]int, len(paras))
+	fbSceneOpen := map[int][2]int{}
+	fbUnits := map[int][]string{}      // scene -> trope-unit beat texts (tiled once)
+	fbUnitRanges := map[int][][2]int{} // scene -> unit para ranges (scene-local)
+	fbLastUnit := map[int]int{}        // scene -> last emitted unit index
+	{
+		s := 0
+		for j := range paras {
+			if j > 0 && paraIsBreak(paras[j-1]) {
+				s++
+			}
+			fbSceneStart[j] = s
+			if _, ok := fbSceneOpen[s]; !ok && !paraIsBreak(paras[j]) {
+				fbSceneOpen[s] = [2]int{j, j + 1}
+			} else if e, ok := fbSceneOpen[s]; ok && e[1] == j && !paraIsBreak(paras[j]) {
+				e[1] = j + 1
+				fbSceneOpen[s] = e
+			}
+		}
+	}
 	for _, g := range groups {
 		text := strings.Join(paras[g[0]:g[1]], sep)
 		id := 0
@@ -142,7 +172,63 @@ func SyncChapterBlocks(ch *ChapterState) {
 			id = next
 			next++
 		}
-		blocks = append(blocks, Block{ID: id, Type: classifyTropeBlock(text), Text: text, ScenePos: -1})
+		// Scene/trope bookkeeping for the reader chips. The chapter's own
+		// ScenePlan (when present and aligned with the prose) is authoritative:
+		// scenes then map to their planned positions and carry real titles /
+		// descriptions into the chip tooltips. Without a usable plan we fall
+		// back to pseudo-scenes delimited by HARD BREAK markers ("---") — one
+		// chip per real break instead of one per paragraph, which would be
+		// noise. Trope membership inside the scene comes from re-running the
+		// SAME splitter the sequential writer uses over the scene's paras, so
+		// the trope chips between blocks stay truthful in both modes.
+		spos := fbSceneStart[g[0]]
+		metaOK := false
+		b := Block{ID: id, Type: classifyTropeBlock(text), Text: text, ScenePos: spos, SceneHasMeta: &metaOK}
+		var sc Scene
+		if ch.ScenePlan != nil && spos >= 0 && spos < len(ch.ScenePlan.Scenes) {
+			sc = ch.ScenePlan.Scenes[spos]
+			metaOK = hasMeaningfulSceneMeta(sc)
+		} else {
+			sc = Scene{ID: spos + 1}
+		}
+		b.SceneTitle = sceneDisplayTitle(sc, spos)
+		b.SceneDescription = strings.TrimSpace(sc.Description)
+		// Trope chips: if this block OPENS its scene (first block of the scene),
+		// run the writer's own splitter over the whole scene span and take the
+		// label of the unit this block starts; continuation blocks inside a
+		// multi-unit scene keep index/label from the same tiling when their
+		// first para opens a new unit, otherwise they inherit the open unit.
+		if span, ok := fbSceneOpen[spos]; ok && span[0] == g[0] {
+			// This block opens its scene: tile the WHOLE scene into trope units
+			// with the writer's own splitter and remember the mapping so every
+			// later block of the scene inherits the correct unit index/label.
+			sl, sh := span[0], span[1]
+			beats, ranges := splitTropesFromParas(paras[sl:sh], "", sep)
+			if len(beats) == 0 {
+				beats = []string{strings.Join(paras[sl:sh], sep)}
+				ranges = [][2]int{{0, sh - sl}}
+			}
+			fbUnits[spos] = beats
+			fbUnitRanges[spos] = ranges
+			setBlockUnit(&b, beats, ranges, sl, g[0], sl == 0, sh >= len(paras))
+		} else if beats, ok := fbUnits[spos]; ok {
+			// Continuation block inside a tiled scene — resolve its unit from
+			// the same ranges (falling back to the last opened unit).
+			ui := fbLastUnit[spos]
+			for k, r := range fbUnitRanges[spos] {
+				if r[0]+fbSceneOpen[spos][0] <= g[0] && g[0] < r[1]+fbSceneOpen[spos][0] {
+					ui = k
+					break
+				}
+			}
+			fbLastUnit[spos] = ui
+			setBlockUnitIdx(&b, beats, ui)
+		} else {
+			b.TropeCount = 1
+			b.TropeIndex = 1
+			b.TropeLabel = string(classifyTrope(text, spos == 0, g[1] >= len(paras)))
+		}
+		blocks = append(blocks, b)
 	}
 	ch.Blocks = blocks
 	ch.NextBlockID = next
@@ -319,10 +405,12 @@ func syncSceneBlocks(ch *ChapterState) bool {
 			if ui < len(labels) {
 				label = labels[ui]
 			}
+			metaOK := hasMeaningfulSceneMeta(sc)
 			blocks = append(blocks, Block{
 				ID: id, Type: typ, Text: text,
 				ScenePos: pos, SceneTitle: title, SceneDescription: strings.TrimSpace(sc.Description),
 				TropeLabel: label, TropeIndex: ui + 1, TropeCount: len(units),
+				SceneHasMeta: &metaOK,
 			})
 		}
 	}
@@ -395,6 +483,9 @@ func sceneTropeUnitSpans(ch *ChapterState, pos int, sceneParas []string) [][2]in
 }
 
 // sceneDisplayTitle returns a short human label for the scene marker tooltip.
+// When the plan carries no title/description it degrades to "Scene N" — and
+// callers use hasMeaningfulSceneMeta to decide whether that placeholder is all
+// they have (in which case the viewer hides the chip instead of showing noise).
 func sceneDisplayTitle(sc Scene, pos int) string {
 	if t := strings.TrimSpace(sc.Title); t != "" {
 		return t
@@ -406,6 +497,14 @@ func sceneDisplayTitle(sc Scene, pos int) string {
 		return d
 	}
 	return fmt.Sprintf("Scene %d", pos+1)
+}
+
+// hasMeaningfulSceneMeta reports whether a planned scene carries real plan
+// metadata (title or description) worth surfacing in the reader UI. Chapters
+// written without a scene plan produce blocks whose only scene info is the
+// auto-generated "Scene N" placeholder; chips built from those are noise.
+func hasMeaningfulSceneMeta(sc Scene) bool {
+	return strings.TrimSpace(sc.Title) != "" || strings.TrimSpace(sc.Description) != ""
 }
 
 // sceneTropeLabels maps each trope span of a scene to its trope label
@@ -759,4 +858,57 @@ func ReviseBlockAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 	}
 	logger.SuccessKey("log.block_revised", ch.Num, blockID)
 	return nil
+}
+
+// setBlockUnit fills a block's trope-unit chip fields from a scene-level
+// tiling produced by splitTropesFromParas. ranges are scene-local (relative
+// to sl); firstPara is the chapter-global index of the block's first para.
+func setBlockUnit(b *Block, beats []string, ranges [][2]int, sl, firstPara int, sceneFirst, sceneLast bool) {
+	count := len(beats)
+	if count < 1 {
+		count = 1
+	}
+	b.TropeCount = count
+	if count == 1 {
+		b.TropeLabel = string(classifyTrope(beats[0], sceneFirst, sceneLast))
+		b.TropeIndex = 1
+		return
+	}
+	ui := unitIdxForPara(ranges, firstPara-sl, len(beats))
+	setBlockUnitIdx(b, beats, ui)
+}
+
+// setBlockUnitIdx assigns index/label for unit ui (0-based) over tiled beats.
+func setBlockUnitIdx(b *Block, beats []string, ui int) {
+	if ui < 0 {
+		ui = 0
+	}
+	if ui >= len(beats) {
+		ui = len(beats) - 1
+	}
+	b.TropeCount = len(beats)
+	b.TropeIndex = ui + 1
+	isFirst := ui == 0
+	isLast := ui == len(beats)-1
+	b.TropeLabel = string(classifyTrope(beats[ui], isFirst, isLast))
+}
+
+// unitIdxForPara returns which unit (0-based) owns paragraph pi in a tiling;
+// falls back to the last unit whose range starts at or before pi.
+func unitIdxForPara(ranges [][2]int, pi, n int) int {
+	for k, r := range ranges {
+		if r[0] <= pi && pi < r[1] {
+			return k
+		}
+	}
+	last := 0
+	for k, r := range ranges {
+		if r[0] <= pi {
+			last = k
+		}
+	}
+	if last >= n {
+		last = n - 1
+	}
+	return last
 }
