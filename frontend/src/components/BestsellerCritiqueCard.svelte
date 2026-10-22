@@ -283,6 +283,25 @@
   function suggestionHasProposals(s) {
     return !!((s?.recommendations || []).length || (s?.interventions || []).length);
   }
+
+  // Evidence-based linking between the rubric checklist and the suggestions:
+  // a sub-criterion is "addressed" when at least one OPEN suggestion names it
+  // in its `criteria` list (and optionally shares its pillar). We never invent
+  // grades — items with no model-graded level stay '—' and items with no open
+  // suggestion simply show no link chip.
+  function openSuggestionsForCriterion(pl, c) {
+    if (!pl || !c) return [];
+    const key = c.key;
+    return (report?.suggestions || []).filter((s) => {
+      if (s.status === 'applied' || s.status === 'dismissed') return false;
+      const crits = s.criteria || [];
+      if (crits.some((cr) => cr.key === key)) return true;
+      // Fallback: same-pillar suggestions without explicit criteria still
+      // improve this item's evidence trail (title/detail text match).
+      if (s.pillar && s.pillar === pl.key && key && (s.title || s.detail || '').toLowerCase().includes(key.replace(/_/g, ' ').toLowerCase())) return true;
+      return false;
+    });
+  }
 </script>
 
 {#if report}
@@ -374,13 +393,41 @@
                   <!-- Transparent sub-criteria: the score IS the average of these
                        levels, so this list is literally the roadmap to 100%. -->
                   {#if pl.checklist?.length}
-                    <details class="text-[11px]">
+                    <!-- Sub-criterion ("mini category") scores are the roadmap to
+                         100%: render them OUTSIDE any collapsed details so they are
+                         always visible, formatted as x/10 with a mini progress bar.
+                         The details wrapper only collapses when the pillar is strong. -->
+                    {@const cl = sortedChecklist(pl)}
+                    <details class="text-[11px]" open={!strong}>
                       <summary class="cursor-pointer text-base-content/55 select-none">{$t('analysis.checklist.title')}</summary>
-                      <ul class="mt-1 space-y-0.5" title={$t('analysis.checklist.tip')}>
-                        {#each sortedChecklist(pl) as c (c.key)}
-                          <li class="flex items-center justify-between gap-1">
-                            <span class="truncate text-base-content/70">{criterionLabel(c.key)}</span>
-                            <span class="shrink-0 font-mono {c.level >= 85 ? 'text-success' : c.level >= 60 ? 'text-warning' : 'text-error'}">{c.level < 0 ? '—' : c.level}</span>
+                      <ul class="mt-1 space-y-1" title={$t('analysis.checklist.tip')}>
+                        {#each cl as c (c.key)}
+                          {@const tenths = c.level < 0 ? -1 : Math.round(Math.min(100, Math.max(0, c.level)) / 10)}
+                          {@const linked = openSuggestionsForCriterion(pl, c)}
+                          <li class="space-y-0.5">
+                            <div class="flex items-center justify-between gap-1">
+                              <span class="truncate text-base-content/70">{criterionLabel(c.key)}</span>
+                              <span class="shrink-0 font-mono font-semibold {c.level >= 85 ? 'text-success' : c.level >= 60 ? 'text-warning' : 'text-error'}">{tenths < 0 ? '—' : tenths + '/10'}</span>
+                            </div>
+                            {#if tenths >= 0}
+                              <div class="w-full h-1 rounded-full bg-base-content/10 overflow-hidden">
+                                <div class="h-full rounded-full {c.level >= 85 ? 'bg-success' : c.level >= 60 ? 'bg-warning' : 'bg-error'}" style="width: {(tenths * 10) + '%'}"></div>
+                              </div>
+                            {:else}
+                              <!-- Evidence-based honesty: the model did not grade
+                                   this item (truncated response or no evidence in
+                                   the excerpt). Say so instead of inventing a number. -->
+                              <div class="text-[10px] italic text-base-content/45">{$t('analysis.checklist.notEvaluated')}</div>
+                            {/if}
+                            {#if linked.length}
+                              <div class="flex flex-wrap gap-1 pt-0.5">
+                                {#each linked.slice(0, 3) as ls (ls.id)}
+                                  <a href="#suggestion-{ls.id}" class="badge badge-outline badge-xs gap-1 text-info" title="{ls.title}">
+                                    ✦ {$t('analysis.checklist.addressedBy')}
+                                  </a>
+                                {/each}
+                              </div>
+                            {/if}
                           </li>
                         {/each}
                       </ul>
@@ -399,7 +446,7 @@
         {/if}
         <div class="space-y-2">
           {#each report.suggestions || [] as s (s.id)}
-            <section class="border border-base-content/10 rounded-lg p-3 space-y-2">
+            <section id="suggestion-{s.id}" class="border border-base-content/10 rounded-lg p-3 space-y-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <span class="badge badge-outline badge-sm">{catLabel(s.category)}</span>
                 {#if s.priority}

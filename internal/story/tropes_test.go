@@ -173,7 +173,8 @@ func TestSyncSceneBlocksPerTropeWithMetadata(t *testing.T) {
 		if b.SceneTitle == "" {
 			t.Fatalf("block %d missing scene_title", b.ID)
 		}
-		if b.TropeIndex < 1 || b.TropeCount < 1 || b.TropeIndex > b.TropeCount {
+		// TropeIndex is 0-based (matches the JSON contract consumed by the UI).
+		if b.TropeIndex < 0 || b.TropeCount < 1 || b.TropeIndex >= b.TropeCount {
 			t.Fatalf("block %d bad trope index %d/%d", b.ID, b.TropeIndex, b.TropeCount)
 		}
 		if b.TropeLabel == "" {

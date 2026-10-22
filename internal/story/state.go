@@ -64,6 +64,12 @@ type ChapterState struct {
 	// descriptions. Rebuilt by refreshTropeIssues whenever the conflict or
 	// the analysis changes.
 	TropeIssues []TropeIssueGroup `json:"trope_issues,omitempty"`
+	// segmentedContentRev is the HashContent(Content) the current ScenePlan
+	// trope segmentation was derived from. Transient (never persisted): it
+	// lets ensureTropeSegmentation tell fresh bookkeeping from units left
+	// stale by a full-chapter rewrite — stale units silently broke every
+	// intervention target ("los puntos de colores no aparecen").
+	segmentedContentRev uint64 `json:"-"`
 }
 
 // TropeIssueGroup aggregates the findings located at one trope unit.

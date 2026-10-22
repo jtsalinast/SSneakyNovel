@@ -176,7 +176,7 @@
   function sceneMarkerTip(m) {
     if (!m) return '';
     let s = $t('writing.blockSceneMarker', [m.pos]) + '\n\n' + (m.title || '');
-    if (m.label && m.count > 0) s += '\n' + $t('writing.blockTropeHint', [m.label, m.idx, m.count]);
+    if (m.label && m.count > 0) s += '\n' + $t('writing.blockTropeHint', [m.label, m.idx + 1, m.count]);
     return s.trim();
   }
   // —— Trope-issue dots (fact-check red / bestseller-critic violet) ————
@@ -1002,6 +1002,10 @@
                     <button class="btn btn-outline btn-sm" on:click={doPolish} disabled={$taskRunning} title={$t('writing.btn.polish.tip')}>{$t('writing.btn.polish')}</button>
                   {/if}
                   <button class="btn btn-outline btn-sm" on:click={copyContent}>{$t('writing.btn.copy')}</button>
+                  <!-- "Clear chapter" is always available once there is prose,
+                       including ACCEPTED chapters: the author can discard the
+                       generated text and start that chapter from zero. -->
+                  <button class="btn btn-error btn-outline btn-sm" on:click={doResetChapter} disabled={$taskRunning} title={$t('writing.chapter.resetTip')}>{$t('writing.chapter.reset')}</button>
                 {/if}
                 <div class="flex-1"></div>
                 <div class="join">

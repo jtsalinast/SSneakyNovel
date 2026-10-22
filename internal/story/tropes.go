@@ -686,6 +686,94 @@ func buildTropeRewritePrompt(cfg *config.Config, state *Progress, idx int, setti
 	return userPrompt, systemPrompt
 }
 
+// rewriteTropeUnit rewrites ONLY the paragraphs of one trope unit (unitLo/
+// unitHi are scene-local prose-paragraph indices from the recorded TropeUnit
+// span) and returns the replacement prose for that unit alone. Unlike the
+// whole-scene path, the model never copies surrounding beats verbatim, so a
+// repair can no longer silently "fix" a different beat than the located one.
+func rewriteTropeUnit(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, settings *ProjectSettings, sceneTitle string, sceneText string, beats []string, unitText string, unitLo, unitHi, beatIdx int, feedback string, logger *sse.LogBroadcaster) (string, error) {
+	ch := &state.Chapters[idx]
+	en := i18n.NormalizeLanguage(cfg.Language) == i18n.LangEN
+	var sb strings.Builder
+	characterContext, worldviewContext := buildChapterSettingsContexts(settings, *ch, cfg.Language)
+	if characterContext != "" {
+		if en {
+			sb.WriteString("[Characters]\n" + characterContext + "\n\n")
+		} else {
+			sb.WriteString("[Personajes]\n" + characterContext + "\n\n")
+		}
+	}
+	if worldviewContext != "" {
+		if en {
+			sb.WriteString("[Worldview]\n" + worldviewContext + "\n\n")
+		} else {
+			sb.WriteString("[Cosmovisión]\n" + worldviewContext + "\n\n")
+		}
+	}
+	beforeText, afterText := "", ""
+	if unitLo > 0 && unitLo < len(beats) {
+		beforeText = beats[unitLo-1]
+	}
+	if unitHi >= 0 && unitHi < len(beats) {
+		afterText = beats[unitHi]
+	}
+	if en {
+		fmt.Fprintf(&sb, "The scene \"%s\" of chapter %d needs ONE trope unit fixed for consistency. Rewrite ONLY that unit and return JUST its replacement prose.\n\n", sceneTitle, ch.Num)
+		sb.WriteString("[Full current scene text — for voice/context only, do NOT return it]\n" + strings.TrimSpace(sceneText) + "\n\n")
+		if beforeText != "" {
+			sb.WriteString("[Immediately BEFORE the unit (verbatim anchor — do not repeat)]\n" + strings.TrimSpace(beforeText) + "\n\n")
+		}
+		sb.WriteString(fmt.Sprintf("[Unit to rewrite — unit %d of %d]\n%s\n\n", beatIdx+1, max(len(beats), 1), strings.TrimSpace(unitText)))
+		if afterText != "" {
+			sb.WriteString("[Immediately AFTER the unit (verbatim anchor — do not repeat)]\n" + strings.TrimSpace(afterText) + "\n\n")
+		}
+		sb.WriteString("[Editor feedback about this unit]\n" + strings.TrimSpace(feedback) + "\n\n")
+		sb.WriteString("Rules:\n- Keep voice, tense and point of view identical to the anchors.\n- Fix exactly what the feedback describes; change nothing else.\n- Preserve the unit's approximate length (\u00b110%).\n- Return ONLY the revised unit prose — no titles, notes, dividers or surrounding beats.\n")
+	} else {
+		fmt.Fprintf(&sb, "La escena \"%s\" del capítulo %d necesita corregir UNA unidad de tropo por consistencia. Reescribe SOLO esa unidad y devuelve ÚNICAMENTE su prosa de reemplazo.\n\n", sceneTitle, ch.Num)
+		sb.WriteString("[Texto actual completo de la escena — solo para voz/contexto, NO lo devuelvas]\n" + strings.TrimSpace(sceneText) + "\n\n")
+		if beforeText != "" {
+			sb.WriteString("[Inmediatamente ANTES de la unidad (ancla literal — no lo repitas)]\n" + strings.TrimSpace(beforeText) + "\n\n")
+		}
+		sb.WriteString(fmt.Sprintf("[Unidad a reescribir — unidad %d de %d]\n%s\n\n", beatIdx+1, max(len(beats), 1), strings.TrimSpace(unitText)))
+		if afterText != "" {
+			sb.WriteString("[Inmediatamente DESPUÉS de la unidad (ancla literal — no la repitas)]\n" + strings.TrimSpace(afterText) + "\n\n")
+		}
+		sb.WriteString("[Feedback editorial sobre esta unidad]\n" + strings.TrimSpace(feedback) + "\n\n")
+		sb.WriteString("Reglas:\n- Mantén voz, tiempo verbal y punto de vista idénticos a las anclas.\n- Corrige exactamente lo que describe el feedback; no cambies nada más.\n- Conserva la extensión aproximada de la unidad (±10%).\n- Devuelve SOLO la prosa revisada de la unidad — sin títulos, notas, separadores ni beats vecinos.\n")
+	}
+	userPrompt := sb.String() + factProtection(state, ch.Num, cfg.Language)
+	systemPrompt := state.CorePrompt
+	if systemPrompt == "" {
+		systemPrompt = i18n.SystemPromptFor(cfg.Language, "author_default")
+	}
+	origWords := prose.CountProseUnits(unitText)
+	for attempt := 0; attempt <= maxTropeRewriteRetries; attempt++ {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		var raw string
+		if logger != nil {
+			raw = llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+		} else {
+			raw = llm.CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
+		}
+		newUnit := stripChapterMetaProse(raw, cfg.Language)
+		if strings.TrimSpace(newUnit) == "" {
+			continue
+		}
+		nw := prose.CountProseUnits(newUnit)
+		if origWords > 0 && (nw*100 < origWords*70 || nw*100 > origWords*140) {
+			if logger != nil {
+				logger.WarnKey("log.trope_rewrite_length_guard", ch.Num, beatIdx+1, nw, origWords)
+			}
+			continue
+		}
+		return newUnit, nil
+	}
+	return "", fmt.Errorf("trope unit rewrite failed after %d attempts", maxTropeRewriteRetries+1)
+}
+
 // rewriteSceneTrope replaces one beat inside a scene via the LLM, verifies the
 // returned text really changed only that beat region and keeps the scene
 // length within ±15% of the original, and splices it back into the chapter
@@ -703,7 +791,36 @@ func rewriteSceneTrope(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 		return "", fmt.Errorf("scene span not found for beat rewrite")
 	}
 	sceneText := strings.Join(paras[spanLo:spanHi], sep)
-	beats, _ := splitTropes(sceneText)
+	beats, ranges := splitTropesFromParas(paras[spanLo:spanHi], sceneText, sep)
+	// Address the unit by its RECORDED trope segmentation when available so the
+	// repair always rewrites the paragraphs the critic actually flagged (see
+	// tropeUnitForIdx): the old positional mapping could target a different beat
+	// than the located one, which is why fact-check repairs kept re-finding the
+	// same problem — the offending paragraph was never rewritten.
+	if lo2, hi2, ok := tropeUnitForIdx(sc.TropeUnits, ranges, beatIdx); ok && hi2 > lo2 {
+		uLo, uHi := spanLo+lo2, spanLo+hi2
+		if uHi <= len(paras) {
+			unitText := strings.Join(paras[uLo:uHi], sep)
+			newUnit, err := rewriteTropeUnit(ctx, apiCfg, cfg, state, idx, settings, sceneTitleOf(sc, cfg.Language), sceneText, beats, unitText, lo2, hi2, beatIdx, feedback, logger)
+			if err == nil && strings.TrimSpace(newUnit) != "" {
+				replaced := make([]string, 0, len(paras)-(uHi-uLo))
+				replaced = append(replaced, paras[:uLo]...)
+				up, _ := paragraphUnits(newUnit)
+				replaced = append(replaced, up...)
+				replaced = append(replaced, paras[uHi:]...)
+				out := strings.Join(replaced, sep)
+				SyncChapterBlocksSceneAware(ch, out)
+				if logger != nil {
+					logger.SuccessKey("log.trope_rewrite_done", ch.Num, sc.ID, beatIdx+1, prose.CountProseUnits(newUnit))
+				}
+				return out, nil
+			}
+			if logger != nil {
+				logger.WarnKey("log.trope_rewrite_unit_failed", ch.Num, sc.ID, beatIdx+1)
+			}
+			// fall through to the legacy whole-scene path below
+		}
+	}
 	if beatIdx < 0 || beatIdx >= len(beats) {
 		beatIdx = 0
 	}
@@ -749,6 +866,36 @@ func rewriteSceneTrope(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 		return newContent, nil
 	}
 	return "", fmt.Errorf("beat rewrite failed after %d attempts", maxTropeRewriteRetries+1)
+}
+
+// tropeUnitForIdx maps a requested trope-unit index onto the CURRENT trope
+// segmentation of a scene. rewriteSceneTrope used to address beats by their
+// ordinal in splitTropes(sceneText), but recorded TropeUnits drop break-marker
+// paragraphs and merge same-mode runs, so the two segmentations diverge: a
+// critic issue located at unit 1 (recorded ParaStart/ParaEnd) could silently
+// repair beat 2 instead — the exact mechanism behind "the fact-check rewrite
+// keeps finding the same problem", because the flagged paragraph was never
+// actually rewritten. Falls back to the legacy positional mapping only when
+// no recorded unit covers the requested index.
+func tropeUnitForIdx(units []TropeUnit, ranges [][2]int, beatIdx int) (int, int, bool) {
+	for _, u := range units {
+		if u.Index == beatIdx && u.ParaEnd > u.ParaStart {
+			return u.ParaStart, u.ParaEnd, true
+		}
+	}
+	if len(ranges) > 0 {
+		if beatIdx >= 0 && beatIdx < len(ranges) {
+			r := ranges[beatIdx]
+			if r[1] > r[0] {
+				return r[0], r[1], true
+			}
+		}
+		return -1, -1, false
+	}
+	if beatIdx >= 0 && beatIdx < len(ranges)+1 {
+		return beatIdx, beatIdx + 1, true
+	}
+	return -1, -1, false
 }
 
 // sceneSpanFromBlocks resolves the paragraph span of scene pos from its

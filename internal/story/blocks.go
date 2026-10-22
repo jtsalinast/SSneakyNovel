@@ -32,11 +32,14 @@ type Block struct {
 	// a discreet marker whenever the scene changes between consecutive blocks.
 	ScenePos int `json:"scene_pos"`
 	// SceneTitle / TropeLabel describe the owning scene and the trope unit
-	// inside it, for hover tooltips on the marker chip.
+	// inside it, for hover tooltips on the marker chip. TropeIndex is 0-based
+	// (the viewer renders idx+1); omitempty was removed because index 0 — the
+	// first trope of every scene — silently vanished from the JSON and broke
+	// feedback-dot matching in the viewer ("no se ven los indicadores").
 	SceneTitle string `json:"scene_title,omitempty"`
 	TropeLabel string `json:"trope_label,omitempty"`
-	TropeIndex int    `json:"trope_index,omitempty"`
-	TropeCount int    `json:"trope_count,omitempty"`
+	TropeIndex int    `json:"trope_index"`
+	TropeCount int    `json:"trope_count"`
 }
 
 // splitBlockParagraphs splits content the same way segment revision does:
@@ -255,7 +258,11 @@ func groupsOverlapTropeChange(blocks []Block, paras []string, groups [][2]int) b
 // boundaries must tile the whole content; otherwise derived ranges are stale
 // (e.g. after a manual edit) and paragraph mode is safer.
 func syncSceneBlocks(ch *ChapterState) bool {
-	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 2 {
+	// Single-scene chapters also deserve trope-granular blocks + owning-scene
+	// bookkeeping: previously requiring >=2 scenes made one-scene chapters (or
+	// rewrites that collapsed the plan) fall back to one-block-per-paragraph,
+	// losing both the per-trope grouping and every feedback dot.
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 1 {
 		return false
 	}
 	paras, sep := splitBlockParagraphs(ch.Content)
@@ -319,7 +326,10 @@ func syncSceneBlocks(ch *ChapterState) bool {
 			blocks = append(blocks, Block{
 				ID: id, Type: typ, Text: text,
 				ScenePos: pos, SceneTitle: title,
-				TropeLabel: label, TropeIndex: ui + 1, TropeCount: len(units),
+				// 0-based, matching TropeUnit.Index (the canonical addressing used
+				// by trope_issues roll-ups, critic interventions and surgical
+				// repairs). The viewer renders idx+1 for humans.
+				TropeLabel: label, TropeIndex: ui, TropeCount: len(units),
 			})
 		}
 	}
@@ -330,6 +340,183 @@ func syncSceneBlocks(ch *ChapterState) bool {
 	ch.NextBlockID = next
 	ch.BlockSep = sep
 	return true
+}
+
+// ensureTropeSegmentation re-derives each planned scene's trope segmentation
+// (Scene.TropeUnits/TropeRanges) from the CURRENT chapter prose when it is
+// missing or stale. The critic's written-structure map and the intervention
+// target validator read Scene.TropeUnits directly; after a full-chapter
+// rewrite or an older draft those units can be absent, which made every scene
+// show "no trope segmentation recorded" and silently rejected ALL proposed
+// interventions — so no violet critic dots ever appeared next to the tropes.
+// Deterministic (splitTropes only, no LLM), idempotent, and safe to call on
+// chapters without content or plan.
+func ensureTropeSegmentation(ch *ChapterState) {
+	if ch == nil || strings.TrimSpace(ch.Content) == "" {
+		return
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 {
+		return
+	}
+	// The segmentation is keyed on the CURRENT prose: if the chapter was
+	// rewritten since the units were recorded (different paragraph count or
+	// different text), every stored unit is stale and must be re-derived —
+	// otherwise intervention targets address paragraphs that no longer exist.
+	fresh := ch.segmentedContentRev == 0 || ch.segmentedContentRev != HashContent(ch.Content)
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+		// No usable plan: treat the whole chapter as a single implicit scene so
+		// trope-level feedback targets and per-trope grouping survive even
+		// without a matching ScenePlan. Deterministic and idempotent.
+		if !fresh {
+			return
+		}
+		beats, ranges := splitTropesFromParas(paras, strings.Join(paras, sep), sep)
+		if len(beats) == 0 || len(ranges) != len(beats) {
+			return
+		}
+		ch.ScenePlan = &ScenePlan{Scenes: []Scene{{Title: strings.TrimSpace(ch.Title), TropeUnits: buildTropeUnits(beats, ranges), ParaStart: 0, ParaEnd: len(paras)}}}
+		ch.segmentedContentRev = HashContent(ch.Content)
+		return
+	}
+	spans := sceneParaSpans(ch, paras)
+	if spans == nil || len(spans) != len(ch.ScenePlan.Scenes) {
+		return
+	}
+	for pos := range ch.ScenePlan.Scenes {
+		sc := &ch.ScenePlan.Scenes[pos]
+		sp := spans[pos]
+		if sp[0] < 0 || sp[1] > len(paras) || sp[1] <= sp[0] {
+			continue
+		}
+		sceneParas := paras[sp[0]:sp[1]]
+		// Recorded units are kept only when they still tile this scene exactly.
+		if len(sc.TropeUnits) > 0 {
+			ok, maxEnd := true, 0
+			for _, u := range sc.TropeUnits {
+				if u.ParaStart < 0 || u.ParaEnd <= u.ParaStart || u.ParaEnd > len(sceneParas) {
+					ok = false
+					break
+				}
+				if u.ParaEnd > maxEnd {
+					maxEnd = u.ParaEnd
+				}
+			}
+			if ok && maxEnd == len(sceneParas) {
+				continue
+			}
+		}
+		beats, ranges := splitTropesFromParas(sceneParas, strings.Join(sceneParas, sep), sep)
+		if len(ranges) == 0 {
+			ranges = [][2]int{{0, len(sceneParas)}}
+		}
+		if len(beats) != len(ranges) {
+			continue
+		}
+		applyTropeSegmentation(sc, beats, ranges)
+	}
+	ch.segmentedContentRev = HashContent(ch.Content)
+}
+
+// ReanchorSceneSpans re-derives every planned scene's EXACT paragraph span and
+// trope units over the FINAL content. It is the extracted, reusable form of
+// the sequential writer's recordFinalSceneSpans closure: any flow that joins
+// or replaces whole-chapter prose (fact-check "rewrite from feedback", length
+// adjustments) must call it before SyncChapterBlocks, otherwise stale
+// ParaStart/ParaEnd fail recordedSceneParaSpans' tiling check and the viewer
+// silently drops back to one-block-per-paragraph — losing both the per-trope
+// grouping and the scene chips / feedback dots. Scenes whose accepted part
+// cannot be located keep their old bookkeeping; the budget fallback in
+// sceneParaSpans then covers them safely.
+func ReanchorSceneSpans(ch *ChapterState, finalContent string, parts []string) {
+	if ch == nil || ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+		return
+	}
+	plan := ch.ScenePlan
+	finalParas, finalSep := splitBlockParagraphs(finalContent)
+	if len(finalParas) == 0 {
+		return
+	}
+	paraAcc := 0
+	for _, p := range parts {
+		pp, _ := splitBlockParagraphs(p)
+		paraAcc += len(pp)
+	}
+	// Fast path: the accepted spans still tile the final content exactly
+	// (no length adjustment changed the paragraph count). Only refresh the
+	// trope segmentation of each scene.
+	if paraAcc > 0 && paraAcc == len(finalParas) {
+		stillTiles := true
+		for pos := range plan.Scenes {
+			sc := &plan.Scenes[pos]
+			if sc.ParaEnd <= 0 || sc.ParaStart >= sc.ParaEnd || sc.ParaEnd > len(finalParas) {
+				stillTiles = false
+				break
+			}
+			if pos > 0 && sc.ParaStart != plan.Scenes[pos-1].ParaEnd {
+				stillTiles = false
+				break
+			}
+		}
+		if stillTiles {
+			for pos := range plan.Scenes {
+				sc := &plan.Scenes[pos]
+				if sc.ParaEnd <= 0 {
+					continue
+				}
+				segBeats, segRanges := splitTropesFromParas(finalParas[sc.ParaStart:sc.ParaEnd], "", finalSep)
+				applyTropeSegmentation(sc, segBeats, segRanges)
+			}
+			return
+		}
+	}
+	// Slow path: a compression/expansion pass rewrote paragraphs, or the joined
+	// content has extra/fewer paragraphs than the parts counted. Re-anchor each
+	// accepted part inside the final paragraph list by fuzzy head/tail matching.
+	type loc struct{ lo, hi int }
+	locs := make([]loc, len(plan.Scenes))
+	cum := 0
+	found := 0
+	for pos, part := range parts {
+		if pos >= len(plan.Scenes) {
+			break
+		}
+		partParas, _ := splitBlockParagraphs(part)
+		if len(partParas) == 0 {
+			continue
+		}
+		n := locatePartSpan(finalParas, cum, partParas)
+		if n <= 0 {
+			continue
+		}
+		locs[pos] = loc{cum, cum + n}
+		cum += n
+		found++
+	}
+	if found == 0 || cum == 0 {
+		return
+	}
+	// The last located scene absorbs every remaining paragraph so the spans
+	// tile the whole content (trailing blank artifacts included).
+	if cum < len(finalParas) {
+		for pos := len(locs) - 1; pos >= 0; pos-- {
+			if locs[pos].hi > locs[pos].lo {
+				locs[pos].hi = len(finalParas)
+				break
+			}
+		}
+	}
+	for pos := range plan.Scenes {
+		sc := &plan.Scenes[pos]
+		l := locs[pos]
+		if l.hi <= l.lo || l.hi > len(finalParas) {
+			continue
+		}
+		sc.ParaStart = l.lo
+		sc.ParaEnd = l.hi
+		segBeats, segRanges := splitTropesFromParas(finalParas[l.lo:l.hi], "", finalSep)
+		applyTropeSegmentation(sc, segBeats, segRanges)
+	}
 }
 
 // classifyTropeBlock labels a trope-level block for display hints. Multi-
@@ -462,6 +649,11 @@ func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 	if totalBudget <= 0 || len(plan.Scenes) > len(paras) {
 		return nil
 	}
+	// Single-scene chapters own the whole content; the proportional walk below
+	// would snap its only boundary to len(paras)-1 and drop the last paragraph.
+	if len(plan.Scenes) == 1 {
+		return [][2]int{{0, len(paras)}}
+	}
 	totalWords := 0
 	counts := make([]int, len(paras))
 	for i, p := range paras {
@@ -515,7 +707,7 @@ func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 // proportional mapping. Returns nil when unusable.
 func recordedSceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 	plan := ch.ScenePlan
-	if plan == nil || len(plan.Scenes) < 2 {
+	if plan == nil || len(plan.Scenes) < 1 {
 		return nil
 	}
 	spans := make([][2]int, 0, len(plan.Scenes))

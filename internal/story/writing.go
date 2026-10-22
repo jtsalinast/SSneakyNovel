@@ -534,11 +534,20 @@ func FactCheckChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *
 	return nil
 }
 
-// ResetChapterAction discards the generated prose/summary/blocks of the CURRENT
-// chapter (keeping outline and scene plan) so the next generation starts from
-// scratch. Accepted chapters are protected — resetting them would desync the
-// narrative memory built from their content.
+// ResetChapterAction discards the generated prose/summary/blocks of a chapter
+// (keeping outline and scene plan) so the next generation starts from scratch.
+// Any chapter with content can be cleared — including ACCEPTED ones, so the
+// author can restart a finished chapter from zero. Clearing an accepted
+// chapter rewinds the writing cursor to it and drops every piece of derived
+// state that was built from its now-deleted prose: the per-chapter bestseller
+// analysis, pending critic interventions targeting it, the open fact-check
+// conflict when it belongs to this chapter, and any compressed-history
+// checkpoint whose chapter range includes it (a stale recap of deleted prose
+// would otherwise keep feeding later chapters phantom events).
 func ResetChapterAction(state *Progress, progressPath string, chapterNum int, logger *sse.LogBroadcaster) error {
+	if state == nil {
+		return fmt.Errorf("no progress state")
+	}
 	idx := -1
 	for i := range state.Chapters {
 		if state.Chapters[i].Num == chapterNum {
@@ -549,13 +558,8 @@ func ResetChapterAction(state *Progress, progressPath string, chapterNum int, lo
 	if idx == -1 {
 		return fmt.Errorf("chapter %d does not exist", chapterNum)
 	}
-	if idx != state.CurrentChapterIndex {
-		return fmt.Errorf("only the current chapter (#%d) can be reset", state.Chapters[state.CurrentChapterIndex].Num)
-	}
 	ch := &state.Chapters[idx]
-	if ch.Status == StatusAccepted {
-		return fmt.Errorf("chapter #%d is already accepted and cannot be reset", chapterNum)
-	}
+	wasAccepted := ch.Status == StatusAccepted
 	ch.Content = ""
 	ch.Summary = ""
 	ch.Blocks = nil
@@ -563,15 +567,68 @@ func ResetChapterAction(state *Progress, progressPath string, chapterNum int, lo
 	ch.BlockSep = ""
 	ch.DraftSavedAt = ""
 	ch.ContinuityNotes = nil
+	ch.Analysis = nil
+	ch.WordCount = 0
+	ch.KnowledgeTracked = false
 	ch.Status = StatusPending
-	state.PendingWritingConflict = nil
+	if state.PendingWritingConflict != nil &&
+		(state.PendingWritingConflict.ChapterNum == chapterNum || state.PendingWritingConflict.ChapterIndex == idx) {
+		state.PendingWritingConflict = nil
+	}
+	// Critic interventions pointing at the wiped prose no longer have targets.
+	dropInterventionsForChapter(state, chapterNum)
+	// Compressed recaps covering the cleared chapter describe deleted text.
+	if n := len(state.NarrativeCheckpoints); n > 0 {
+		kept := state.NarrativeCheckpoints[:0]
+		for _, cp := range state.NarrativeCheckpoints {
+			if cp.StartChapter <= chapterNum && chapterNum <= cp.EndChapter {
+				continue
+			}
+			kept = append(kept, cp)
+		}
+		state.NarrativeCheckpoints = kept
+	}
+	// Rewind the cursor so the chapter becomes the current one again; without
+	// this the "pending other chapter" guard and generation order would break.
+	if wasAccepted || idx < state.CurrentChapterIndex {
+		state.CurrentChapterIndex = idx
+	}
 	state.PendingScenePlanChapter = 0
 	if err := SaveProgress(progressPath, state); err != nil {
 		return err
 	}
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
-	logger.InfoKey("log.chapter_reset", chapterNum)
+	if logger != nil {
+		logger.InfoKey("log.chapter_reset", chapterNum)
+	}
 	return nil
+}
+
+// dropInterventionsForChapter removes every PENDING critic intervention that
+// targets the given chapter from all drafted-chapter analyses. Applied ones
+// stay as history records. Shared by ResetChapterAction so clearing a chapter
+// never leaves dangling trope-unit pointers into deleted prose.
+func dropInterventionsForChapter(state *Progress, chapterNum int) {
+	for i := range state.Chapters {
+		an := state.Chapters[i].Analysis
+		if an == nil {
+			continue
+		}
+		for j := range an.Suggestions {
+			sg := &an.Suggestions[j]
+			if len(sg.Interventions) == 0 {
+				continue
+			}
+			kept := sg.Interventions[:0]
+			for _, iv := range sg.Interventions {
+				if iv.ChapterNum == chapterNum && iv.Status != "applied" {
+					continue
+				}
+				kept = append(kept, iv)
+			}
+			sg.Interventions = kept
+		}
+	}
 }
 
 // ErrSummaryStepFailed is returned (wrapped by abortChapterWithDraftCheckpoint)
@@ -655,6 +712,11 @@ func finalizeChapterSummary(ctx context.Context, apiCfg *config.APIConfig, cfg *
 		}
 	}
 	ch.Summary = summary
+	// Every content mutation that funnels through this checkpoint (initial
+	// generation, critic repairs, conflict retries) must leave the story
+	// blocks in sync with ch.Content; otherwise the viewer falls back to
+	// one-block-per-paragraph and loses the scene chips / trope grouping.
+	SyncChapterBlocksSceneAware(ch, ch.Content)
 	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 	if err := SaveProgress(progressPath, state); err != nil {
 		return "", err
@@ -1756,6 +1818,8 @@ func SmoothTransitionsAction(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		} else {
 			ch.Content = revised + "\n\n" + strings.TrimLeft(rest, "\n")
 		}
+		// Keep blocks tiled to the scene plan after the transition edit.
+		SyncChapterBlocksSceneAware(ch, ch.Content)
 		SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
 		ch.KnowledgeTracked = true
 		if err := SaveProgress(progressPath, state); err != nil {
@@ -1821,6 +1885,14 @@ func PolishChapterAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	}
 
 	ch.Content = stripChapterMetaProse(result, cfg.Language)
+	// The polish pass rewrites the whole prose; re-anchor scene spans and
+	// re-tile blocks so scene chips and trope grouping survive it.
+	if ch.ScenePlan != nil && len(ch.ScenePlan.Scenes) > 0 {
+		polParas, _ := splitBlockParagraphs(ch.Content)
+		ReanchorSceneSpans(ch, ch.Content, scenePartsFromSpans(polParas, ch.ScenePlan))
+	}
+	SyncChapterBlocksSceneAware(ch, ch.Content)
+	RefreshTropeIssuesForChapter(state, ch)
 	ch.KnowledgeTracked = true
 	ch.Status = StatusReview
 

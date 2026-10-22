@@ -192,8 +192,15 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			BlockIDs []int  `json:"block_ids"`
 		} `json:"new_memories"`
 	}
-	if err := json.Unmarshal([]byte(cleanJSONResponse(raw)), &result); err != nil {
-		return err
+	payload := cleanJSONResponse(raw)
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		repaired, ok := repairMemoryJSONPayload(raw, payload)
+		if !ok {
+			return err
+		}
+		if err := json.Unmarshal([]byte(repaired), &result); err != nil {
+			return err
+		}
 	}
 	if result.NewMemories == nil {
 		return fmt.Errorf("missing new_memories array")
@@ -214,20 +221,28 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 	for _, m := range next.MemoryEntries {
 		storedByID[m.ID] = m.Content
 	}
-	for _, nm := range *result.NewMemories {
+	for idx := range *result.NewMemories {
+		nm := &(*result.NewMemories)[idx]
 		if nm.ID > 0 && !visibleFacts[nm.ID] {
 			// The memory prompt only shows a budgeted subset of facts, yet models
 			// routinely echo ids from earlier turns or invent their own numbering.
 			// If the id exists in storage and the content matches that stored fact
 			// (verbatim or paraphrase), accept it as an update instead of failing
 			// the whole sync — the previous hard rejection made sync fail
-			// permanently ("id=N was not supplied") on every retry.
+			// permanently ("id=N was not supplied") on every retry. A non-paraphrase
+			// rewrite of a REAL stored id keeps the same lenient policy used below:
+			// fall back to the stored text (identity preserved) unless it flips a
+			// negation. Only unknown/invented ids stay fatal.
 			if stored, ok := storedByID[nm.ID]; ok {
 				oldN, newN := normalizeFactText(stored), normalizeFactText(nm.Content)
-				if oldN == newN || (!factNegationFlipped(oldN, newN) && factContentEquivalent(oldN, newN)) {
+				switch {
+				case oldN == newN || (!factNegationFlipped(oldN, newN) && factContentEquivalent(oldN, newN)):
 					visibleFacts[nm.ID] = true
-				} else {
-					return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
+				case factNegationFlipped(oldN, newN):
+					return fmt.Errorf("invalid existing fact identity: id=%d contradicts the stored fact (negation flipped)", nm.ID)
+				default:
+					nm.Content = stored
+					visibleFacts[nm.ID] = true
 				}
 			} else {
 				return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
@@ -278,9 +293,24 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			old := normalizeFactText(next.MemoryEntries[target].Content)
 			newC := normalizeFactText(nm.Content)
 			if old != newC {
-				if factNegationFlipped(old, newC) || !factContentEquivalent(old, newC) {
-					return fmt.Errorf("invalid existing fact identity: id=%d must preserve the supplied content exactly", nm.ID)
+				// A paraphrase that keeps the meaning evolves the fact in place. A
+				// wording change that drops below the equivalence threshold is NOT a
+				// hard failure anymore: after a chapter rewrite the model legitimately
+				// re-summarizes facts with different vocabulary, and aborting the whole
+				// batch ("must preserve the supplied content exactly") made memory sync
+				// fail PERMANENTLY for every later action. Instead the row falls back
+				// to the stored text — the identity stays anchored and only the exact
+				// phrasing is preserved. Negation flips remain fatal because they
+				// invert the fact's truth value.
+				// Negation polarity must never flip silently: if one statement is
+				// negated and the other is not, the model contradicts the stored
+				// fact's truth value — fatal. Checked on top of the token-set
+				// heuristic so contracted forms ("didn't" -> "didnt") count too.
+				if factNegationFlipped(old, newC) ||
+					factContainsNegation(old) != factContainsNegation(newC) {
+					return fmt.Errorf("invalid existing fact identity: id=%d contradicts the stored fact (negation flipped)", nm.ID)
 				}
+				nm.Content = next.MemoryEntries[target].Content
 			}
 		}
 		parsed = append(parsed, struct {
@@ -338,6 +368,67 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 	}
 	return nil
 }
+
+// repairMemoryJSONPayload salvages a memory-sync response that failed to
+// parse. Models frequently emit invalid JSON around the payload — prose
+// preambles, truncated output, raw newlines or unescaped quotes inside string
+// values — and the resulting "invalid character 'i' looking for beginning of
+// value" made sync abort permanently after every rewrite. Strategy: try
+// progressively more aggressive cleanups (greedy balanced-object extraction,
+// control-character escaping inside strings) and return the first candidate
+// that parses as a well-formed object. ok=false means nothing could be saved.
+func repairMemoryJSONPayload(raw, payload string) (string, bool) {
+	candidates := []string{
+		extractJSONObject(raw),
+		sanitizeJSONControlChars(payload),
+		sanitizeJSONControlChars(extractJSONObject(raw)),
+	}
+	for _, c := range candidates {
+		if c == "" || c == payload {
+			continue
+		}
+		var probe map[string]json.RawMessage
+		if json.Unmarshal([]byte(c), &probe) == nil && len(probe) > 0 {
+			return c, true
+		}
+	}
+	return "", false
+}
+
+// sanitizeJSONControlChars escapes literal control characters (newlines, tabs)
+// that appear INSIDE JSON string values — the most common malformation in
+// long-form model output — leaving the rest of the document untouched.
+func sanitizeJSONControlChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 16)
+	inStr, esc := false, false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case ch == '\\':
+				esc = true
+			case ch == '"':
+				inStr = false
+			case ch == '\n':
+				b.WriteString("\\n")
+				continue
+			case ch == '\r':
+				continue
+			case ch == '\t':
+				b.WriteString("\\t")
+				continue
+			}
+		} else if ch == '"' {
+			inStr = true
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
+}
+
 
 // factContentEquivalent reports whether two memory texts express the same
 // fact despite wording differences: identical after normalization, or sharing
@@ -404,6 +495,32 @@ var factNegationWords = map[string]bool{
 	"ningún": true, "ningun": true, "ninguna": true, "ninguno": true,
 	"nadie": true, "nada": true,
 	"sin": true,
+}
+
+// factNegationPrefixes are per-language negation prefixes glued to the verb
+// ("didn't", "noquemó"). The tokenizer strips apostrophes, so "didn't" arrives
+// as the single token "didnt"; without this list a plain English negation flip
+// would go undetected and silently overwrite a stored fact's truth value.
+var factNegationPrefixes = map[string]bool{
+	// english (contracted forms, post-normalization)
+	"didnt": true, "doesnt": true, "dont": true, "isnt": true, "wasnt": true,
+	"wont": true, "cant": true, "couldnt": true, "shouldnt": true,
+	"wouldnt": true, "havent": true, "hasnt": true, "hadnt": true,
+	"arent": true, "aint": true,
+	// spanish (glued preverbal negation, e.g. "noquemó" -> "noquemo")
+	"no": true,
+}
+
+// factContainsNegation reports whether s carries any explicit negation marker,
+// either as a standalone word or as a contracted/glued prefix.
+func factContainsNegation(s string) bool {
+	set := factTokenSet(normalizeFactText(s))
+	for t := range set {
+		if factNegationWords[t] || factNegationPrefixes[t] {
+			return true
+		}
+	}
+	return false
 }
 
 func factNegationFlipped(a, b string) bool {
