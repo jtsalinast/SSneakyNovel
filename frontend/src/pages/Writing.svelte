@@ -798,8 +798,9 @@
     }
     // The continuous sheet has its OWN floating menu (edit/revise/insert/
     // delete). Suppress the legacy single-button quote popover there so both
-    // never fight over the same selection.
-    if (typeof document !== 'undefined' && document.getElementById('ChapterSheetEditor')?.contains(range.commonAncestorContainer)) {
+    // never fight over the same selection. Use the bound reference (sheetEl)
+    // instead of getElementById so it keeps working even if the id changes.
+    if (sheetEl && sheetEl.contains(range.commonAncestorContainer)) {
       quotePopover = null; return;
     }
     const rect = range.getBoundingClientRect();
@@ -1524,8 +1525,8 @@
                the reader area it settles back into its normal inline position.
                It only appears when there are unsaved edits on the sheet. -->
           <div bind:this={saveBtnSentinel} class="h-0"></div>
-          {#if ch && chapterBlocks.length > 0 && !isStreamingThis && (sheetDirty || sheetFocused)}
-            <div class="save-sheet-bar z-40 flex justify-end px-2 py-1.5 {readerAbove ? 'fixed right-4 bottom-4 shadow-xl rounded-full' : 'sticky'}">
+          {#if ch && chapterBlocks.length > 0 && !isStreamingThis && (sheetDirty || sheetFocused || readerAbove)}
+            <div class="save-sheet-bar z-40 flex justify-end px-2 py-1.5 {readerAbove ? 'fixed right-4 bottom-4 shadow-xl rounded-full' : 'sticky bottom-3'}">
               <button class="btn btn-primary btn-sm shadow-lg"
                       title={sheetDirty ? $t('writing.sheet.dirtyTip') : ''}
                       disabled={!sheetDirty || sheetSaving || $taskRunning}

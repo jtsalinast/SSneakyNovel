@@ -132,6 +132,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_analyze_cancelled": {
 
 		LangEN: "Chapter analysis cancelled"},
+	"log.chapter_analyze_bad_json_retry": {
+
+		LangEN: "Chapter %d: editor reply was not valid JSON (attempt %d) — asking the model again"},
 	"log.chapter_analyze_failed": {
 
 		LangEN: "Chapter analysis failed: %v"},
