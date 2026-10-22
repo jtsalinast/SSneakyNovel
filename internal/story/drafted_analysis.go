@@ -56,6 +56,19 @@ type TropeIntervention struct {
 	TropeLabel string `json:"trope_label,omitempty"`
 	Feedback   string `json:"feedback"`
 	Status     string `json:"status"` // pending | applied | failed
+	// CurrentText is the exact prose of the targeted trope unit AT PROPOSAL
+	// TIME. The viewer uses it to highlight the passage inline (fuzzy-matched
+	// against the live chapter text) and to show the author what a click will
+	// replace before applying anything.
+	CurrentText string `json:"current_text,omitempty"`
+	// Quote is an optional short excerpt the editor quotes as evidence for the
+	// intervention; used as a secondary highlight anchor when CurrentText no
+	// longer matches after manual edits.
+	Quote string `json:"quote,omitempty"`
+	// Action states what the intervention does to the highlighted passage:
+	// rewrite (default) | delete | insert. Drives the popup wording ("replace
+	// with…", "delete this passage").
+	Action string `json:"action,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -540,7 +553,85 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	result.DraftFingerprint = fingerprint
 	ch.Analysis = &result
 	refreshTropeIssuesWithConflict(ch, state.PendingWritingConflict)
+
+	// Auto-propose: immediately turn every advice-only chapter point into
+	// concrete trope-unit interventions so the reader shows highlighted
+	// suggestions right after the critique finishes (no per-suggestion click
+	// needed). Best-effort: a failed proposal never fails the analysis itself;
+	// the author can still trigger it manually from the critique card.
+	for _, s := range result.Suggestions {
+		if len(s.Interventions) > 0 || strings.TrimSpace(s.ID) == "" {
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if logger != nil {
+			logger.InfoKey("log.chapter_analyze_auto_proposal", draftTruncate(s.Title, 60))
+		}
+		if _, err := ProposeChapterInterventions(ctx, apiCfg, cfg, state, settings, chapterNum, s.ID, progressPath, logger); err != nil {
+			logger.WarnKey("log.chapter_analyze_auto_propose_failed", ch.Num, s.ID)
+		}
+	}
 	return nil
+}
+
+// tropeUnitProseAt returns the exact prose of one trope unit of a written
+// scene, using the same segmentation path the surgical rewriter uses
+// (sceneParaSpans + TropeUnits/spiltTropesFromParas over the chapter's own
+// paragraph separator). Used to stamp CurrentText on proposals so the viewer
+// can highlight the targeted passage inline. Returns "" when the target is
+// stale or out of range.
+func tropeUnitProseAt(ch *ChapterState, scenePos, tropeIdx int) string {
+	if ch.ScenePlan == nil || scenePos < 0 || scenePos >= len(ch.ScenePlan.Scenes) {
+		return ""
+	}
+	paras, _ := splitBlockParagraphs(ch.Content)
+	spans := sceneParaSpans(ch, paras)
+	if scenePos >= len(spans) {
+		return ""
+	}
+	sp := spans[scenePos]
+	lo, hi := sp[0], sp[1]
+	if hi <= lo || hi > len(paras) {
+		return ""
+	}
+	var sceneParas []string
+	for _, p := range paras[lo:hi] {
+		if strings.TrimSpace(p) != "" {
+			sceneParas = append(sceneParas, p)
+		}
+	}
+	if len(sceneParas) == 0 {
+		return ""
+	}
+	sep := ch.BlockSep
+	if sep == "" {
+		sep = "\n\n"
+	}
+	units := ch.ScenePlan.Scenes[scenePos].TropeUnits
+	if len(units) > 0 {
+		stillTiles := true
+		maxEnd := 0
+		for _, u := range units {
+			if u.ParaStart < 0 || u.ParaEnd <= u.ParaStart || u.ParaEnd > len(sceneParas) {
+				stillTiles = false
+				break
+			}
+			if u.ParaEnd > maxEnd {
+				maxEnd = u.ParaEnd
+			}
+		}
+		if stillTiles && maxEnd == len(sceneParas) && tropeIdx >= 0 && tropeIdx < len(units) {
+			u := units[tropeIdx]
+			return strings.Join(tropeTextsOfSpans(sceneParas, [][2]int{{u.ParaStart, u.ParaEnd}}, sep), sep)
+		}
+	}
+	beats, _ := splitTropesFromParas(sceneParas, "", sep)
+	if tropeIdx >= 0 && tropeIdx < len(beats) {
+		return beats[tropeIdx]
+	}
+	return ""
 }
 
 // ProposeChapterInterventions turns one advice-only chapter point into
@@ -601,6 +692,30 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 	for _, old := range rep.Suggestions[sIdx].Interventions {
 		if !chosen[[3]int{old.ChapterNum, old.ScenePos, old.TropeIndex}] && old.Status == "pending" {
 			merged = append(merged, old)
+		}
+	}
+	// Stamp each fresh intervention with the exact prose of its trope unit AT
+	// PROPOSAL TIME (CurrentText) plus a normalized Action, so the reader can
+	// highlight the targeted passage inline and the popup can show what a
+	// click will replace/delete before applying anything.
+	for i := range merged {
+		iv := &merged[i]
+		if iv.ChapterNum != ch.Num {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(iv.Action)) {
+		case "delete", "remove":
+			iv.Action = "delete"
+		case "insert", "add":
+			iv.Action = "insert"
+		default:
+			iv.Action = "rewrite"
+		}
+		if iv.CurrentText == "" {
+			iv.CurrentText = tropeUnitProseAt(ch, iv.ScenePos, iv.TropeIndex)
+		}
+		if iv.Quote != "" {
+			iv.Quote = draftTruncate(iv.Quote, 200)
 		}
 	}
 	rep.Suggestions[sIdx].Interventions = merged
@@ -1235,6 +1350,113 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		return &out, nil
 	}
 	return &out, nil
+}
+
+// ApplySingleChapterIntervention executes exactly ONE pending intervention of
+// one chapter suggestion (addressed by its index inside the suggestion's
+// intervention list). This is what the reader popup triggers when the author
+// clicks a highlighted passage: only that trope unit gets rewritten — the rest
+// of the suggestion stays pending and highlighted. Returns the touched chapter
+// number so callers can refresh the right view.
+func ApplySingleChapterIntervention(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, chapterNum int, suggestionID string, ivIndex int, progressPath string, logger *sse.LogBroadcaster) (int, error) {
+	idx := -1
+	for i := range state.Chapters {
+		if state.Chapters[i].Num == chapterNum {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return 0, fmt.Errorf("chapter_not_found")
+	}
+	ch := &state.Chapters[idx]
+	rep := ch.Analysis
+	if rep == nil {
+		return 0, fmt.Errorf("no_chapter_analysis")
+	}
+	sIdx := findDraftedSuggestion(rep.Suggestions, suggestionID)
+	if sIdx == -1 {
+		return 0, fmt.Errorf("suggestion_not_found")
+	}
+	ivs := rep.Suggestions[sIdx].Interventions
+	if ivIndex < 0 || ivIndex >= len(ivs) {
+		return 0, fmt.Errorf("intervention_not_found")
+	}
+	iv := &ivs[ivIndex]
+	if iv.Status != "pending" {
+		return 0, fmt.Errorf("intervention_not_pending")
+	}
+	if strings.TrimSpace(ch.Content) == "" {
+		loadDraftedChapterFilesInto(progressPath, state)
+		ch = &state.Chapters[idx]
+		ivs = rep.Suggestions[sIdx].Interventions
+		iv = &ivs[ivIndex]
+	}
+	targetIdx := -1
+	for j := range state.Chapters {
+		if state.Chapters[j].Num == iv.ChapterNum {
+			targetIdx = j
+			break
+		}
+	}
+	if targetIdx == -1 || state.Chapters[targetIdx].ScenePlan == nil {
+		iv.Status = "failed"
+		_ = SaveProgress(progressPath, state)
+		return 0, fmt.Errorf("intervention_target_missing")
+	}
+	if _, err := rewriteSceneTrope(ctx, apiCfg, cfg, state, targetIdx, settings, iv.ScenePos, iv.TropeIndex, iv.Feedback, logger); err != nil {
+		iv.Status = "failed"
+		_ = SaveProgress(progressPath, state)
+		logger.WarnKey("log.trope_intervention_failed", iv.ChapterNum, iv.ScenePos, iv.TropeIndex, err)
+		return 0, err
+	}
+	iv.Status = "applied"
+	tch := &state.Chapters[targetIdx]
+	tch.WordCount = prose.CountProseUnits(tch.Content)
+	refreshTropeIssuesWithConflict(tch, state.PendingWritingConflict)
+	allDone := true
+	for _, o := range ivs {
+		if o.Status == "pending" {
+			allDone = false
+		}
+	}
+	if allDone {
+		rep.Suggestions[sIdx].Status = "applied"
+		rep.Suggestions[sIdx].AppliedAt = time.Now().Format(time.RFC3339)
+	}
+	if err := SaveProgress(progressPath, state); err != nil {
+		return 0, err
+	}
+	logger.SuccessKey("log.trope_intervention_done", iv.ChapterNum, iv.ScenePos, iv.TropeIndex)
+	return iv.ChapterNum, nil
+}
+
+// DismissChapterIntervention marks one pending intervention as dismissed
+// WITHOUT touching the prose: the highlight disappears from the reader and
+// bulk application skips it.
+func DismissChapterIntervention(state *Progress, chapterNum int, suggestionID string, ivIndex int, progressPath string) error {
+	idx := FindChapterIdx(state, chapterNum)
+	if idx < 0 {
+		return fmt.Errorf("chapter_not_found")
+	}
+	rep := state.Chapters[idx].Analysis
+	if rep == nil {
+		return fmt.Errorf("no_chapter_analysis")
+	}
+	sIdx := findDraftedSuggestion(rep.Suggestions, suggestionID)
+	if sIdx == -1 {
+		return fmt.Errorf("suggestion_not_found")
+	}
+	ivs := rep.Suggestions[sIdx].Interventions
+	if ivIndex < 0 || ivIndex >= len(ivs) {
+		return fmt.Errorf("intervention_not_found")
+	}
+	if ivs[ivIndex].Status != "pending" {
+		return fmt.Errorf("intervention_not_pending")
+	}
+	ivs[ivIndex].Status = "dismissed"
+	refreshTropeIssuesForInterventions(state, ivs)
+	return SaveProgress(progressPath, state)
 }
 
 // ApplyActInterventions runs every pending intervention of one act suggestion

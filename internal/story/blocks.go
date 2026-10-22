@@ -34,9 +34,12 @@ type Block struct {
 	// SceneTitle / TropeLabel describe the owning scene and the trope unit
 	// inside it, for hover tooltips on the marker chip.
 	SceneTitle string `json:"scene_title,omitempty"`
-	TropeLabel string `json:"trope_label,omitempty"`
-	TropeIndex int    `json:"trope_index,omitempty"`
-	TropeCount int    `json:"trope_count,omitempty"`
+	// SceneDescription carries the full scene-plan description of the owning
+	// scene; the viewer shows it as the tooltip text of the scene-marker chip.
+	SceneDescription string `json:"scene_description,omitempty"`
+	TropeLabel       string `json:"trope_label,omitempty"`
+	TropeIndex       int    `json:"trope_index,omitempty"`
+	TropeCount       int    `json:"trope_count,omitempty"`
 }
 
 // splitBlockParagraphs splits content the same way segment revision does:
@@ -318,7 +321,7 @@ func syncSceneBlocks(ch *ChapterState) bool {
 			}
 			blocks = append(blocks, Block{
 				ID: id, Type: typ, Text: text,
-				ScenePos: pos, SceneTitle: title,
+				ScenePos: pos, SceneTitle: title, SceneDescription: strings.TrimSpace(sc.Description),
 				TropeLabel: label, TropeIndex: ui + 1, TropeCount: len(units),
 			})
 		}
@@ -585,6 +588,62 @@ func FindBlockIdx(ch *ChapterState, blockID int) int {
 		}
 	}
 	return -1
+}
+
+// SheetBlock is one paragraph of the continuous-sheet editor payload: the
+// stable block ID plus its (possibly edited) text. The reader serializes the
+// whole editable sheet as a list of these and PUTs it to /sheet in one shot.
+type SheetBlock struct {
+	ID   int    `json:"id"`
+	Text string `json:"text"`
+}
+
+// SetChapterSheetBlocks applies a full-sheet edit coming from the continuous
+// reader: every existing block gets the text sent for its ID; paragraphs the
+// author split or typed without an ID are appended with fresh IDs at the
+// position they were sent in. Content is rebuilt from the ordered texts and
+// re-synced scene-aware, so trope/scene bookkeeping (and therefore the visual
+// grouping by tropes) survives the edit. Empty texts drop the block — that is
+// how the sheet deletes a paragraph.
+func SetChapterSheetBlocks(ch *ChapterState, incoming []SheetBlock) error {
+	if len(incoming) == 0 {
+		return fmt.Errorf("empty_sheet")
+	}
+	byID := make(map[int]int, len(ch.Blocks))
+	for i, b := range ch.Blocks {
+		byID[b.ID] = i
+	}
+	next := ch.NextBlockID
+	if next <= 0 {
+		next = 1
+	}
+	texts := make([]string, 0, len(incoming))
+	seen := map[int]bool{}
+	for _, ib := range incoming {
+		t := strings.TrimRight(ib.Text, " \t")
+		if strings.TrimSpace(t) == "" {
+			continue
+		}
+		if ib.ID > 0 && byID[ib.ID] >= 0 && !seen[ib.ID] {
+			seen[ib.ID] = true
+		} else if ib.ID > 0 {
+			// Unknown/duplicate ID: treat as new paragraph, keep requested order.
+			ib.ID = next
+			next++
+		}
+		texts = append(texts, t)
+	}
+	if len(texts) == 0 {
+		return fmt.Errorf("empty_sheet")
+	}
+	sep := ch.BlockSep
+	if sep == "" {
+		sep = "\n\n"
+	}
+	ch.Content = strings.Join(texts, sep)
+	ch.NextBlockID = next
+	SyncChapterBlocks(ch)
+	return nil
 }
 
 var ErrBlockNotFound = fmt.Errorf("block not found")

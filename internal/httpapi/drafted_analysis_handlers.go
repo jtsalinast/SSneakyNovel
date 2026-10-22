@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"showmethestory/internal/i18n"
+	"showmethestory/internal/prose"
 	"showmethestory/internal/story"
 )
 
@@ -578,6 +581,172 @@ func (h *Handlers) PostChapterInterventionsApply(w http.ResponseWriter, r *http.
 		"interventions": applied,
 		"progress":      story.ProgressView(h.state),
 	})
+}
+
+// PostChapterInterventionApplyOne executes exactly ONE pending intervention of
+// a chapter suggestion (the reader popup's "apply" button). Body:
+// {"id":"chpa_...","iv":0}. Bulk apply skips non-pending interventions, so a
+// dismissed one is never rewritten later.
+func (h *Handlers) PostChapterInterventionApplyOne(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	num, ok := h.chapterAnalyzeTarget(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+		IV int    `json:"iv"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.ID) == "" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_suggestion_id")
+		return
+	}
+	if !h.tryStartTask() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	defer h.endTask()
+	ctx := h.ensureTaskTokens(h.taskCtx)
+	h.logger.TaskStart("chapter_intervention_apply_one")
+	touched, err := story.ApplySingleChapterIntervention(ctx, h.apiCfg, h.cfg, h.state, h.settings, num, strings.TrimSpace(body.ID), body.IV, h.progressPath, h.logger)
+	if err != nil {
+		h.logger.TaskEnd("chapter_intervention_apply_one", false)
+		status := http.StatusInternalServerError
+		code := "apply_failed"
+		switch err.Error() {
+		case "no_chapter_analysis", "suggestion_not_found", "intervention_not_found":
+			status = http.StatusNotFound
+			code = err.Error()
+		case "intervention_not_pending":
+			status = http.StatusConflict
+			code = err.Error()
+		}
+		h.writeErrorReq(w, r, status, code, err)
+		return
+	}
+	h.logger.TaskEnd("chapter_intervention_apply_one", true)
+	h.broadcastProgress()
+	resp := map[string]any{
+		"status":   "applied",
+		"id":       body.ID,
+		"iv":       body.IV,
+		"progress": story.ProgressView(h.state),
+	}
+	for i := range h.state.Chapters {
+		if h.state.Chapters[i].Num == touched {
+			resp["chapter"] = h.state.Chapters[i]
+			break
+		}
+	}
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// PostChapterInterventionDismiss marks one pending intervention as dismissed
+// without touching the prose (the reader popup's "dismiss" button). Body:
+// {"id":"chpa_...","iv":0}.
+func (h *Handlers) PostChapterInterventionDismiss(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) || h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	num, ok := h.chapterAnalyzeTarget(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+		IV int    `json:"iv"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.ID) == "" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_suggestion_id")
+		return
+	}
+	if err := story.DismissChapterIntervention(h.state, num, strings.TrimSpace(body.ID), body.IV, h.progressPath); err != nil {
+		status := http.StatusInternalServerError
+		switch err.Error() {
+		case "no_chapter_analysis", "suggestion_not_found", "intervention_not_found":
+			status = http.StatusNotFound
+		case "intervention_not_pending":
+			status = http.StatusConflict
+		}
+		h.writeErrorReq(w, r, status, "dismiss_failed", err)
+		return
+	}
+	h.broadcastProgress()
+	h.writeJSON(w, http.StatusOK, map[string]any{"status": "dismissed", "progress": story.ProgressView(h.state)})
+}
+
+// PutChapterSheet replaces ALL block texts of a chapter in one request — the
+// sticky "Save" of the continuous-sheet reader serializes every paragraph of
+// the editable sheet and sends it here. Blocks are matched by ID; unknown IDs
+// and missing blocks fall back to a full re-sync from the rebuilt content, so
+// paragraph splits/merges done in the sheet survive the round trip.
+func (h *Handlers) PutChapterSheet(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+	var body struct {
+		Blocks []struct {
+			ID   int    `json:"id"`
+			Text string `json:"text"`
+		} `json:"blocks"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Blocks) == 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "sheet_blocks_required")
+		return
+	}
+	idx := story.FindChapterIdx(h.state, num)
+	if idx < 0 {
+		h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+		return
+	}
+	ch := &h.state.Chapters[idx]
+	before := *ch
+	before.Blocks = append([]story.Block(nil), ch.Blocks...)
+	if err := story.SetChapterSheetBlocks(ch, bodyTexts(body.Blocks)); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "sheet_apply_failed", err.Error())
+		return
+	}
+	opts := story.FactEditOptions{ContentRev: r.Header.Get("X-Content-Rev"), ConfirmFactImpact: r.Header.Get("X-Confirm-Fact-Impact") == "true"}
+	if err := story.ValidateFactEdit(h.state, before, *ch, opts, i18n.FromRequest(r)); err != nil {
+		*ch = before
+		h.writeErrorReq(w, r, http.StatusConflict, "fact_impact_confirm", err)
+		return
+	}
+	ch.KnowledgeTracked = true
+	if err := story.SaveProgress(h.progressPath, h.state); err != nil {
+		*ch = before
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err)
+		return
+	}
+	story.RefreshTropeIssuesForChapter(h.state, ch)
+	story.SaveChapterMarkdown(h.projectDir(), *ch, h.state.Title)
+	h.broadcastProgress()
+	resp := *ch
+	if resp.Content != "" {
+		resp.WordCount = prose.CountProseUnits(resp.Content)
+		resp.ContentRev = fmt.Sprintf("%x", story.HashContent(resp.Content))
+	}
+	h.writeJSON(w, http.StatusOK, resp)
+	h.startKnowledgeSync()
+}
+
+func bodyTexts(in []struct {
+	ID   int    `json:"id"`
+	Text string `json:"text"`
+}) []story.SheetBlock {
+	out := make([]story.SheetBlock, len(in))
+	for i, b := range in {
+		out[i] = story.SheetBlock{ID: b.ID, Text: b.Text}
+	}
+	return out
 }
 
 // DeleteChapterAnalysis clears one chapter's stored editorial report.
