@@ -543,6 +543,35 @@ func sceneTropeLabels(ch *ChapterState, pos int, spans [][2]int, sceneParas []st
 	return out
 }
 
+// breakSceneSpans derives pseudo-scenes from HARD BREAK markers ("---"), the
+// same tiling SyncChapterBlocks uses for the reader chips when no usable scene
+// plan exists. Returns one [lo,hi) span per break-delimited group (paragraphs
+// equal to a break marker are excluded from their span). The whole chapter is
+// one span when it contains no breaks. Always non-empty for non-empty paras.
+func breakSceneSpans(paras []string) [][2]int {
+	if len(paras) == 0 {
+		return nil
+	}
+	var spans [][2]int
+	start := -1
+	for j := range paras {
+		if paraIsBreak(paras[j]) {
+			if start >= 0 && j > start {
+				spans = append(spans, [2]int{start, j})
+			}
+			start = -1
+			continue
+		}
+		if start < 0 {
+			start = j
+		}
+	}
+	if start >= 0 && len(paras) > start {
+		spans = append(spans, [2]int{start, len(paras)})
+	}
+	return spans
+}
+
 // sceneParaSpans returns [start,end) paragraph spans for every planned scene.
 // It prefers the EXACT absolute spans recorded by the sequential writer
 // (Scene.ParaStart/ParaEnd, plus per-scene trope units that tile each span);

@@ -1336,7 +1336,7 @@
                             </div>
                           {:else}
                             {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-1" contenteditable="false">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation={() => { activeFact = fact; highlightedBlock = b.id; knowledgeExpanded = true; }}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
-                            <span class="whitespace-pre-wrap">{#if ivSegmentsFor(b.text, b.id)}{#each ivSegmentsFor(b.text, b.id) as seg, si (si)}{#if seg.iv}<mark class="iv-mark" contenteditable="false" role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation={(e) => openIVPopup(e, findIvForSegment(seg.t))}>{seg.t}</mark>{:else}{seg.t}{/if}{/each}{:else}{b.text}{/if}</span>
+                            <span class="whitespace-pre-wrap">{#if ivSegmentsFor(b.text, b.id)}{#each ivSegmentsFor(b.text, b.id) as seg, si (si)}{#if seg.iv}<span class="iv-mark" contenteditable="false" role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation={(e) => openIVPopup(e, findIvForSegment(seg.t))} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, findIvForSegment(seg.t)); } }}>{seg.t}</span>{:else}{seg.t}{/if}{/each}{:else}{b.text}{/if}</span>
                             {#if tropeIssuesFor(b)}
                               {@const ti = tropeIssuesFor(b)}
                               <span class="inline-flex items-center gap-1 align-top ml-1" contenteditable="false">
