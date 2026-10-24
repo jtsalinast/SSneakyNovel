@@ -24,14 +24,59 @@ func TestApplyChapterMemoryResultAcceptsParaphrase(t *testing.T) {
 	}
 }
 
-func TestApplyChapterMemoryResultRejectsDifferentContent(t *testing.T) {
+func TestApplyChapterMemoryResultSurvivesDifferentContent(t *testing.T) {
+	// A model rewriting an existing id with unrelated content used to fail the
+	// whole sync forever ("must preserve the supplied content exactly"). Now the
+	// stored fact keeps its wording, the bogus rewrite is dropped, and only the
+	// evidence anchors refresh — sync completes instead of erroring.
 	ch := ChapterState{Num: 1, Blocks: []Block{{ID: 1, Text: "Cordelia burned the letter."}}}
 	next := Progress{MemoryEntries: []MemoryEntry{{ID: 8, Content: "Cordelia burned the letter", Category: "event"}}}
 	raw, _ := json.Marshal(map[string]any{"new_memories": []any{
 		map[string]any{"id": 8, "content": "The countess poisoned the wine at the ball in front of everyone.", "category": "event", "block_ids": []int{1}},
 	}})
-	if err := applyChapterMemoryResult(&next, ch, map[int]bool{8: true}, string(raw)); err == nil || !strings.Contains(err.Error(), "preserve the supplied content") {
-		t.Fatalf("substantially different content must still fail identity check, got: %v", err)
+	if err := applyChapterMemoryResult(&next, ch, map[int]bool{8: true}, string(raw)); err != nil {
+		t.Fatalf("reworded existing fact must not fail sync: %v", err)
+	}
+	if len(next.MemoryEntries) != 1 || next.MemoryEntries[0].Content != "Cordelia burned the letter" {
+		t.Fatalf("stored fact wording must be preserved: %+v", next.MemoryEntries)
+	}
+	if len(next.MemoryEntries[0].References) != 1 {
+		t.Fatalf("evidence anchor should still refresh: %+v", next.MemoryEntries[0].References)
+	}
+}
+
+func TestApplyChapterMemoryResultNegationFlipKeepsStoredFact(t *testing.T) {
+	// "alive" vs "not alive" flips meaning; instead of aborting the batch, the
+	// stored content survives and the sync completes.
+	ch := ChapterState{Num: 1, Blocks: []Block{{ID: 1, Text: "The guard says he is not alive anymore."}}}
+	next := Progress{MemoryEntries: []MemoryEntry{{ID: 34, Content: "The butler is alive", Category: "character"}}}
+	raw, _ := json.Marshal(map[string]any{"new_memories": []any{
+		map[string]any{"id": 34, "content": "The butler is not alive", "category": "character", "block_ids": []int{1}},
+	}})
+	if err := applyChapterMemoryResult(&next, ch, map[int]bool{34: true}, string(raw)); err != nil {
+		t.Fatalf("negation flip must not fail sync: %v", err)
+	}
+	if next.MemoryEntries[0].Content != "The butler is alive" {
+		t.Fatalf("stored fact must be kept on negation flip: %+v", next.MemoryEntries[0])
+	}
+}
+
+func TestApplyChapterMemoryResultCondensedRewriteUpdatesInPlace(t *testing.T) {
+	// Moderate rewording (Jaccard between minFactOverlapRatio and 0.5) is a
+	// legitimate condensation: accepted as an update, no duplicate entry.
+	ch := ChapterState{Num: 1, Blocks: []Block{{ID: 1, Text: "He bears a scar on his left cheek."}}}
+	next := Progress{MemoryEntries: []MemoryEntry{{ID: 5, Content: "Kael has a scar on his left cheek from a knife fight years ago", Category: "character"}}}
+	raw, _ := json.Marshal(map[string]any{"new_memories": []any{
+		map[string]any{"id": 5, "content": "Kael bears a scar, left cheek", "category": "character", "block_ids": []int{1}},
+	}})
+	if err := applyChapterMemoryResult(&next, ch, map[int]bool{5: true}, string(raw)); err != nil {
+		t.Fatalf("condensed rewrite must be accepted: %v", err)
+	}
+	if len(next.MemoryEntries) != 1 {
+		t.Fatalf("no duplicate entries expected: %+v", next.MemoryEntries)
+	}
+	if !strings.Contains(next.MemoryEntries[0].Content, "scar") {
+		t.Fatalf("unexpected content: %+v", next.MemoryEntries[0])
 	}
 }
 

@@ -222,13 +222,16 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			// (verbatim or paraphrase), accept it as an update instead of failing
 			// the whole sync — the previous hard rejection made sync fail
 			// permanently ("id=N was not supplied") on every retry.
-			if stored, ok := storedByID[nm.ID]; ok {
-				oldN, newN := normalizeFactText(stored), normalizeFactText(nm.Content)
-				if oldN == newN || (!factNegationFlipped(oldN, newN) && factContentEquivalent(oldN, newN)) {
-					visibleFacts[nm.ID] = true
-				} else {
-					return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
-				}
+			if _, ok := storedByID[nm.ID]; ok {
+				// Accept verbatim echoes and paraphrases; even a divergent rewrite of
+				// a genuinely stored id is handled leniently below (the sync used to
+				// die here with "was not supplied" whenever the budgeted prompt
+				// omitted that fact). A negation flip against an invisible id is NOT
+				// rejected outright either: it would fail every retry forever when the
+				// chapter legitimately contradicts an old fact. The sanitize step in
+				// this same pass keeps the stored wording instead, refreshing only the
+				// evidence anchors.
+				visibleFacts[nm.ID] = true
 			} else {
 				return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
 			}
@@ -248,16 +251,32 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 				break
 			}
 		}
+		// Paraphrase-dedup for genuinely new facts (id=0): never onto an entry
+		// another row already claims, so two different facts cannot be merged
+		// into one identity by fuzzy matching.
 		if target < 0 && nm.ID == 0 {
-			// Paraphrase-dedup only for genuinely new facts (id=0), and never onto
-			// an entry another row already claims, so two different facts cannot be
-			// merged into one identity by fuzzy matching. Existing facts must echo
-			// their stored id to be updated.
 			for j, m := range next.MemoryEntries {
 				if claimedTargets[j] {
 					continue
 				}
 				if m.Content == nm.Content || factContentEquivalent(m.Content, nm.Content) {
+					target = j
+					break
+				}
+			}
+		}
+		// A reworded update of a known fact is not a brand-new fact: if the model
+		// echoed a real stored id but rewrote the content past equivalence (or
+		// dropped the id while paraphrasing), match it fuzzily against any
+		// unclaimed entry. This prevents both spurious duplicates and the hard
+		// "must preserve the supplied content exactly" failure that made sync
+		// retry forever whenever a model legitimately condensed a fact's wording.
+		if target < 0 && strings.TrimSpace(nm.Content) != "" {
+			for j, m := range next.MemoryEntries {
+				if claimedTargets[j] {
+					continue
+				}
+				if factContentEquivalent(m.Content, nm.Content) {
 					target = j
 					break
 				}
@@ -278,9 +297,58 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			old := normalizeFactText(next.MemoryEntries[target].Content)
 			newC := normalizeFactText(nm.Content)
 			if old != newC {
-				if factNegationFlipped(old, newC) || !factContentEquivalent(old, newC) {
-					return fmt.Errorf("invalid existing fact identity: id=%d must preserve the supplied content exactly", nm.ID)
+				sa, sb := factTokenSet(old), factTokenSet(newC)
+				inter := 0
+				for t := range sa {
+					if sb[t] {
+						inter++
+					}
 				}
+				union := len(sa) + len(sb) - inter
+				score := 1.0
+				if union > 0 {
+					score = float64(inter) / float64(union)
+				}
+				switch {
+				case factNegationFlipped(old, newC):
+					// The rewrite states the opposite of the stored fact. Rather than
+					// failing the entire sync (every retry hit this error because the
+					// chapter text genuinely contradicts the old fact), keep the stored
+					// wording untouched and just refresh its evidence anchors for this
+					// chapter below.
+					nm.Content = next.MemoryEntries[target].Content
+				case score >= minFactOverlapRatio:
+					// Substantially different wording that still shares core tokens:
+					// treat it as a legitimate condensation/update instead of aborting
+					// the whole batch. Sync used to die here with
+					// "id=N must preserve the supplied content exactly".
+				default:
+					// Almost no shared vocabulary — too risky to accept silently.
+					// Keep the stored content and refresh anchors rather than
+					// failing the sync outright.
+					nm.Content = next.MemoryEntries[target].Content
+				}
+			}
+		} else if nm.ID > 0 && target < 0 {
+			// The model echoed a real stored id whose CONTENT matches nothing in
+			// the ledger (exact + fuzzy match failed). Failing here made sync
+			// retry forever with "id=N must preserve the supplied content
+			// exactly" whenever a model legitimately condensed or reworded a
+			// fact past the similarity floor. Ids are stable identities, so
+			// trust the id over the text: route the row to the entry the id
+			// names and keep the stored wording, refreshing only its evidence
+			// anchors below.
+			for j := range next.MemoryEntries {
+				if next.MemoryEntries[j].ID == nm.ID {
+					target = j
+					break
+				}
+			}
+			if target >= 0 {
+				claimedTargets[target] = true
+				nm.Content = next.MemoryEntries[target].Content
+			} else {
+				return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
 			}
 		}
 		parsed = append(parsed, struct {
@@ -327,6 +395,12 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			return fmt.Errorf("duplicate fact identity")
 		}
 		seenFacts[m.ID] = true
+		// Apply the (possibly sanitized) content decided during validation. Rows
+		// whose rewrite was rejected keep the stored wording; genuine paraphrases
+		// and condensations update it in place.
+		if p.content != m.Content {
+			m.Content = p.content
+		}
 		kept := []MemoryReference{}
 		for _, r := range m.References {
 			if r.Chapter != ch.Num {
@@ -361,6 +435,34 @@ func factContentEquivalent(a, b string) bool {
 	}
 	union := len(sa) + len(sb) - inter
 	return union > 0 && float64(inter)/float64(union) >= 0.5
+}
+
+// minFactOverlapRatio is the bare minimum Jaccard overlap two normalized fact
+// texts must share before a reworded update of an existing id is accepted as
+// referring to the same fact. Below it, the rewrite is treated as unrelated and
+// the stored content is preserved (sync continues instead of failing forever).
+const minFactOverlapRatio = 0.25
+
+func intersectTokenCount(a, b string) int {
+	sa, sb := factTokenSet(a), factTokenSet(b)
+	n := 0
+	for t := range sa {
+		if sb[t] {
+			n++
+		}
+	}
+	return n
+}
+
+func unionTokenCount(a, b string) int {
+	sa, sb := factTokenSet(a), factTokenSet(b)
+	inter := 0
+	for t := range sa {
+		if sb[t] {
+			inter++
+		}
+	}
+	return len(sa) + len(sb) - inter
 }
 
 func normalizeFactText(s string) string {

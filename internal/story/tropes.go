@@ -32,10 +32,15 @@ import (
 )
 
 const (
-	// tropeMinParagraphs merges tiny units so a trope unit is never a single
-	// stray line; units shorter than this get folded into their previous
-	// sibling.
+	// tropeMinParagraphs is the FLOOR of the merge/cut threshold: a trope unit
+	// is never folded down to fewer paragraphs than this, and mode-shift cuts
+	// need at least this many accumulated paragraphs. The effective threshold
+	// scales with scene size via tropeCutMinParagraphs so long scenes still
+	// segment finely instead of collapsing into one "beat" per scene.
 	tropeMinParagraphs = 2
+	// tropeMaxUnitParagraphs caps how wide a fallback size-grouped beat may
+	// get before it is split further (see groupParasIntoBeats).
+	tropeMaxUnitParagraphs = 4
 	// maxTropeRewriteRetries bounds controlled retries when a trope-unit
 	// rewrite comes back empty or collapses in length.
 	maxTropeRewriteRetries = 2
@@ -117,9 +122,16 @@ func splitTropesFromParas(paras []string, sceneProse, sep string) ([]string, [][
 	if len(paras) == 0 {
 		return nil, nil
 	}
-	if sep == "" {
-		sep = "\n\n"
-	}
+	// Derive the separator LOCALLY from the paragraph content when the caller
+	// passed none (or a stale ch.BlockSep): a scene whose paragraphs contain
+	// blank lines is really "\n\n"-joined even if the chapter-level bookkeeping
+	// says otherwise. Getting this wrong makes paragraphCountWithSep miscount
+	// unit sizes and the merge/tiling math below silently collapse scenes
+	// into a single "beat".
+	sep = localSepOf(paras, sep)
+	// Dynamic cut threshold: long scenes segment on smaller mode-shift runs so
+	// they yield several beats instead of one giant unit.
+	cutMin := tropeCutMinParagraphs(len(paras))
 	var beats []string
 	var ranges [][2]int
 	start := 0
@@ -166,12 +178,47 @@ func splitTropesFromParas(paras []string, sceneProse, sep string) ([]string, [][
 			continue
 		}
 		m := paraIsDialogue(paras[i])
-		if m != mode && i-start >= tropeMinParagraphs {
+		if m != mode && i-start >= cutMin {
+			flush(i)
+			mode = m
+			continue
+		}
+		// PIVOT cut inside a uniform-mode run: an otherwise same-kind paragraph
+		// that opens with a narrative-turn cue ("pero", "de repente", "suddenly",
+		// …) starts a new beat. Without this, scenes whose paragraphs never
+		// alternate dialogue/narration only got segmented by the size fallback
+		// below — and whenever that fallback produced just two units, the FIRST
+		// subscene chip was swallowed by the merge step further down. Cutting on
+		// pivots in the main pass yields real subscenes from the start.
+		if m == mode && i-start >= tropeMinParagraphs && paraHasPivot(paras[i]) {
 			flush(i)
 			mode = m
 		}
 	}
 	flush(len(paras))
+	// Fallback size segmentation: when the structural pass found almost NO soft
+	// cuts (uniform dialogue/narration mode across the whole scene, no usable
+	// pivot cues) a long scene would collapse into one or two giant "beats" —
+	// exactly the bug where critic suggestions anchor to the entire scene
+	// instead of individual beats. Tile the kept paragraphs into contiguous
+	// groups capped at tropeMaxUnitParagraphs, preferring cuts before
+	// narrative-turn ("pero", "suddenly", …) paragraphs. Extended from "==1"
+	// to "<=2": re-tiling is also needed when the structural pass produced a
+	// single early split, because the trailing-beat merge below would otherwise
+	// swallow the first subscene boundary entirely.
+	if len(beats) <= 2 && len(paras) >= 4 {
+		var kept []string
+		for _, p := range paras {
+			if !paraIsBreak(p) {
+				kept = append(kept, p)
+			}
+		}
+		if len(kept) >= 4 {
+			if fb, fr := groupParasIntoBeats(kept, sep, tropeMaxUnitParagraphs); len(fb) > 2 {
+				return fb, fr
+			}
+		}
+	}
 	// Merge tiny trailing beats into their predecessor so a trope unit is
 	// never a single stray paragraph when merging is possible. Merging keeps
 	// the spans contiguous (prev.lo .. last.hi), preserving the tiling.
@@ -199,6 +246,97 @@ func paraIsBreak(p string) bool {
 		return true
 	}
 	return false
+}
+
+// localSepOf re-derives the join separator from the paragraph CONTENT when the
+// caller passed none (or a stale chapter-level one). If any paragraph still
+// contains a blank line, the units were really split on "\n\n" and rebuilding
+// beat texts must use "\n\n"; otherwise single-newline joins are correct. A
+// wrong sep makes paragraphCountWithSep miscount unit sizes, which silently
+// collapses whole scenes into a single "beat".
+func localSepOf(paras []string, sep string) string {
+	if strings.Contains(sep, "\n\n") {
+		return "\n\n"
+	}
+	// Blank lines inside a "paragraph" mean the source was really blank-line
+	// separated; single-\n joins would corrupt the text on rebuild.
+	for _, p := range paras {
+		if strings.Contains(p, "\n\n") {
+			return "\n\n"
+		}
+	}
+	if sep == "" {
+		return "\n\n"
+	}
+	return sep
+}
+
+// tropeCutMinParagraphs scales the mode-shift cut threshold with scene size:
+// short scenes keep the floor (2 paragraphs before a soft cut is allowed),
+// long scenes need proportionally more accumulated prose per beat so beats
+// stay meaningful, but NEVER more than ~a quarter of the scene — guaranteeing
+// big scenes yield multiple beats instead of one giant unit.
+func tropeCutMinParagraphs(totalParas int) int {
+	m := totalParas / 8
+	if m < tropeMinParagraphs {
+		return tropeMinParagraphs
+	}
+	if cap := totalParas / 4; m > cap && cap >= tropeMinParagraphs {
+		return cap
+	}
+	return m
+}
+
+// pivotPhrases mark likely emotional/narrative turns inside an otherwise
+// uniform-mode run. The fallback beat grouper prefers to cut just BEFORE a
+// paragraph starting with one of these, in both English and Spanish (the two
+// languages this app writes in).
+var pivotPhrases = []string{
+	"but ", "however", "suddenly", "then ", "until ", "meanwhile", "later",
+	"that's when", "just then", "and then", "instead", "yet ", "when ",
+	"pero ", "sin embargo", "de repente", "entonces ", "hasta que",
+	"mientras", "después", "luego ", "en cambio", "aun así", "cuando ",
+	"no obstante", "de pronto", "eso fue cuando",
+}
+
+// paraHasPivot reports whether a paragraph opens with (or very early contains)
+// a narrative-turn cue word.
+func paraHasPivot(p string) bool {
+	low := strings.ToLower(strings.TrimSpace(p))
+	for _, ph := range pivotPhrases {
+		if strings.HasPrefix(low, ph) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupParasIntoBeats is the SIZE-FALLBACK segmenter: it tiles kept
+// (non-break) paragraphs into contiguous groups of at most maxParas, cutting
+// early at pivot-cue paragraphs so groups break on story turns rather than
+// arbitrary counts. Used when structural segmentation yields a single beat for
+// a multi-paragraph scene (the bug where every scene became one giant beat).
+func groupParasIntoBeats(paras []string, sep string, maxParas int) ([]string, [][2]int) {
+	var beats []string
+	var ranges [][2]int
+	start := 0
+	for i := 1; i <= len(paras); i++ {
+		atEnd := i == len(paras)
+		endGroup := atEnd || i-start >= maxParas
+		if !atEnd && paraHasPivot(paras[i]) && i-start >= tropeMinParagraphs {
+			endGroup = true
+		}
+		if !endGroup {
+			continue
+		}
+		text := strings.Join(paras[start:i], sep)
+		if strings.TrimSpace(text) != "" {
+			beats = append(beats, text)
+			ranges = append(ranges, [2]int{start, i})
+		}
+		start = i
+	}
+	return beats, ranges
 }
 
 func paragraphCount(text string) int {

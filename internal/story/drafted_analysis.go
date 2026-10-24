@@ -381,9 +381,9 @@ func draftedJSONSchemaEN() string {
 // interventionsRulesEN explains the intervention contract in the prompt.
 func interventionsRulesBlock(lang string) string {
 	if normalizeLangEN(lang) {
-		return `- interventions: 0 to 4 SMALL SURGICAL fixes per suggestion, each pointing at ONE concrete (chapter_num, scene_pos, trope_index) triplet shown in the written-structure map above. Each feedback must describe a minimal change confined to that subscene (sharpen the hook of this opening, cut redundancy here, raise the stakes in this exchange...) — never a whole-chapter rewrite, never a target that is not in the map. Prefer few high-value interventions over many.`
+		return `- interventions: 0 to 6 SMALL SURGICAL fixes per suggestion, each pointing at ONE concrete (chapter_num, scene_pos, trope_index) triplet shown in the written-structure map above. Each feedback must describe a minimal change confined to that subscene (sharpen the hook of this opening, cut redundancy here, raise the stakes in this exchange...) — never a whole-chapter rewrite, never a target that is not in the map. One and the same beat MAY receive more than one intervention when it needs fixes on DIFFERENT axes (e.g. pacing AND emotion): emit them as separate entries with distinct feedback texts; never merge two unrelated fixes into one long feedback.`
 	}
-	return `- interventions: de 0 a 4 correcciones QUIRÚRGICAS y pequeñas por sugerencia, cada una apuntando a UN triplete concreto (chapter_num, scene_pos, trope_index) mostrado en el mapa de estructura escrita de arriba. Cada feedback debe describir un cambio mínimo limitado a esa subescena (afilar el gancho de esta apertura, recortar redundancia aquí, subir la apuesta en este intercambio...) — nunca un reescritado del capítulo entero, nunca un destino que no aparezca en el mapa. Prefiere pocas intervenciones de alto valor frente a muchas.`
+	return `- interventions: de 0 a 6 correcciones QUIRÚRGICAS y pequeñas por sugerencia, cada una apuntando a UN triplete concreto (chapter_num, scene_pos, trope_index) mostrado en el mapa de estructura escrita de arriba. Cada feedback debe describir un cambio mínimo limitado a esa subescena (afilar el gancho de esta apertura, recortar redundancia aquí, subir la apuesta en este intercambio...) — nunca un reescritado del capítulo entero, nunca un destino que no aparezca en el mapa. UNA MISMA subescena PUEDE recibir más de una intervención cuando necesita arreglos en EJES DISTINTOS (p. ej. ritmo Y emoción): emítelas como entradas separadas con feedbacks distintos; nunca mezcles dos arreglos no relacionados en un solo feedback largo.`
 }
 
 // loadDraftedChapterFilesInto fills Content for chapters whose in-memory
@@ -1302,7 +1302,7 @@ Grading standard (you are ruthless — your reputation rests on books that hit #
 Return STRICT JSON only (no markdown fences, no prose): %s`,
 			editorPersona(lang), pc.where, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckEN,
 			strings.TrimSpace(ch.Outline), pc.tropeMap, pc.words, pc.content,
-						pillarCriteriaBlockEN(pillarKey),
+			pillarCriteriaBlockEN(pillarKey),
 			pillarKey, interventionsRulesBlock(lang), ch.Num, schema), nil
 	}
 	return fmt.Sprintf(`Eres %s, un editor literario mundialmente famoso cuyas listas han producido múltiples bestsellers globales. Califica exactamente UN pilar de tu rúbrica bestseller sobre UN capítulo borroneado: %s COMO PROSA REAL.
@@ -1338,7 +1338,7 @@ Estándar de nota (eres despiadado — tu reputación descansa en libros que lle
 Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s`,
 		editorPersona(lang), pc.whereEs, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckES,
 		strings.TrimSpace(ch.Outline), pc.tropeMap, pc.words, pc.content,
-				pillarCriteriaBlockES(pillarKey),
+		pillarCriteriaBlockES(pillarKey),
 		pillarKey, interventionsRulesBlock(lang), ch.Num, schema), nil
 }
 
@@ -1894,17 +1894,10 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 	if len(interventions) == 0 {
 		return nil, fmt.Errorf("no_valid_interventions")
 	}
-	// Accumulate: newer interventions win per (chapter, scene, trope) target.
-	merged := interventions
-	chosen := map[[3]int]bool{}
-	for _, iv := range interventions {
-		chosen[[3]int{iv.ChapterNum, iv.ScenePos, iv.TropeIndex}] = true
-	}
-	for _, old := range rep.Suggestions[sIdx].Interventions {
-		if !chosen[[3]int{old.ChapterNum, old.ScenePos, old.TropeIndex}] && old.Status == "pending" {
-			merged = append(merged, old)
-		}
-	}
+	// Accumulate: newer interventions win per EXACT advice-on-a-beat, while
+	// distinct pending suggestions already anchored to the same beat survive —
+	// a beat may legitimately carry more than one critique suggestion.
+	merged := mergeInterventions(rep.Suggestions[sIdx].Interventions, interventions)
 	// Stamp each fresh intervention with the exact prose of its trope unit AT
 	// PROPOSAL TIME (CurrentText) plus a normalized Action, so the reader can
 	// highlight the targeted passage inline and the popup can show what a
@@ -2439,13 +2432,18 @@ func requestInterventions(ctx context.Context, apiCfg *config.APIConfig, system,
 		j := llm.ExtractJSON(raw)
 		var p proposal
 		if j != "" && json.Unmarshal([]byte(j), &p) == nil {
-			seen := map[[3]int]bool{}
+			seen := map[string]bool{}
 			for _, iv := range p.Interventions {
 				iv.Feedback = strings.TrimSpace(iv.Feedback)
-				if iv.Feedback == "" || seen[[3]int{iv.ChapterNum, iv.ScenePos, iv.TropeIndex}] || !targets(iv.ChapterNum, iv.ScenePos, iv.TropeIndex) {
+				// Dedup key includes the FEEDBACK CONTENT, not just the target:
+				// one beat may legitimately carry MORE THAN ONE suggestion (e.g. a
+				// pacing fix and an emotion fix on the same trope unit). Only exact
+				// repeats of the same advice on the same beat are dropped.
+				key := interventionDedupKey(iv)
+				if iv.Feedback == "" || seen[key] || !targets(iv.ChapterNum, iv.ScenePos, iv.TropeIndex) {
 					continue
 				}
-				seen[[3]int{iv.ChapterNum, iv.ScenePos, iv.TropeIndex}] = true
+				seen[key] = true
 				iv.Status = "pending"
 				out = append(out, iv)
 			}
@@ -2457,6 +2455,48 @@ func requestInterventions(ctx context.Context, apiCfg *config.APIConfig, system,
 		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
 	}
 	return out, nil
+}
+
+// interventionDedupKey identifies one intervention for merge/dedup purposes.
+// It deliberately includes the feedback text (normalized) so several distinct
+// suggestions can coexist on the SAME (chapter, scene, trope) beat; only an
+// identical advice repeated on the same beat counts as a duplicate.
+func interventionDedupKey(iv TropeIntervention) string {
+	fb := strings.ToLower(strings.Join(strings.Fields(iv.Feedback), " "))
+	q := strings.ToLower(strings.Join(strings.Fields(iv.Quote), " "))
+	return fmt.Sprintf("%d|%d|%d|%s|%s", iv.ChapterNum, iv.ScenePos, iv.TropeIndex, fb, q)
+}
+
+// mergeInterventions accumulates fresh proposals over an existing list: newer
+// interventions win per EXACT advice-on-a-beat (see interventionDedupKey),
+// while older PENDING interventions that the new pass did not re-propose stay
+// in place. This is what lets one beat hold multiple suggestions at once.
+func mergeInterventions(existing []TropeIntervention, fresh []TropeIntervention) []TropeIntervention {
+	chosen := map[string]bool{}
+	// Dedup WITHIN the fresh batch too: an LLM pass may emit the exact same
+	// advice twice for one beat; keep only the first occurrence.
+	dedupedFresh := make([]TropeIntervention, 0, len(fresh))
+	for _, iv := range fresh {
+		k := interventionDedupKey(iv)
+		if chosen[k] {
+			continue
+		}
+		chosen[k] = true
+		dedupedFresh = append(dedupedFresh, iv)
+	}
+	fresh = dedupedFresh
+	merged := make([]TropeIntervention, 0, len(fresh)+len(existing))
+	merged = append(merged, fresh...)
+	for _, old := range existing {
+		if old.Status != "pending" {
+			continue
+		}
+		if chosen[interventionDedupKey(old)] {
+			continue // the fresh pass re-proposed this exact advice; keep the new stamp
+		}
+		merged = append(merged, old)
+	}
+	return merged
 }
 
 // applyInterventionSet executes every pending intervention through
@@ -2579,16 +2619,7 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 	if len(interventions) == 0 {
 		return nil, fmt.Errorf("no_valid_interventions")
 	}
-	merged := interventions
-	chosen := map[[3]int]bool{}
-	for _, iv := range interventions {
-		chosen[[3]int{iv.ChapterNum, iv.ScenePos, iv.TropeIndex}] = true
-	}
-	for _, old := range rep.Suggestions[sIdx].Interventions {
-		if !chosen[[3]int{old.ChapterNum, old.ScenePos, old.TropeIndex}] && old.Status == "pending" {
-			merged = append(merged, old)
-		}
-	}
+	merged := mergeInterventions(rep.Suggestions[sIdx].Interventions, interventions)
 	rep.Suggestions[sIdx].Interventions = merged
 	seenCh := map[int]bool{}
 	for _, n := range rep.Suggestions[sIdx].AppliesToChapters {

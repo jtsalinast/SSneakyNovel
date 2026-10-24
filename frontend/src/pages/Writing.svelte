@@ -729,10 +729,32 @@
     if (!meta || meta.scene_pos == null || meta.scene_pos < 0) return null;
     const metaTrope0 = meta.trope_index != null ? meta.trope_index - 1 : null;
     const marks = [];
+    // A beat can legitimately carry MORE THAN ONE critic suggestion (the
+    // backend dedups by exact advice-on-a-beat, not by beat). When two IVs
+    // resolve to overlapping spans we FUSE the ranges and accumulate every
+    // owning IV on the same mark, so both suggestions stay reachable from a
+    // single click (the popup then lists them all). The old behavior — skip
+    // any overlapping mark — silently dropped the second suggestion.
     const addMark = (sp, iv) => {
       if (!sp) return;
-      if (marks.some(m => sp[0] < m.hi && m.lo < sp[1])) return; // overlap
-      marks.push({ lo: sp[0], hi: sp[1], iv });
+      const lo = Math.max(0, Math.min(sp[0], normText(text).length));
+      const hi = Math.max(lo, Math.min(sp[1], normText(text).length));
+      if (hi <= lo) return;
+      const ov = marks.filter(m => lo < m.hi && m.lo < hi);
+      if (ov.length) {
+        const m0 = ov[0];
+        m0.lo = Math.min(m0.lo, lo);
+        m0.hi = Math.max(m0.hi, hi);
+        for (const extra of ov.slice(1)) {
+          m0.lo = Math.min(m0.lo, extra.lo);
+          m0.hi = Math.max(m0.hi, extra.hi);
+          const at = marks.indexOf(extra);
+          if (at >= 0) marks.splice(at, 1);
+        }
+        if (!m0.ivs.some(x => x.key === iv.key)) m0.ivs.push(iv);
+        return;
+      }
+      marks.push({ lo, hi, iv, ivs: [iv] });
     };
     const sceneBlocks = chapterBlocks.filter(b => b.scene_pos === meta.scene_pos);
     const firstOfScene = sceneBlocks.length ? sceneBlocks[0].id : null;
@@ -855,7 +877,7 @@
       const rs = advance(m.lo);
       const re = advance(m.hi);
       if (rs > last) segs.push({ t: raw.slice(last, rs) });
-      segs.push({ t: raw.slice(rs, re), iv: true, ivKey: m.iv ? m.iv.key : null });
+      segs.push({ t: raw.slice(rs, re), iv: true, ivKey: m.iv ? m.iv.key : null, ivKeys: (m.ivs || [m.iv]).map(x => x.key) });
       last = re;
     }
     if (last < raw.length) segs.push({ t: raw.slice(last) });
@@ -887,6 +909,18 @@
     // inline highlight it belongs to.
     return `background:${c}59 !important;color:inherit !important;border-bottom:1.5px solid ${c} !important;`;
   }
+  // Fused mark style for a beat carrying MORE THAN ONE suggestion: every
+  // owning intervention contributes its own underline (stacked) so both
+  // colors stay visible on the shared highlight, plus a superscript count
+  // badge rendered next to the mark in the sheet template.
+  function ivMarkStyleMulti(keys) {
+    if (!keys || keys.length <= 1) return ivMarkStyle(keys && keys[0]);
+    const cs = keys.map(k => IV_COLORS[ivColorIdx(k)]);
+    const bg = cs[0];
+    const borders = cs.map(c => `2px solid ${c}`).join(', ');
+    return `background:${bg}4d !important;color:inherit !important;`
+      + `border-bottom:${borders} !important;padding-bottom:3px !important;`;
+  }
   // Solid color of a suggestion — shared by the inline <mark>, the popup card
   // theme and the full-detail modal so all three always match.
   function ivColor(ivOrKey) {
@@ -902,6 +936,20 @@
   function findIvForKey(ivKey) {
     if (!ivKey) return null;
     return pendingIVs.find(x => x.key === ivKey) || null;
+  }
+  // Recover EVERY intervention owning a fused mark (a beat with two or more
+  // suggestions). Order follows the mark's key list; unknown keys are skipped.
+  function findIvsForKeys(ivKeys, segText) {
+    const list = [];
+    for (const k of ivKeys || []) {
+      const iv = findIvForKey(k);
+      if (iv && !list.some(x => x.key === iv.key)) list.push(iv);
+    }
+    if (!list.length) {
+      const iv = findIvForSegment(segText);
+      if (iv) list.push(iv);
+    }
+    return list;
   }
 
   // Popup placement: measure the card after render (popupBox action) and clamp
@@ -922,33 +970,46 @@
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
     const W = Math.min(360, vw * 0.9);
-    const H = popupBox ? popupBox.h : 240;
+    // Taller card when several suggestions share the beat (tabs + list).
+    const H = popupBox ? popupBox.h : (p.ivs && p.ivs.length > 1 ? 320 : 240);
     const gap = 10;
     let top = p.y - H - gap;                 // prefer above the mark
     if (top < 8) top = Math.min(p.y + p.h + gap, vh - H - 8); // flip below
     if (top < 8) top = 8;
     let left = p.x - W / 2;                  // center over the mark
     left = Math.max(8, Math.min(left, vw - W - 8));
-    return `left:${left}px;top:${top}px;width:${W}px;max-height:${Math.max(140, vh - 16)}px;`;
+    return `left:${left}px;top:${top}px;width:${W}px;max-height:${Math.max(140, vh - 16)}px;`
+      + `overflow-y:auto;`;
   }
 
-  function openIVPopup(e, iv) {
+  function openIVPopup(e, ivs) {
     e.preventDefault(); e.stopPropagation();
-    if (!iv) return;
+    const arr = Array.isArray(ivs) ? ivs : [ivs];
+    if (!arr.length) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    ivPopup = { x: rect.left + rect.width / 2, y: rect.top, w: rect.width, h: rect.height, iv };
+    ivPopup = { x: rect.left + rect.width / 2, y: rect.top, w: rect.width, h: rect.height,
+                iv: arr[0], ivs: arr, active: 0 };
+  }
+  function popupActiveIv() {
+    if (!ivPopup) return null;
+    const list = ivPopup.ivs || [ivPopup.iv];
+    return list[ivPopup.active] || list[0];
   }
   function hideIVPopup() { ivPopup = null; ivDetail = null; }
   function openIVDetail() {
     if (!ivPopup) return;
-    ivDetail = { iv: ivPopup.iv, color: ivColor(ivPopup.iv.key || ivPopup.iv) };
+    const iv = popupActiveIv();
+    if (!iv) return;
+    ivDetail = { iv: iv, color: ivColor(iv.key || iv), all: ivPopup.ivs || [iv] };
   }
 
   async function applyPendingIV(confirmed = false) {
     if (!ch || applyingIV) return;
     // Works from the popup OR the full-detail modal (the modal closes the
     // popup strip but keeps ivDetail — Apply/Dismiss must still resolve).
-    const iv = (ivPopup && ivPopup.iv) || (ivDetail && ivDetail.iv);
+    // With a fused mark (multiple suggestions on one beat) we act on the
+    // ACTIVE tab's intervention only, never on all of them at once.
+    const iv = (ivPopup && popupActiveIv()) || (ivDetail && ivDetail.iv);
     if (!iv) return;
     applyingIV = true;
     try {
@@ -966,10 +1027,21 @@
   }
   async function dismissPendingIV() {
     if (!ch) return;
-    const iv = (ivPopup && ivPopup.iv) || (ivDetail && ivDetail.iv);
+    const iv = (ivPopup && popupActiveIv()) || (ivDetail && ivDetail.iv);
     if (!iv) return;
     try {
       await api('POST', `/api/chapters/${ch.num}/analysis/intervention-dismiss`, { id: iv.sid, iv: pendingIvIndex(iv) });
+      // Keep the popup open when sibling suggestions remain on the same beat:
+      // drop only the dismissed one and re-point the active index. The sheet
+      // re-renders via ivRev so the mark loses this color/entry automatically.
+      if (ivPopup && ivPopup.ivs && ivPopup.ivs.length > 1) {
+        const rest = ivPopup.ivs.filter(x => x.key !== iv.key);
+        if (rest.length) {
+          ivPopup = { ...ivPopup, ivs: rest, iv: rest[0], active: 0 };
+          addToast($t('writing.iv.dismissed'), 'info');
+          return;
+        }
+      }
       hideIVPopup();
       addToast($t('writing.iv.dismissed'), 'info');
     } catch (e) { addToast(e.message, 'error'); }
@@ -978,7 +1050,18 @@
     const s = (chapterAnalysis?.suggestions || []).find(x => x.id === iv.sid);
     if (!s) return 0;
     const list = s.interventions || [];
+    // Exact identity first: with multiple suggestions anchored on the SAME
+    // beat, a positional (scene_pos/trope_index) lookup could resolve to the
+    // wrong entry. The key is `s.id + ':' + k` — the index into the very same
+    // list we are addressing here — so parse it as the primary locator.
     let i = list.findIndex(x => x.key === iv.key);
+    if (i < 0 && typeof iv.key === 'string') {
+      const pfx = iv.sid + ':';
+      if (iv.key.startsWith(pfx)) {
+        const n = Number(iv.key.slice(pfx.length));
+        if (Number.isInteger(n) && n >= 0 && n < list.length) return n;
+      }
+    }
     if (i < 0) i = list.findIndex(x => x.scene_pos === iv.scene_pos && x.trope_index === iv.trope_index);
     return Math.max(i, 0);
   }
@@ -1737,8 +1820,8 @@
                             return out.slice(0, 6);
                           })() : []}
                           <div class="sheet-chip-row flex flex-wrap items-center justify-center gap-1 py-0.5" data-bid={-bi - 1}>
-                            <span class="group inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope {m.kind === 'scene' ? 'bg-primary/10 border border-primary/20' : 'bg-secondary/10 border border-secondary/20'} cursor-default select-none" contenteditable="false">
-                              <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase {m.kind === 'scene' ? 'text-primary/70' : 'text-secondary/70'} select-none">
+                            <span class="group inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope bg-base-content/5 border border-base-content/15 cursor-default select-none" contenteditable="false">
+                              <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-base-content/50 select-none">
                                 {#if m.kind === 'scene'}{$t('writing.blockSceneMarker', [m.pos])}{:else}{$t('writing.tropeMarkerChip', [m.label || ('#' + m.idx), m.idx, m.count])}{/if}
                               </span>
                               {#if chipFacts.length}
@@ -1773,7 +1856,7 @@
                             {#if (() => { const ivs = ivSegmentsFor(b.text, b.id); const fms = factMarkSegments(b.text, b.id); return ivs || fms; })()}
                               {@const ivSegs = ivSegmentsFor(b.text, b.id)}
                               {@const fmSegs = factMarkSegments(b.text, b.id)}
-                              <span class="whitespace-pre-wrap">{#each (fmSegs && !ivSegs ? fmSegs : (ivSegs || [{ t: b.text }])) as seg, si (si)}{#if seg.iv}<mark class="iv-mark" style={ivMarkStyle(seg.ivKey)} role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation|preventDefault={(e) => openIVPopup(e, findIvForKey(seg.ivKey) || findIvForSegment(seg.t))} on:mousedown|stopPropagation={(e) => e.preventDefault()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, findIvForKey(seg.ivKey) || findIvForSegment(seg.t)); } }}>{seg.t}</mark>{:else if seg.fact}<mark class="fact-mark">{seg.t}</mark>{:else}{seg.t}{/if}{/each}</span>
+                              <span class="whitespace-pre-wrap">{#each (fmSegs && !ivSegs ? fmSegs : (ivSegs || [{ t: b.text }])) as seg, si (si)}{#if seg.iv}{@const segIvs = findIvsForKeys(seg.ivKeys || [seg.ivKey], seg.t)}<mark class="iv-mark" style={ivMarkStyleMulti(segIvs.map(x => x.key))} role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation|preventDefault={(e) => openIVPopup(e, segIvs)} on:mousedown|stopPropagation={(e) => e.preventDefault()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, segIvs); } }}>{seg.t}</mark>{#if segIvs.length > 1}<sup class="iv-count" style={'color:' + ivColor(segIvs[0].key)}>×{segIvs.length}</sup>{/if}{:else if seg.fact}<mark class="fact-mark">{seg.t}</mark>{:else}{seg.t}{/if}{/each}</span>
                             {:else}
                               <span class="whitespace-pre-wrap">{b.text}</span>
                             {/if}
@@ -1837,7 +1920,9 @@
                   </div>
                 {/if}
                 {#if ivPopup}
-                  {@const ivC = ivColor(ivPopup.iv.key || ivPopup.iv)}
+                  {@const ivList = ivPopup.ivs && ivPopup.ivs.length ? ivPopup.ivs : [ivPopup.iv]}
+                  {@const ivActive = ivList[ivPopup.active] || ivList[0]}
+                  {@const ivC = ivColor(ivActive.key || ivActive)}
                   <div class="fixed z-50 rounded-lg p-3 shadow-xl"
                        use:popupMeasure
                        style={popupPos(ivPopup) + 'border:1px solid ' + ivC + ';box-shadow:0 8px 24px rgba(0,0,0,.28), inset 0 3px 0 0 ' + ivC +';background:#ffffff;color:#1f2937'}
@@ -1846,14 +1931,31 @@
                       <span class="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={'background:' + ivC}></span>
                       {$t('writing.iv.popupTitle')}
                     </div>
-                    <div class="text-[11px] opacity-70">{@html ivActionLabelHtml(ivPopup.iv)}</div>
-                    {#if ivPopup.iv.current_text}
-                      <div class="bg-base-100 rounded p-2 mt-1 text-xs whitespace-pre-wrap overflow-hidden" style="max-height:96px">{ivPopup.iv.current_text}</div>
+                    {#if ivList.length > 1}
+                      <!-- Multiple suggestions anchored on this same beat:
+                           one tab per intervention, each keeping its own
+                           inline color so Apply/Dismiss target exactly one. -->
+                      <div class="flex flex-wrap gap-1 mb-2">
+                        {#each ivList as tIv, ti}
+                          <button class="btn btn-xs py-0 px-2 h-6 rounded-full border text-[10px] leading-none"
+                                  style={ti === ivPopup.active
+                                    ? ('background:' + ivColor(tIv.key) + ';color:#fff;border-color:' + ivColor(tIv.key))
+                                    : ('border-color:' + ivColor(tIv.key) + ';color:' + ivColor(tIv.key) + ';background:transparent')}
+                                  on:click|stopPropagation={() => { ivPopup = { ...ivPopup, active: ti, iv: ivList[ti] }; }}>
+                            <span class="inline-block w-1.5 h-1.5 rounded-full mr-1" style={'background:' + (ti === ivPopup.active ? '#fff' : ivColor(tIv.key))}></span>
+                            #{ti + 1} · {String(tIv.title || tIv.action || $t('writing.iv.popupTitle')).slice(0, 24)}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                    <div class="text-[11px] opacity-70">{@html ivActionLabelHtml(ivActive)}</div>
+                    {#if ivActive.current_text}
+                      <div class="bg-base-100 rounded p-2 mt-1 text-xs whitespace-pre-wrap overflow-hidden" style="max-height:96px">{ivActive.current_text}</div>
                     {:else}
                       <div class="text-xs italic opacity-60">{$t('writing.iv.stale')}</div>
                     {/if}
-                    {#if ivPopup.iv.feedback}
-                      <div class="text-xs leading-snug whitespace-pre-wrap overflow-hidden mt-1" style="max-height:80px">{ivPopup.iv.feedback}</div>
+                    {#if ivActive.feedback}
+                      <div class="text-xs leading-snug whitespace-pre-wrap overflow-hidden mt-1" style="max-height:80px">{ivActive.feedback}</div>
                     {/if}
                     <div class="flex gap-2 justify-between items-center mt-2">
                       <button class="btn btn-link btn-xs p-0 h-auto underline decoration-dotted" style={'color:' + ivC} on:click|stopPropagation={openIVDetail}>{$t('writing.iv.viewFull')}</button>
@@ -2132,6 +2234,17 @@
   #ChapterSheetEditor :global(.iv-mark:hover) {
     filter: brightness(0.96) saturate(1.4);
     box-shadow: 0 0 0 2px color-mix(in oklab, currentColor 8%, transparent);
+  }
+  /* Small "×N" badge shown right after a fused mark so the reader knows the
+     beat carries several critic suggestions (click opens the tabbed popup). */
+  #ChapterSheetEditor .iv-count {
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    margin-left: 1px;
+    vertical-align: super;
+    user-select: none;
+    -webkit-user-select: none;
   }
     .save-sheet-bar.sticky {
     bottom: 0.75rem;
