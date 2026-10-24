@@ -19,6 +19,7 @@ package story
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"showmethestory/internal/config"
@@ -1044,7 +1045,7 @@ func ResyncChapterInterface(ch *ChapterState) int {
 	}
 	ch.InterfaceSyncedAt = time.Now().Unix()
 	ch.InterfaceSyncCount++
-	ch.LastInterfaceReport = fmt.Sprintf("%d scenes, %d trope units, %d blocks", scenes, units, len(ch.Blocks))
+	ch.LastInterfaceReport = fmt.Sprintf("%d scenes, %d subscenes, %d blocks", scenes, units, len(ch.Blocks))
 	return scenes
 }
 
@@ -1055,7 +1056,7 @@ func ResyncChapterInterface(ch *ChapterState) int {
 // was produced before per-scene bookkeeping landed — or whose prose changed
 // afterwards — carry stale spans that make recordedSceneParaSpans reject the
 // exact tiling; without repair the whole chapter collapses into fallback
-// pseudo-scenes and the UI shows a single "Scene 1" chip with no trope chips.
+// pseudo-scenes and the UI shows a single "Scene 1" chip with no subscene chips.
 // No-op when there is no plan or no content.
 func repairSceneSpans(ch *ChapterState) {
 	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 2 || strings.TrimSpace(ch.Content) == "" {
@@ -1184,4 +1185,111 @@ func breakSceneSpansNoMarker(paras []string) [][2]int {
 		spans = append(spans, [2]int{start, len(paras)})
 	}
 	return spans
+}
+
+// SubdivideScenesIntoBeats is the TRANSITIONAL one-shot subdivision of every
+// already-written scene into subscenes/beat units (the same structural
+// segmentation splitTropesFromParas performs for freshly written scenes).
+// Chapters generated before per-scene trope bookkeeping landed carry plans
+// whose scenes have no TropeUnits at all: the locator then tiles each scene as
+// a single unit and inline critic highlights can only cover whole scenes. This
+// function re-derives ParaStart/ParaEnd from the CURRENT prose (hard-break
+// groups when they match the plan's scene count, budget walk otherwise — the
+// exact logic ResyncChapterInterface's repairSceneSpans uses) and segments each
+// scene into beat units, WITHOUT touching ch.Content or ch.Blocks. Afterwards
+// a normal "Refresh UI" re-tiles blocks with real subscene chips and pending
+// interventions get re-anchored onto the new beats. Idempotent: running it
+// again just re-derives the same deterministic segmentation. Returns the
+// number of scenes that ended up subdivided into more than one beat; 0 (with
+// nil error) means there was nothing to subdivide.
+func SubdivideScenesIntoBeats(ch *ChapterState) (int, error) {
+	if ch == nil || strings.TrimSpace(ch.Content) == "" {
+		return 0, errors.New("chapter_has_no_content")
+	}
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+		ensureFallbackScenePlan(ch)
+	}
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+		return 0, errors.New("no_scene_plan")
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 {
+		return 0, errors.New("no_paragraphs")
+	}
+	if sep == "" {
+		sep = "\n\n"
+	}
+	plan := ch.ScenePlan
+	// Re-anchor scene spans onto the current prose first: stale ParaStart /
+	// ParaEnd values would segment paragraphs that no longer belong to the
+	// scene (same failure mode repairSceneSpans fixes for resync).
+	repaired := false
+	if bs := breakSceneSpansNoMarker(paras); len(bs) == len(plan.Scenes) {
+		for pos := range plan.Scenes {
+			plan.Scenes[pos].ParaStart, plan.Scenes[pos].ParaEnd = bs[pos][0], bs[pos][1]
+		}
+		repaired = true
+	} else {
+		cum := 0
+		for pos := range plan.Scenes {
+			if cum >= len(paras) {
+				break
+			}
+			n := sceneParaEstimate(paras, cum, plan, pos)
+			hi := min(cum+n, len(paras))
+			if pos == len(plan.Scenes)-1 {
+				hi = len(paras)
+			}
+			if hi <= cum {
+				hi = min(cum+1, len(paras))
+			}
+			plan.Scenes[pos].ParaStart, plan.Scenes[pos].ParaEnd = cum, hi
+			cum = hi
+		}
+		if cum >= len(paras) {
+			repaired = true
+		}
+	}
+	if !repaired {
+		// The budget walk could not account for every paragraph: refuse to
+		// subdivide over untrusted spans instead of corrupting the tiling.
+		return 0, errors.New("scene_spans_unreliable")
+	}
+	subdivided := 0
+	for i := range plan.Scenes {
+		sc := &plan.Scenes[i]
+		lo, hi := sc.ParaStart, sc.ParaEnd
+		if lo < 0 || hi <= lo || hi > len(paras) {
+			continue
+		}
+		sceneParas := paras[lo:hi]
+		// Segment with the EXACT same function syncSceneBlocks uses when it
+		// re-derives unit spans live (sceneTropeUnitSpans -> splitTropesFromParas
+		// over ch.BlockSep). Using ch.BlockSep here instead of the local sep
+		// guarantees the recorded TropeUnits.Paras match what the iv-locator will
+		// expose after Refresh UI, so inline highlights land on beats.
+		beats, ranges := splitTropesFromParas(sceneParas, "", ch.BlockSep)
+		if len(beats) == 0 {
+			continue
+		}
+		if len(ranges) == len(beats) && len(sceneParas) > 0 {
+			filled := make([][2]int, len(ranges))
+			for j := range ranges {
+				end := len(sceneParas)
+				if j+1 < len(ranges) {
+					end = ranges[j+1][0]
+				}
+				if end < ranges[j][1] {
+					end = ranges[j][1]
+				}
+				filled[j] = [2]int{ranges[j][0], end}
+			}
+			ranges = filled
+		}
+		applyTropeSegmentation(sc, beats, ranges)
+		if len(beats) > 1 {
+			subdivided++
+		}
+	}
+	return subdivided, nil
 }

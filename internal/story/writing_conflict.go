@@ -938,7 +938,7 @@ func attachConflictSceneTargets(state *Progress, idx int, issues []string) [][2]
 	return out
 }
 
-// ensureSurgicalAction adds the "repair only this trope unit" action as the
+// ensureSurgicalAction adds the "repair only this subscene" action as the
 // FIRST suggested option whenever the conflict carries at least one locatable
 // scene target — a single-unit fix is far cheaper than rewriting the chapter.
 func ensureSurgicalAction(actions []ConflictActionOption, targets [][2]int, lang string) []ConflictActionOption {
@@ -958,11 +958,11 @@ func ensureSurgicalAction(actions []ConflictActionOption, targets [][2]int, lang
 		}
 	}
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
-	label := "Editar solo este tropo"
-	desc := "Reescribe únicamente la unidad de tropo donde vive el problema; el resto del capítulo queda intacto"
+	label := "Editar solo esta subescena"
+	desc := "Reescribe únicamente la subescena donde vive el problema; el resto del capítulo queda intacto"
 	if en {
-		label = "Edit only this trope"
-		desc = "Rewrite just the trope unit carrying the problem; the rest of the chapter stays untouched"
+		label = "Edit only this subscene"
+		desc = "Rewrite just the subscene carrying the problem; the rest of the chapter stays untouched"
 	}
 	out := make([]ConflictActionOption, 0, len(actions)+1)
 	out = append(out, ConflictActionOption{ID: "surgical_trope", Label: label, Description: desc})
@@ -1135,7 +1135,7 @@ func preserveSurgicalHistory(state *Progress, c *WritingConflict) {
 		if a.ID != "surgical_trope" {
 			continue
 		}
-		a.Description = fmt.Sprintf("Already repaired %d time(s) on the same trope unit without resolving the issue — this contradiction lives in the plan/facts, not in the local prose. Prefer revising the scene plan or the fact entries.", c.SurgicalAttempts)
+		a.Description = fmt.Sprintf("Already repaired %d time(s) on the same subscene without resolving the issue — this contradiction lives in the plan/facts, not in the local prose. Prefer revising the scene plan or the fact entries.", c.SurgicalAttempts)
 		c.SuggestedActions = append(append(c.SuggestedActions[:i], c.SuggestedActions[i+1:]...), a)
 		return
 	}
@@ -1171,13 +1171,13 @@ func recordReviseLoopFailure(cur, prev *WritingConflict, repaired, failed int) {
 	reason := ""
 	switch {
 	case looping:
-		reason = fmt.Sprintf("The flagged contradiction survived %d surgical repair(s) on the SAME trope unit plus a full-chapter rewrite — it lives in the scene plan / established facts, not in the local prose. Edit the scene plan or the fact entries directly; retrying the rewrite will keep reproducing it.", prev.SurgicalAttempts)
+		reason = fmt.Sprintf("The flagged contradiction survived %d surgical repair(s) on the SAME subscene plus a full-chapter rewrite — it lives in the scene plan / established facts, not in the local prose. Edit the scene plan or the fact entries directly; retrying the rewrite will keep reproducing it.", prev.SurgicalAttempts)
 	case failed > 0 && repaired > 0:
-		reason = fmt.Sprintf("%d trope-unit repair(s) were applied but %d failed with API errors during this pass; the remaining issues went through the full rewrite, which did not clear them either. Retry the ones that errored, or edit the scene/facts manually.", repaired, failed)
+		reason = fmt.Sprintf("%d subscene repair(s) were applied but %d failed with API errors during this pass; the remaining issues went through the full rewrite, which did not clear them either. Retry the ones that errored, or edit the scene/facts manually.", repaired, failed)
 	case failed > 0:
-		reason = fmt.Sprintf("All %d trope-unit repair(s) errored out (API/provider failures), so only the full-chapter rewrite ran — and it reproduced the same issue. Check the API settings, then retry.", failed)
+		reason = fmt.Sprintf("All %d subscene repair(s) errored out (API/provider failures), so only the full-chapter rewrite ran — and it reproduced the same issue. Check the API settings, then retry.", failed)
 	default:
-		reason = fmt.Sprintf("%d trope-unit repair(s) were applied successfully, yet the verification pass still flags the same scene — the contradiction most likely comes from the scene plan or an established fact, not the prose. Prefer editing those instead of rewriting again.", repaired)
+		reason = fmt.Sprintf("%d subscene repair(s) were applied successfully, yet the verification pass still flags the same scene — the contradiction most likely comes from the scene plan or an established fact, not the prose. Prefer editing those instead of rewriting again.", repaired)
 	}
 	f := &ConflictFailure{
 		Stage:            "revise",
@@ -1403,7 +1403,7 @@ func ReviseFromConflictAction(ctx context.Context, apiCfg *config.APIConfig, cfg
 	var surgicalRepaired, surgicalFailed int
 	ch := &state.Chapters[idx]
 	if len(surgicalTargets) > 0 && strings.TrimSpace(ch.Content) != "" {
-		logger.StepInfo(1, 4, "Applying surgical trope-unit repairs for the locatable issues before touching the rest...")
+		logger.StepInfo(1, 4, "Applying surgical subscene repairs for the locatable issues before touching the rest...")
 		done := 0
 		failedTargets := map[[2]int]bool{}
 		for _, t := range surgicalTargets {

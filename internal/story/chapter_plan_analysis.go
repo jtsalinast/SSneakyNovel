@@ -100,7 +100,7 @@ func buildChapterPlanEditorPrompt(cfg *config.Config, state *Progress, settings 
 CRITICAL CONTEXT — WHAT YOU ARE REVIEWING:
 - You are reviewing %s AS DRAFTED PROSE. This chapter EXISTS as written text (shown below); judge actual sentences, scenes, dialogue, pacing and hooks — this is NOT an outline or a beat sheet.
 - Grade the chapter both as a standalone reading experience AND as one link in its act's chain: does it deliver the function the structure assigns to this position, escalate stakes, and land a chapter-ending hook?
-- This pass is ADVICE ONLY: do NOT draft replacement text here. Concrete micro-fixes on specific beats/trope units are requested later, explicitly, via a "Propose interventions" action — so nothing gets rewritten before the author chooses to act on a specific point.
+- This pass is ADVICE ONLY: do NOT draft replacement text here. Concrete micro-fixes on specific beats/subscenes are requested later, explicitly, via a "Propose interventions" action — so nothing gets rewritten before the author chooses to act on a specific point.
 
 NOVEL PARAMETERS (the author's contract with the reader):
 %s
@@ -149,7 +149,7 @@ Rules:
 CONTEXTO CRÍTICO — QUÉ ESTÁS REVISANDO:
 - Estás revisando %s COMO PROSA BORRONEADA. Este capítulo EXISTE como texto escrito (se muestra abajo); juzga frases reales, escenas, diálogos, ritmo y ganchos — NO es un outline ni un beat sheet.
 - Evalúa el capítulo tanto como experiencia de lectura autónoma como eslabón de la cadena de su acto: ¿cumple la función que la estructura asigna a esta posición, escala la apuesta y aterriza un gancho final?
-- Esta pasada es SOLO CONSEJO: no redactes textos de reemplazo aquí. Las micro-correcciones concretas sobre beats/unidades de tropo se piden después, explícitamente, vía la acción "Proponer intervenciones" — así nada se reescribe antes de que el autor decida actuar sobre un punto específico.
+- Esta pasada es SOLO CONSEJO: no redactes textos de reemplazo aquí. Las micro-correcciones concretas sobre beats/subescenas se piden después, explícitamente, vía la acción "Proponer intervenciones" — así nada se reescribe antes de que el autor decida actuar sobre un punto específico.
 
 PARÁMETROS DE LA NOVELA (el contrato del autor con el lector):
 %s

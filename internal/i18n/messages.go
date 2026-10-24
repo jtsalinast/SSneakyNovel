@@ -115,10 +115,10 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "Act analysis complete — %d editorial suggestions"},
 	"log.act_analyze_proposing": {
 
-		LangEN: "Editor is drafting small trope interventions for this act point..."},
+		LangEN: "Editor is drafting small subscene interventions for this act point..."},
 	"log.act_analyze_proposed": {
 
-		LangEN: "Proposals ready — %d trope intervention(s) drafted"},
+		LangEN: "Proposals ready — %d subscene intervention(s) drafted"},
 	"log.act_analysis_cleared": {
 
 		LangEN: "Act analysis cleared"},
@@ -146,21 +146,21 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "Chapter %d scored %d/100 but the editor sent no actionable suggestions — re-run the critique; if it repeats, the model is answering with grades only"},
 	"log.chapter_analyze_proposing": {
 
-		LangEN: "Editor is drafting small trope interventions for this chapter point..."},
+		LangEN: "Editor is drafting small subscene interventions for this chapter point..."},
 	"log.chapter_analyze_auto_proposal": {
 
-		LangEN: "Editor is auto-drafting concrete trope interventions for chapter point \"%s\"..."},
+		LangEN: "Editor is auto-drafting concrete subscene interventions for chapter point \"%s\"..."},
 	"log.chapter_analyze_auto_propose_failed": {
-		LangEN: "Auto-proposal of trope interventions failed for chapter %d (point %s) — the author can still propose them manually"},
+		LangEN: "Auto-proposal of subscene interventions failed for chapter %d (point %s) — the author can still propose them manually"},
 	"log.chapter_analyze_proposed": {
 
-		LangEN: "Proposals ready — %d trope intervention(s) drafted"},
+		LangEN: "Proposals ready — %d subscene intervention(s) drafted"},
 	"log.trope_intervention_done": {
 
-		LangEN: "Trope intervention applied on chapter %d, scene %d, unit %d"},
+		LangEN: "Subscene intervention applied on chapter %d, scene %d, unit %d"},
 	"log.trope_intervention_failed": {
 
-		LangEN: "Trope intervention failed on chapter %d, scene %d, unit %d: %v"},
+		LangEN: "Subscene intervention failed on chapter %d, scene %d, unit %d: %v"},
 	"log.chapter_writing": {
 
 		LangEN: "Writing chapter %d..."},
@@ -288,7 +288,7 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "[Scenes] No scene could be written sequentially — falling back to single-pass chapter generation"},
 	"log.scene_tropes": {
 
-		LangEN: "[Scenes] Scene %d \"%s\" segmented into %d trope units (%s) — critiques can now repair a single unit"},
+		LangEN: "[Scenes] Scene %d \"%s\" segmented into %d subscenes (%s) — critiques can now repair a single unit"},
 	"log.scene_shrink_start": {
 
 		LangEN: "[Length] Chapter %d too long — surgically rewriting ONLY scene %d/%d \"%s\" (%d words → target %d); other scenes untouched"},
@@ -315,19 +315,19 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "[Length] Surgical shrink of scene %d (chapter %d) not possible — falling back to whole-chapter adjustment"},
 	"log.trope_rewrite_start": {
 
-		LangEN: "[Fact-check] Chapter %d: repairing scene %d, trope unit %d/%d only (rest of scene kept verbatim)..."},
+		LangEN: "[Fact-check] Chapter %d: repairing scene %d, subscene %d/%d only (rest of scene kept verbatim)..."},
 	"log.trope_rewrite_besteffort": {
 
-		LangEN: "[Fact-check] Trope rewrite for scene %d (chapter %d, unit %d) drifted from the target length — applying the closest attempt as best effort instead of failing"},
+		LangEN: "[Fact-check] Subscene rewrite for scene %d (chapter %d, unit %d) drifted from the target length — applying the closest attempt as best effort instead of failing"},
 	"log.trope_rewrite_length_guard": {
 
-		LangEN: "[Fact-check] Trope rewrite for scene %d (chapter %d) changed length too much (%d vs %d words) — retrying"},
+		LangEN: "[Fact-check] Subscene rewrite for scene %d (chapter %d) changed length too much (%d vs %d words) — retrying"},
 	"log.trope_rewrite_failed": {
 
-		LangEN: "[Fact-check] Trope rewrite attempt %d for scene %d (chapter %d) returned empty text"},
+		LangEN: "[Fact-check] Subscene rewrite attempt %d for scene %d (chapter %d) returned empty text"},
 	"log.trope_rewrite_done": {
 
-		LangEN: "[Fact-check] Scene %d trope unit %d repaired in chapter %d (scene now %d words) — rest of chapter untouched"},
+		LangEN: "[Fact-check] Scene %d subscene %d repaired in chapter %d (scene now %d words) — rest of chapter untouched"},
 	"log.chapter_total_check": {
 
 		LangEN: "[Length] All scenes written: chapter total is %d WORDS (accepted range %d–%d) — verifying whole chapter..."},
@@ -623,13 +623,13 @@ var messageCatalog = map[string]map[string]string{
 		LangEN: "[Fact-check] Passed ✓"},
 	"log.surgical_trope_start": {
 
-		LangEN: "[Surgical repair] Rewriting chapter %d · scene %d (\"%s\") · trope unit %d only — the rest of the chapter stays untouched..."},
+		LangEN: "[Surgical repair] Rewriting chapter %d · scene %d (\"%s\") · subscene %d only — the rest of the chapter stays untouched..."},
 	"log.surgical_trope_failed": {
 
 		LangEN: "[Surgical repair] Failed: %v — the chapter keeps its current text; try again or choose another option"},
 	"log.surgical_trope_done": {
 
-		LangEN: "[Surgical repair] Chapter %d trope unit rewritten and re-verified ✓"},
+		LangEN: "[Surgical repair] Chapter %d subscene rewritten and re-verified ✓"},
 	"log.chapter_write_complete": {
 
 		LangEN: "Chapter %d writing complete!"},

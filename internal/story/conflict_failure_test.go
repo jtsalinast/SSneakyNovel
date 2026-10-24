@@ -31,7 +31,7 @@ func TestRecordReviseLoopFailure_LoopOnSameTarget(t *testing.T) {
 	if f.Stage != "revise" {
 		t.Errorf("stage = %q, want revise", f.Stage)
 	}
-	if !strings.Contains(f.Reason, "SAME trope unit") {
+	if !strings.Contains(f.Reason, "SAME subscene") {
 		t.Errorf("looping reason should name the repeated-target diagnosis, got %q", f.Reason)
 	}
 	if f.SurgicalRepaired != 2 || f.FailedCount != 3 {
@@ -49,7 +49,7 @@ func TestRecordReviseLoopFailure_PartialSurgeryErrors(t *testing.T) {
 	if cur.LastFailure == nil {
 		t.Fatal("expected a note when some surgeries errored")
 	}
-	if !strings.Contains(cur.LastFailure.Reason, "3 trope-unit repair(s) were applied but 2 failed") {
+	if !strings.Contains(cur.LastFailure.Reason, "3 subscene repair(s) were applied but 2 failed") {
 		t.Errorf("partial-failure wording missing, got %q", cur.LastFailure.Reason)
 	}
 	if cur.LastFailure.ChapterNum != 5 {

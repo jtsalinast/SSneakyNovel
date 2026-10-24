@@ -140,17 +140,17 @@ func chapterTropeMapBlock(ch ChapterState, lang string) string {
 	}
 	var sb strings.Builder
 	if en {
-		sb.WriteString("[Written structure — scenes and their trope units (use THESE exact indexes for interventions)]\n")
+		sb.WriteString("[Written structure — scenes and their subscenes (use THESE exact indexes for interventions)]\n")
 	} else {
-		sb.WriteString("[Estructura escrita — escenas y sus unidades de tropo (usa ESTOS índices exactos para las intervenciones)]\n")
+		sb.WriteString("[Estructura escrita — escenas y sus subescenas (usa ESTOS índices exactos para las intervenciones)]\n")
 	}
 	for pos, sc := range ch.ScenePlan.Scenes {
 		title := sceneTitleOf(sc, lang)
 		if len(sc.TropeUnits) == 0 {
 			if en {
-				fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d words) — no trope segmentation recorded\n", pos, title, sc.WordsBudget)
+				fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d words) — no subscene segmentation recorded\n", pos, title, sc.WordsBudget)
 			} else {
-				fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d palabras) — sin segmentación de tropos registrada\n", pos, title, sc.WordsBudget)
+				fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d palabras) — sin segmentación de subescenas registrada\n", pos, title, sc.WordsBudget)
 			}
 			continue
 		}
@@ -159,9 +159,9 @@ func chapterTropeMapBlock(ch ChapterState, lang string) string {
 			units = append(units, fmt.Sprintf("trope_index=%d:%s(%dw)", u.Index, u.Label, u.Words))
 		}
 		if en {
-			fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d words) — trope units: %s\n", pos, title, sc.WordsBudget, strings.Join(units, " → "))
+			fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d words) — subscenes: %s\n", pos, title, sc.WordsBudget, strings.Join(units, " → "))
 		} else {
-			fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d palabras) — unidades de tropo: %s\n", pos, title, sc.WordsBudget, strings.Join(units, " → "))
+			fmt.Fprintf(&sb, "- scene_pos=%d \"%s\" (~%d palabras) — subescenas: %s\n", pos, title, sc.WordsBudget, strings.Join(units, " → "))
 		}
 	}
 	sb.WriteString("\n")
@@ -375,15 +375,15 @@ func finalizePillars(in []PillarAssessment, suggestions []DraftedSuggestion) []P
 // after corrections raises exactly the items that improved instead of drifting
 // around randomized example anchors like before.
 func draftedJSONSchemaEN() string {
-	return `{"summary":"...","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"..."},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS trope unit only"}]}]}`
+	return `{"summary":"...","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"..."},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS subscene only"}]}]}`
 }
 
 // interventionsRulesEN explains the intervention contract in the prompt.
 func interventionsRulesBlock(lang string) string {
 	if normalizeLangEN(lang) {
-		return `- interventions: 0 to 4 SMALL SURGICAL fixes per suggestion, each pointing at ONE concrete (chapter_num, scene_pos, trope_index) triplet shown in the written-structure map above. Each feedback must describe a minimal change confined to that trope unit (sharpen the hook of this opening, cut redundancy here, raise the stakes in this exchange...) — never a whole-chapter rewrite, never a target that is not in the map. Prefer few high-value interventions over many.`
+		return `- interventions: 0 to 4 SMALL SURGICAL fixes per suggestion, each pointing at ONE concrete (chapter_num, scene_pos, trope_index) triplet shown in the written-structure map above. Each feedback must describe a minimal change confined to that subscene (sharpen the hook of this opening, cut redundancy here, raise the stakes in this exchange...) — never a whole-chapter rewrite, never a target that is not in the map. Prefer few high-value interventions over many.`
 	}
-	return `- interventions: de 0 a 4 correcciones QUIRÚRGICAS y pequeñas por sugerencia, cada una apuntando a UN triplete concreto (chapter_num, scene_pos, trope_index) mostrado en el mapa de estructura escrita de arriba. Cada feedback debe describir un cambio mínimo limitado a esa unidad de tropo (afilar el gancho de esta apertura, recortar redundancia aquí, subir la apuesta en este intercambio...) — nunca un reescritado del capítulo entero, nunca un destino que no aparezca en el mapa. Prefiere pocas intervenciones de alto valor frente a muchas.`
+	return `- interventions: de 0 a 4 correcciones QUIRÚRGICAS y pequeñas por sugerencia, cada una apuntando a UN triplete concreto (chapter_num, scene_pos, trope_index) mostrado en el mapa de estructura escrita de arriba. Cada feedback debe describir un cambio mínimo limitado a esa subescena (afilar el gancho de esta apertura, recortar redundancia aquí, subir la apuesta en este intercambio...) — nunca un reescritado del capítulo entero, nunca un destino que no aparezca en el mapa. Prefiere pocas intervenciones de alto valor frente a muchas.`
 }
 
 // loadDraftedChapterFilesInto fills Content for chapters whose in-memory
@@ -464,9 +464,9 @@ func fallbackTropeMapBlock(ch ChapterState, lang string) string {
 	en := normalizeLangEN(lang)
 	var sb strings.Builder
 	if en {
-		sb.WriteString("[Written structure — pseudo-scenes delimited by \"---\" breaks and their trope units (use THESE exact indexes for interventions)]\n")
+		sb.WriteString("[Written structure — pseudo-scenes delimited by \"---\" breaks and their subscenes (use THESE exact indexes for interventions)]\n")
 	} else {
-		sb.WriteString("[Estructura escrita — pseudo-escenas delimitadas por saltos \"---\" y sus unidades de tropo (usa ESTOS índices exactos para las intervenciones)]\n")
+		sb.WriteString("[Estructura escrita — pseudo-escenas delimitadas por saltos \"---\" y sus subescenas (usa ESTOS índices exactos para las intervenciones)]\n")
 	}
 	for pos, sp := range spans {
 		lo, hi := sp[0], sp[1]
@@ -483,9 +483,9 @@ func fallbackTropeMapBlock(ch ChapterState, lang string) string {
 			units = append(units, fmt.Sprintf("trope_index=%d:%s(%dw)", i, classifyTrope(b, i == 0, i == len(beats)-1), prose.CountProseUnits(b)))
 		}
 		if en {
-			fmt.Fprintf(&sb, "- scene_pos=%d (break-delimited section %d) — trope units: %s\n", pos, pos+1, strings.Join(units, " → "))
+			fmt.Fprintf(&sb, "- scene_pos=%d (break-delimited section %d) — subscenes: %s\n", pos, pos+1, strings.Join(units, " → "))
 		} else {
-			fmt.Fprintf(&sb, "- scene_pos=%d (sección %d delimitada por saltos) — unidades de tropo: %s\n", pos, pos+1, strings.Join(units, " → "))
+			fmt.Fprintf(&sb, "- scene_pos=%d (sección %d delimitada por saltos) — subescenas: %s\n", pos, pos+1, strings.Join(units, " → "))
 		}
 	}
 	sb.WriteString("\n")
@@ -918,25 +918,25 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 				break
 			}
 			var pr struct {
-				Pillar       PillarAssessment    `json:"pillar"`
-				Suggestions  []DraftedSuggestion `json:"suggestions"`
-				Criteria     []struct {
+				Pillar      PillarAssessment    `json:"pillar"`
+				Suggestions []DraftedSuggestion `json:"suggestions"`
+				Criteria    []struct {
 					Key   string `json:"key"`
 					Level int    `json:"level"`
 				} `json:"criteria_levels"`
-				Note         string              `json:"note"`
-				Score        int                 `json:"score"`
+				Note  string `json:"note"`
+				Score int    `json:"score"`
 			}
 			for _, j := range candidateChapterJSONs(raw) {
 				pr = struct {
-					Pillar       PillarAssessment    `json:"pillar"`
-					Suggestions  []DraftedSuggestion `json:"suggestions"`
-					Criteria     []struct {
+					Pillar      PillarAssessment    `json:"pillar"`
+					Suggestions []DraftedSuggestion `json:"suggestions"`
+					Criteria    []struct {
 						Key   string `json:"key"`
 						Level int    `json:"level"`
 					} `json:"criteria_levels"`
-					Note         string              `json:"note"`
-					Score        int                 `json:"score"`
+					Note  string `json:"note"`
+					Score int    `json:"score"`
 				}{}
 				if json.Unmarshal([]byte(j), &pr) != nil {
 					continue
@@ -1266,7 +1266,7 @@ func buildPillarEditorPrompt(cfg *config.Config, state *Progress, settings *Proj
 	pc := buildChapterPromptContext(cfg, state, settings, idx, lang)
 	focus, categories := pillarFocusEN(pillarKey)
 	name, _ := pillarCategoryNames(pillarKey, lang)
-	schema := fmt.Sprintf(`{"pillar":{"key":%q,"criteria_levels":[{"key":"...","level":0}],"note":"..."},"suggestions":[{"category":"%s","pillar":%q,"criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[%d],"interventions":[{"chapter_num":%d,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS trope unit only"}]}]}`,
+	schema := fmt.Sprintf(`{"pillar":{"key":%q,"criteria_levels":[{"key":"...","level":0}],"note":"..."},"suggestions":[{"category":"%s","pillar":%q,"criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[%d],"interventions":[{"chapter_num":%d,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS subscene only"}]}]}`,
 		pillarKey, categories, pillarKey, ch.Num, ch.Num)
 	if normalizeLangEN(lang) {
 		return fmt.Sprintf(`You are %s, a world-famous literary editor whose lists have produced multiple global bestsellers. Grade exactly ONE pillar of your bestseller rubric over ONE drafted chapter: %s AS DRAFTED PROSE.
@@ -1295,13 +1295,14 @@ Grading standard (you are ruthless — your reputation rests on books that hit #
 - Every suggestion MUST declare its "pillar" (%q), the checklist "criteria" keys it repairs, and a realistic "score_impact".
 - If ANY item scores below 90 you MUST return at least one concrete suggestion (up to 3) ordered by impact — a low score with zero suggestions is a failed answer. Only when EVERY item is 90+ may suggestions be empty.
 - %s
-- NEVER include replacement prose: an intervention only points at a trope unit and describes the fix in "feedback"; the actual rewrite happens later, when the author applies it.
+- NEVER include replacement prose: an intervention only points at a subscene and describes the fix in "feedback"; the actual rewrite happens later, when the author applies it.
 - applies_to_chapters should just name this chapter (%d).
 - Write note, titles, details and actions in the SAME language as the chapter prose above.
 
 Return STRICT JSON only (no markdown fences, no prose): %s`,
 			editorPersona(lang), pc.where, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckEN,
-			strings.TrimSpace(ch.Outline), pc.tropeMap, pillarCriteriaBlockEN(pillarKey), pc.words, pc.content,
+			strings.TrimSpace(ch.Outline), pc.tropeMap, pc.words, pc.content,
+						pillarCriteriaBlockEN(pillarKey),
 			pillarKey, interventionsRulesBlock(lang), ch.Num, schema), nil
 	}
 	return fmt.Sprintf(`Eres %s, un editor literario mundialmente famoso cuyas listas han producido múltiples bestsellers globales. Califica exactamente UN pilar de tu rúbrica bestseller sobre UN capítulo borroneado: %s COMO PROSA REAL.
@@ -1330,13 +1331,14 @@ Estándar de nota (eres despiadado — tu reputación descansa en libros que lle
 - Cada sugerencia DEBE declarar su "pillar" (%q), las claves "criteria" que repara y un "score_impact" realista.
 - Si ALGÚN ítem puntúa bajo 90 DEBES devolver al menos una sugerencia concreta (hasta 3) ordenadas por impacto — una nota baja con cero sugerencias es una respuesta fallida. Solo cuando CADA ítem sea 90+ las sugerencias pueden ir vacías.
 - %s
-- NUNCA incluyas prosa de reemplazo: una intervención solo señala una unidad de tropo y describe la corrección en "feedback"; la reescritura real ocurre después, cuando el autor la aplica.
+- NUNCA incluyas prosa de reemplazo: una intervención solo señala una subescena y describe la corrección en "feedback"; la reescritura real ocurre después, cuando el autor la aplica.
 - applies_to_chapters debe nombrar solo este capítulo (%d).
 - Escribe note, títulos, detalles y acciones en el MISMO idioma que la prosa del capítulo de arriba.
 
 Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s`,
 		editorPersona(lang), pc.whereEs, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckES,
-		strings.TrimSpace(ch.Outline), pc.tropeMap, pillarCriteriaBlockES(pillarKey), pc.words, pc.content,
+		strings.TrimSpace(ch.Outline), pc.tropeMap, pc.words, pc.content,
+				pillarCriteriaBlockES(pillarKey),
 		pillarKey, interventionsRulesBlock(lang), ch.Num, schema), nil
 }
 
@@ -1644,6 +1646,195 @@ func tropeUnitProseAt(ch *ChapterState, scenePos, tropeIdx int) string {
 	return ""
 }
 
+// unitProseAt mirrors tropeUnitProseAt's segmentation rules WITHOUT requiring
+// a ScenePlan: it tiles scenes through writtenSceneTiling (recorded spans →
+// budget walk → fallback) and subscene units through sceneTropeUnitSpans, so
+// RealignPendingInterventions can anchor interventions on plan-less chapters
+// too. Returns "" when the target is out of range.
+func unitProseAt(ch *ChapterState, scenePos, unitIdx int) string {
+	if scenePos < 0 {
+		return ""
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 {
+		return ""
+	}
+	if sep == "" {
+		sep = "\n\n"
+	}
+	spans := writtenSceneTiling(ch, paras)
+	if scenePos >= len(spans) {
+		return ""
+	}
+	sp := spans[scenePos]
+	lo, hi := sp[0], sp[1]
+	if hi <= lo || hi > len(paras) {
+		return ""
+	}
+	sceneParas := paras[lo:hi]
+	unitSpans := sceneTropeUnitSpans(ch, scenePos, sceneParas)
+	texts := tropeTextsOfSpans(sceneParas, unitSpans, sep)
+	if unitIdx >= 0 && unitIdx < len(texts) {
+		return texts[unitIdx]
+	}
+	return ""
+}
+
+// RealignPendingInterventions re-anchors every PENDING bestseller-critic
+// intervention of the chapter onto the CURRENT scene/subscene tiling after a
+// UI resync (ResyncChapterInterface re-tiles blocks with fresh IDs and may
+// shift unit boundaries), so inline highlights keep pointing at the right
+// passage WITHOUT regenerating the analysis. The anchor is the intervention's
+// own Quote / CurrentText excerpt located inside the prose; when no anchor can
+// be found the recorded target is kept untouched. No LLM calls. Returns the
+// number of interventions whose (scene_pos, trope_index) actually moved.
+func RealignPendingInterventions(ch *ChapterState) int {
+	if ch == nil || ch.Analysis == nil || strings.TrimSpace(ch.Content) == "" {
+		return 0
+	}
+	moved := 0
+	for si := range ch.Analysis.Suggestions {
+		for ii := range ch.Analysis.Suggestions[si].Interventions {
+			iv := &ch.Analysis.Suggestions[si].Interventions[ii]
+			if iv.Status != "pending" || iv.ChapterNum != ch.Num {
+				continue
+			}
+			needle := normConflictIssue(iv.Quote)
+			if needle == "" {
+				needle = normConflictIssue(iv.CurrentText)
+			}
+			if needle == "" {
+				continue
+			}
+			// Fast path: the recorded target still holds the anchor text —
+			// nothing moved, leave it alone.
+			if realignMatch(needle, normConflictIssue(unitProseAt(ch, iv.ScenePos, iv.TropeIndex))) {
+				continue
+			}
+			newPos, newIdx, ok := locateSubsceneUnit(ch, needle, iv.ScenePos)
+			if !ok {
+				continue // no locator survived — keep the stale target as-is
+			}
+			if newPos != iv.ScenePos || newIdx != iv.TropeIndex {
+				iv.ScenePos, iv.TropeIndex = newPos, newIdx
+				moved++
+			}
+		}
+	}
+	return moved
+}
+
+// realignMatch reports whether `needle` (normalized) plausibly lives inside
+// the unit text `hay` (normalized). Exact containment either way; short
+// needles additionally need to match on word boundaries to avoid stray hits.
+func realignMatch(needle, hay string) bool {
+	if needle == "" || hay == "" {
+		return false
+	}
+	if strings.Contains(hay, needle) {
+		return true
+	}
+	return strings.Contains(needle, hay) && len(hay) >= 25
+}
+
+// locateSubsceneUnit walks every scene/subscene unit of the chapter (reader
+// tiling) and returns the best (scenePos, unitIdx) whose prose contains the
+// normalized needle. Ties prefer the original scene hint. O(units) per call,
+// called only from the resync endpoint — never in hot loops.
+func locateSubsceneUnit(ch *ChapterState, needle string, hintScene int) (int, int, bool) {
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 || needle == "" {
+		return -1, -1, false
+	}
+	if sep == "" {
+		sep = "\n\n"
+	}
+	bestPos, bestIdx, bestScore, found := -1, -1, -1, false
+	for pos, sp := range writtenSceneTiling(ch, paras) {
+		lo, hi := sp[0], sp[1]
+		if hi <= lo || hi > len(paras) {
+			continue
+		}
+		sceneParas := paras[lo:hi]
+		texts := tropeTextsOfSpans(sceneParas, sceneTropeUnitSpans(ch, pos, sceneParas), sep)
+		for ui, t := range texts {
+			norm := normConflictIssue(t)
+			score := -1
+			switch {
+			case norm == needle:
+				score = 1_000_000
+			case strings.Contains(norm, needle):
+				score = 100_000 + len(needle)*10 - len(norm)/10
+			case strings.Contains(needle, norm) && len(norm) >= 25:
+				score = 50_000 + len(norm)*10 - len(needle)/10
+			}
+			if score < 0 {
+				continue
+			}
+			if hintScene >= 0 && pos == hintScene {
+				score += 10_000
+			}
+			if !found || score > bestScore {
+				found, bestScore, bestPos, bestIdx = true, score, pos, ui
+			}
+		}
+	}
+	return bestPos, bestIdx, found
+}
+
+// ChapterInterventionLocator exposes the reader-side tiling (scenes and their
+// subscene units, paragraph spans + texts) of a written chapter, computed with
+// EXACTLY the same segmentation path used when proposals are stamped and
+// realigned (writtenSceneTiling + sceneTropeUnitSpans). The viewer uses it to
+// confine inline critic highlights to the targeted subscene paragraphs instead
+// of tinting the whole scene when an anchor cannot be located inside a single
+// block. Out-of-range indexes clamp to the available tiling; returns nil when
+// the chapter has no content.
+func ChapterInterventionLocator(state *Progress, chapterNum int) [][][]string {
+	if state == nil {
+		return nil
+	}
+	idx := FindChapterIdx(state, chapterNum)
+	if idx < 0 {
+		return nil
+	}
+	ch := &state.Chapters[idx]
+	if strings.TrimSpace(ch.Content) == "" {
+		return nil
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if sep == "" {
+		sep = "\n\n"
+	}
+	out := make([][][]string, 0, len(paras))
+	for pos, sp := range writtenSceneTiling(ch, paras) {
+		lo, hi := sp[0], sp[1]
+		if hi <= lo || hi > len(paras) {
+			continue
+		}
+		sceneParas := paras[lo:hi]
+		unitSpans := sceneTropeUnitSpans(ch, pos, sceneParas)
+		texts := tropeTextsOfSpans(sceneParas, unitSpans, sep)
+		units := make([][]string, 0, len(unitSpans))
+		for ui, usp := range unitSpans {
+			a, b := usp[0], usp[1]
+			if a < 0 {
+				a = 0
+			}
+			if b > len(sceneParas) {
+				b = len(sceneParas)
+			}
+			t := ""
+			if ui < len(texts) {
+				t = texts[ui]
+			}
+			units = append(units, []string{fmt.Sprintf("%d", a), fmt.Sprintf("%d", b), t})
+		}
+		out = append(out, units)
+	}
+	return out
+}
+
 // ProposeChapterInterventions turns one advice-only chapter point into
 // concrete small trope-unit interventions validated against the live written
 // chapter (only real scene_pos/trope_index triplets survive). Accumulative:
@@ -1693,7 +1884,7 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 
 	prompt := draftedProposalPrompt(cfg, state, settings, editorPersona(cfg.Language),
 		fmt.Sprintf("ONE DRAFTED CHAPTER #%d \"%s\"", ch.Num, ch.Title), s, planBuf.String(), []int{ch.Num}, targets)
-	system := "You are a world-famous literary editor turning feedback into CONCRETE small interventions on drafted manuscript prose: each one targets exactly one trope unit of one scene of the chapter. Goal: push the chapter to global-bestseller level on the pillar under discussion, changing the minimum amount of prose. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
+	system := "You are a world-famous literary editor turning feedback into CONCRETE small interventions on drafted manuscript prose: each one targets exactly one subscene of one scene of the chapter. Goal: push the chapter to global-bestseller level on the pillar under discussion, changing the minimum amount of prose. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.chapter_analyze_proposing", ch.Num)
 	interventions, err := requestInterventions(ctx, apiCfg, system, prompt, logger, targets)
@@ -1941,7 +2132,7 @@ NOVEL PARAMETERS (the author's contract with the reader):
 STORY STRUCTURE FRAMEWORK IN USE: %s
 
 %s
-WRITTEN-STRUCTURE MAPS (scenes and trope units per chapter — the ONLY valid intervention targets):
+WRITTEN-STRUCTURE MAPS (scenes and subscenes per chapter — the ONLY valid intervention targets):
 %s
 
 YOUR MISSION: reverse-engineer what makes books in this genre hit #1 (an irresistible hook, relentless pacing, arcs that pay off, stakes that escalate) and grade THIS ACT against that blueprint. Every suggestion must be a concrete step that measurably moves the act toward bestseller level on its pillar.
@@ -1981,7 +2172,7 @@ PARÁMETROS DE LA NOVELA (el contrato del autor con el lector):
 MARCO DE ESTRUCTURA NARRATIVA EN USO: %s
 
 %s
-MAPAS DE ESTRUCTURA ESCRITA (escenas y unidades de tropo por capítulo — los ÚNICOS destinos válidos de intervención):
+MAPAS DE ESTRUCTURA ESCRITA (escenas y subescenas por capítulo — los ÚNICOS destinos válidos de intervención):
 %s
 
 TU MISIÓN: inversamente ingeniería qué hace que los libros de este género lleguen a #1 y califica ESTE ACTO contra ese plano. Cada sugerencia debe ser un paso concreto que mueva medible el acto hacia nivel bestseller en su pilar.
@@ -2202,9 +2393,9 @@ NOVEL PARAMETERS: Tone: %s | Theme: %s | Structure framework: %s | Ideal reader:
 MATERIAL (written-structure maps and prose excerpts):
 %s
 
-This point currently has NO concrete interventions. Turn it into SMALL SURGICAL fixes on the drafted prose, each targeting exactly one trope unit shown in the written-structure maps above. Every intervention must measurably push the text toward GLOBAL BESTSELLER level on the pillar this point belongs to while changing the minimum amount of prose: keep voice, tense and POV of the surrounding units; never invent new events outside the chapter outlines; never touch a (chapter_num, scene_pos, trope_index) triplet that is not shown.
+This point currently has NO concrete interventions. Turn it into SMALL SURGICAL fixes on the drafted prose, each targeting exactly one subscene shown in the written-structure maps above. Every intervention must measurably push the text toward GLOBAL BESTSELLER level on the pillar this point belongs to while changing the minimum amount of prose: keep voice, tense and POV of the surrounding units; never invent new events outside the chapter outlines; never touch a (chapter_num, scene_pos, trope_index) triplet that is not shown.
 %s
-Return STRICT JSON only (no markdown fences): {"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences describing the exact minimal fix for THIS trope unit"}]}
+Return STRICT JSON only (no markdown fences): {"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences describing the exact minimal fix for THIS subscene"}]}
 Only include triplets that exist in the maps above; drop anything else.`,
 			persona, scopeDesc, s.Title, s.Detail, s.Action,
 			sc.Tone, sc.Theme, structureLabel(sc.Structure, lang), sc.AudienceProfile, sc.InspirationalPieces, castList,
@@ -2221,9 +2412,9 @@ PARÁMETROS DE LA NOVELA: Tono: %s | Tema: %s | Marco estructural: %s | Lector i
 MATERIAL (mapas de estructura escrita y extractos de prosa):
 %s
 
-Este punto aún NO tiene intervenciones concretas. Conviértelo en correcciones QUIRÚRGICAS Y PEQUEÑAS sobre la prosa borroneada, cada una apuntando exactamente a una unidad de tropo mostrada en los mapas de estructura escrita de arriba. Cada intervención debe empujar medible el texto hacia nivel BESTSELLER GLOBAL en el pilar al que pertenece este punto cambiando la cantidad mínima de prosa: mantén voz, tiempo verbal y POV de las unidades vecinas; nunca inventes eventos nuevos fuera de los outlines; nunca toques un triplete (chapter_num, scene_pos, trope_index) que no esté mostrado.
+Este punto aún NO tiene intervenciones concretas. Conviértelo en correcciones QUIRÚRGICAS Y PEQUEÑAS sobre la prosa borroneada, cada una apuntando exactamente a una subescena mostrada en los mapas de estructura escrita de arriba. Cada intervención debe empujar medible el texto hacia nivel BESTSELLER GLOBAL en el pilar al que pertenece este punto cambiando la cantidad mínima de prosa: mantén voz, tiempo verbal y POV de las unidades vecinas; nunca inventes eventos nuevos fuera de los outlines; nunca toques un triplete (chapter_num, scene_pos, trope_index) que no esté mostrado.
 %s
-Devuelve SOLO JSON estricto (sin cercas markdown): {"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"una o dos frases imperativas describiendo la corrección mínima exacta PARA ESTA unidad de tropo"}]}
+Devuelve SOLO JSON estricto (sin cercas markdown): {"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"una o dos frases imperativas describiendo la corrección mínima exacta PARA ESTA subescena"}]}
 Incluye solo tripletes que existan en los mapas de arriba; descarta todo lo demás.`,
 		persona, scopeDesc, s.Title, s.Detail, s.Action,
 		sc.Tone, sc.Theme, structureLabel(sc.Structure, lang), sc.AudienceProfile, sc.InspirationalPieces, castList,
@@ -2378,7 +2569,7 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		scope = fmt.Sprintf("el ACTO %d (%s), capítulos %d-%d", actNo, act.Name, start, end)
 	}
 	prompt := draftedProposalPrompt(cfg, state, settings, editorPersona(cfg.Language), scope, s, material.String(), chapterNums, targets)
-	system := "You are a world-famous literary editor turning feedback into CONCRETE small interventions on drafted manuscript prose across an act of chapters: each one targets exactly one trope unit of one scene of one chapter. Goal: push the act to global-bestseller level on the pillar under discussion, changing the minimum amount of prose. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
+	system := "You are a world-famous literary editor turning feedback into CONCRETE small interventions on drafted manuscript prose across an act of chapters: each one targets exactly one subscene of one scene of one chapter. Goal: push the act to global-bestseller level on the pillar under discussion, changing the minimum amount of prose. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.act_analyze_proposing", actNo)
 	interventions, err := requestInterventions(ctx, apiCfg, system, prompt, logger, targets)

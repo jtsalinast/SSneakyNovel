@@ -157,10 +157,13 @@
     if (c.num !== loadedNum) selectedBlockId = null;
     loadedNum = c.num;
     loadedRev = rev;
+    hideIVPopup();
+    ivLocator = null; ivLocatorNum = -1; // stale tiling must never tint the new chapter
     if (!rev) { chapterContent = ''; chapterBlocks = []; return; }
     try {
       const full = await api('GET', '/api/chapters/' + c.num);
       applyChapter(c.num, full);
+      loadIVLocator(c.num); // refresh the subscene tiling used to confine critic marks
     } catch (e) {}
   }
   $: hasContent = !!(ch?.content_rev);
@@ -597,8 +600,93 @@
       sample: all.slice(0, 3).map(iv => ({ st: iv.status, cn: iv.chapter_num, sp: iv.scene_pos, ti: iv.trope_index, cur: (iv.current_text || '').slice(0, 40), q: (iv.quote || '') })),
     });
   }
-  let ivPopup = null; // {x,y,iv}
+  let ivPopup = null; // {x,y,w,h,iv} — anchored to the clicked <mark> rect
+  let ivDetail = null; // {iv,color} — full-suggestion modal (scrollable, viewport-safe)
   let applyingIV = false;
+
+  // Subscene tiling fetched from GET /api/chapters/{num}/iv-locator:
+  // units[scenePos][unitIdx] = [paraStart, paraEnd, unitText] (paragraph spans
+  // into the chapter's split on "\n\n"). Used to confine critic marks to the
+  // targeted subscene/beat paragraphs instead of tinting whole scenes when the
+  // anchor text cannot be located inside a single block.
+  let ivLocator = null; // [][][]string
+  let ivLocatorNum = -1;
+  async function loadIVLocator(num) {
+    try {
+      const res = await api('GET', `/api/chapters/${num}/iv-locator`);
+      if (num === loadedNum) { ivLocator = res?.units || []; ivLocatorNum = num; }
+    } catch (e) { /* marks degrade gracefully to the block-level tiers */ }
+  }
+
+  // Paragraph window of one scene/subscene in chapterContent coordinates.
+  function ivUnitRange(scenePos, unitIdx) {
+    const units = (ivLocator && ivLocatorNum === ch?.num) ? ivLocator[scenePos] : null;
+    if (!units) return null;
+    let u = null;
+    if (unitIdx != null && unitIdx >= 0 && unitIdx < units.length) u = units[unitIdx];
+    else if (units.length === 1) u = units[0];
+    if (!u) return null;
+    const sep = '\n\n';
+    const paras = (chapterContent || '').split(sep);
+    const a = Math.max(0, Math.min(Number(u[0]) || 0, paras.length));
+    const b = Math.max(a, Math.min(Number(u[1]) || 0, paras.length));
+    if (b <= a) return null;
+    let start = 0;
+    for (let i = 0; i < a; i++) start += paras[i].length + sep.length;
+    let end = start;
+    for (let i = a; i < b; i++) end += paras[i].length + (i < b - 1 ? sep.length : 0);
+    return { start, end, text: paras.slice(a, b).join(sep), exact: unitIdx != null };
+  }
+
+  // Locate an IV's anchor inside its targeted subscene window only. Returns
+  // normalized [lo,hi) offsets relative to the UNIT text (ivUnitRange.text),
+  // or null. This is the precision tier that keeps highlights on the beat
+  // where the change belongs, never the whole scene.
+  function locateInIvUnit(iv) {
+    if (!ivLocator || iv.scene_pos == null || iv.scene_pos < 0) return null;
+    const r = ivUnitRange(iv.scene_pos, iv.trope_index);
+    if (!r) return null;
+    const hay = normText(r.text);
+    if (!hay) return null;
+    for (const c of [normText(iv.current_text), normText(iv.quote)].filter(x => x)) {
+      const sp = locateSpan(hay, c);
+      if (sp) return sp;
+    }
+    return null;
+  }
+
+  // Raw-text span [start,end) of one IV's targeted subscene/beat inside a
+  // block's text, derived from the iv-locator paragraph window. Blocks are
+  // paragraphs of the same chapter split: we locate this block among them and
+  // clip it to the unit's [paraStart, paraEnd) range. When the beat covers the
+  // whole block, the entire block text is returned (that IS the precise
+  // subscene highlight); when the anchor sits mid-block we still return the
+  // full block only if the unit fully contains it — otherwise null, letting
+  // the caller fall back to in-block sentence-level matching. Null when the
+  // block doesn't overlap the unit or the locator is unavailable/stale.
+  function ivUnitSpanInBlock(text, iv) {
+    if (!ivLocator || iv.scene_pos == null || iv.scene_pos < 0) return null;
+    const r = ivUnitRange(iv.scene_pos, iv.trope_index);
+    if (!r) return null;
+    const sep = '\n\n';
+    const paras = (chapterContent || '').split(sep);
+    let pi = -1;
+    for (let i = 0; i < paras.length; i++) {
+      if (paras[i] === text) { pi = i; break; }
+    }
+    if (pi < 0) {
+      // Sheet edits may differ in trailing whitespace only.
+      for (let i = 0; i < paras.length; i++) {
+        if (paras[i].trim() === String(text || '').trim()) { pi = i; break; }
+      }
+    }
+    if (pi < 0 || pi >= r.end || pi < r.start) return null;
+    // The block overlaps the unit window. A sheet paragraph never spans two
+    // chapter paragraphs, so overlap means containment → mark exactly this
+    // block (never sibling blocks of other beats).
+    void sep;
+    return [0, text.length];
+  }
 
   // Normalize for fuzzy matching: collapse whitespace, strip soft hyphens.
   const normText = (s) => (s || '').replace(/\u00ad/g, '').replace(/\s+/g, ' ').trim();
@@ -641,17 +729,17 @@
     if (!meta || meta.scene_pos == null || meta.scene_pos < 0) return null;
     const metaTrope0 = meta.trope_index != null ? meta.trope_index - 1 : null;
     const marks = [];
-    const addMark = (sp) => {
+    const addMark = (sp, iv) => {
       if (!sp) return;
-      if (marks.some(m => sp[0] < m[1] && m[0] < sp[1])) return; // overlap
-      marks.push(sp);
+      if (marks.some(m => sp[0] < m.hi && m.lo < sp[1])) return; // overlap
+      marks.push({ lo: sp[0], hi: sp[1], iv });
     };
     const sceneBlocks = chapterBlocks.filter(b => b.scene_pos === meta.scene_pos);
     const firstOfScene = sceneBlocks.length ? sceneBlocks[0].id : null;
-    // First block of the trope unit this IV targets. Must be computed from the
-    // IV's OWN unit index: using the current block's index made Tier 4 attach
-    // the mark to whichever block was being rendered, so EVERY paragraph of
-    // the unit claimed to be the target and no highlight survived the
+    // First block of the subscene/beat unit this IV targets. Must be computed
+    // from the IV's OWN unit index: using the current block's index made Tier 4
+    // attach the mark to whichever block was being rendered, so EVERY paragraph
+    // of the unit claimed to be the target and no highlight survived the
     // overlap-skip (i.e. nothing highlighted at all).
     const firstOfUnitFor = (ivUnit0) => {
       for (const sb of sceneBlocks) {
@@ -663,6 +751,9 @@
     };
     const sceneHay = normText(sheetSceneProse(meta.scene_pos));
     const chapHay = normText(chapterContent || '');
+    // Locator-precision state: with a fresh iv-locator payload for the current
+    // chapter, marks are confined to the targeted subscene paragraphs.
+    const locatorFresh = !!(ivLocator && ivLocatorNum === ch?.num);
     for (const iv of pendingIVs) {
       if (iv.scene_pos !== meta.scene_pos) continue;
       const sameUnit = iv.trope_index != null && metaTrope0 != null && meta.trope_count > 1 && metaTrope0 !== iv.trope_index;
@@ -672,18 +763,49 @@
       // Tier 1: anchor lands inside THIS block's text (exact/ci/prefix match).
       for (const c of cand) {
         const sp = locateSpan(n, c);
-        if (sp) { addMark(sp); hit = true; break; }
+        if (sp) { addMark(sp, iv); hit = true; break; }
       }
       if (hit) continue;
-      // Tier 2: anchor lives somewhere in this block's SCENE prose (positional
-      // proof via iv.scene_pos). Re-locate loosely against the block; if only
-      // the unit-level target matches, highlight the whole single-unit block.
+      // Tier 2 (subscene-precise): confine the mark to the beat paragraphs the
+      // critic actually targets. Two locator paths:
+      //  a) anchor found INSIDE the unit window → re-locate that fragment in
+      //     this block so only the matching sentence(s) get tinted;
+      //  b) anchor not locatable but this block lies within the unit's
+      //     paragraph window → mark exactly this block (never sibling beats).
+      // When the locator is available it REPLACES the old whole-scene tier:
+      // blocks outside the targeted subscene are never highlighted — that was
+      // the bug tinting entire scenes instead of the targeted beat.
+      if (locatorFresh) {
+        const usp = ivUnitSpanInBlock(text, iv);
+        if (usp) {
+          const r = ivUnitRange(iv.scene_pos, iv.trope_index);
+          const hay = normText(r.text);
+          let placed = false;
+          for (const c of cand) {
+            const sp = locateSpan(hay, c);
+            if (!sp) continue;
+            const frag = hay.slice(sp[0], sp[1]);
+            const bs = locateSpan(n, frag);
+            if (bs) { addMark(bs, iv); placed = true; break; }
+          }
+          if (placed) { hit = true; continue; }
+          addMark([Math.min(usp[0], n.length), Math.min(usp[1], n.length)], iv);
+          hit = true; continue;
+        }
+        // The locator knows this IV's beat window and this block is NOT part
+        // of it → skip every loose scene-wide/chapter-wide tier.
+        if (ivUnitRange(iv.scene_pos, iv.trope_index)) continue;
+      }
+      // Tier 2-legacy (no locator for this chapter yet): anchor lives somewhere
+      // in this block's SCENE prose (positional proof via iv.scene_pos).
+      // Re-locate loosely against the block; if only the unit-level target
+      // matches, highlight the whole single-unit block.
       for (const c of cand) {
         if (sceneHay && locateSpan(sceneHay, c)) {
           const pre = c.split(' ').slice(0, 6).join(' ');
           const sp = locateSpan(n, pre) || locateSpan(n, (c.split(/(?<=[.!?\u2026])\s/)[0] || ''));
-          if (sp) { addMark(sp); hit = true; break; }
-          if (iv.trope_index == null || !meta.trope_count || meta.trope_count <= 1) { addMark([0, n.length]); hit = true; break; }
+          if (sp) { addMark(sp, iv); hit = true; break; }
+          if (iv.trope_index == null || !meta.trope_count || meta.trope_count <= 1) { addMark([0, n.length], iv); hit = true; break; }
         }
       }
       if (hit) continue;
@@ -692,8 +814,8 @@
       for (const c of cand) {
         if (c && chapHay.includes(c)) {
           const sent = n.split(/(?<=[.!?\u2026])\s/)[0] || '';
-          if (sent.length >= 20) addMark([0, Math.min(n.length, sent.length)]);
-          else addMark([0, n.length]);
+          if (sent.length >= 20) addMark([0, Math.min(n.length, sent.length)], iv);
+          else addMark([0, n.length], iv);
           hit = true;
           break;
         }
@@ -704,14 +826,15 @@
       // Grammarly-style: attach the mark to the first block of the targeted
       // trope unit (or of the scene when the IV has no unit index), so the
       // critic's feedback never disappears into the report-only section at
-      // the bottom of the page.
+      // the bottom of the page. With a fresh locator this tier only fires for
+      // IVs whose beat window is unavailable (out-of-range indexes).
       const ivUnit0 = iv.trope_index != null ? iv.trope_index : null;
       const isTargetBlock = blockId === firstOfUnitFor(ivUnit0)
         || (ivUnit0 == null && blockId === firstOfScene);
-      if (isTargetBlock) addMark([0, n.length]);
+      if (isTargetBlock) addMark([0, n.length], iv);
     }
     if (!marks.length) return null;
-    marks.sort((a, b) => a[0] - b[0]);
+    marks.sort((a, b) => a.lo - b.lo);
     // Map normalized offsets back onto the raw text via proportional scan of
     // collapsed-whitespace boundaries (good enough for display splitting).
     const segs = [];
@@ -728,11 +851,11 @@
       }
       return ri;
     };
-    for (const [a, b] of marks) {
-      const rs = advance(a);
-      const re = advance(b);
+    for (const m of marks) {
+      const rs = advance(m.lo);
+      const re = advance(m.hi);
       if (rs > last) segs.push({ t: raw.slice(last, rs) });
-      segs.push({ t: raw.slice(rs, re), iv: true });
+      segs.push({ t: raw.slice(rs, re), iv: true, ivKey: m.iv ? m.iv.key : null });
       last = re;
     }
     if (last < raw.length) segs.push({ t: raw.slice(last) });
@@ -745,16 +868,88 @@
     return chapterBlocks.filter(b => b.scene_pos === pos).map(b => b.text).join('\n\n');
   }
 
+  // Distinct highlighter color per suggestion: a deterministic hash of the
+  // intervention's stable key maps it onto a fixed palette, so every pending
+  // critic suggestion gets its own inline <mark> tint (Grammarly-style) that
+  // stays identical across re-renders and resyncs.
+  const IV_COLORS = ['#f9d342', '#7dd3fc', '#86efac', '#f9a8d4', '#c4b5fd', '#fca5a5'];
+  function ivColorIdx(key) {
+    let h = 0;
+    for (let i = 0; i < (key || '').length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return h % IV_COLORS.length;
+  }
+  function ivMarkStyle(key) {
+    const c = IV_COLORS[ivColorIdx(key)];
+    // Solid highlighter tint + matching underline, both forced with !important:
+    // the user theme's `mark`/secondary styles (the old lavender look) must
+    // never override the per-suggestion color. The popup and the full-detail
+    // modal read the exact same ivColor() hash → card theme always equals the
+    // inline highlight it belongs to.
+    return `background:${c}59 !important;color:inherit !important;border-bottom:1.5px solid ${c} !important;`;
+  }
+  // Solid color of a suggestion — shared by the inline <mark>, the popup card
+  // theme and the full-detail modal so all three always match.
+  function ivColor(ivOrKey) {
+    const key = typeof ivOrKey === 'string' ? ivOrKey : (ivOrKey && (ivOrKey.key || ivKdFallback(ivOrKey))) || '';
+    return IV_COLORS[ivColorIdx(key)] || IV_COLORS[0];
+  }
+  function ivKdFallback(iv) { return iv ? `${iv.scene_pos}:${iv.trope_index}` : ''; }
+
+  // The <mark> segments now carry their owning intervention's key (ivKey), so
+  // on click we recover the EXACT pending suggestion instead of fuzzy-matching
+  // the visible fragment (which could surface the wrong one). findIvForSegment
+  // remains only as a defensive fallback for legacy marks without a key.
+  function findIvForKey(ivKey) {
+    if (!ivKey) return null;
+    return pendingIVs.find(x => x.key === ivKey) || null;
+  }
+
+  // Popup placement: measure the card after render (popupBox action) and clamp
+  // it inside the viewport, flipping below the mark when there is no room
+  // above. This replaces the old fixed translate(-50%,-100%) that let tall
+  // suggestions overflow off-screen with content unreachable.
+  let popupBox = null; // {w,h} measured from the DOM node
+  function popupMeasure(node) {
+    const m = () => { popupBox = { w: node.offsetWidth, h: node.offsetHeight }; };
+    m();
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(m); ro.observe(node);
+      return { destroy() { ro.disconnect(); } };
+    }
+    return {};
+  }
+  function popupPos(p) {
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+    const W = Math.min(360, vw * 0.9);
+    const H = popupBox ? popupBox.h : 240;
+    const gap = 10;
+    let top = p.y - H - gap;                 // prefer above the mark
+    if (top < 8) top = Math.min(p.y + p.h + gap, vh - H - 8); // flip below
+    if (top < 8) top = 8;
+    let left = p.x - W / 2;                  // center over the mark
+    left = Math.max(8, Math.min(left, vw - W - 8));
+    return `left:${left}px;top:${top}px;width:${W}px;max-height:${Math.max(140, vh - 16)}px;`;
+  }
+
   function openIVPopup(e, iv) {
     e.preventDefault(); e.stopPropagation();
+    if (!iv) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    ivPopup = { x: rect.left + rect.width / 2, y: rect.top, iv };
+    ivPopup = { x: rect.left + rect.width / 2, y: rect.top, w: rect.width, h: rect.height, iv };
   }
-  function hideIVPopup() { ivPopup = null; }
+  function hideIVPopup() { ivPopup = null; ivDetail = null; }
+  function openIVDetail() {
+    if (!ivPopup) return;
+    ivDetail = { iv: ivPopup.iv, color: ivColor(ivPopup.iv.key || ivPopup.iv) };
+  }
 
   async function applyPendingIV(confirmed = false) {
-    if (!ivPopup || !ch || applyingIV) return;
-    const iv = ivPopup.iv;
+    if (!ch || applyingIV) return;
+    // Works from the popup OR the full-detail modal (the modal closes the
+    // popup strip but keeps ivDetail — Apply/Dismiss must still resolve).
+    const iv = (ivPopup && ivPopup.iv) || (ivDetail && ivDetail.iv);
+    if (!iv) return;
     applyingIV = true;
     try {
       const res = await api('POST', `/api/chapters/${ch.num}/analysis/intervention-apply`, { id: iv.sid, iv: pendingIvIndex(iv) }, factHeaders(confirmed === true));
@@ -770,8 +965,9 @@
     } finally { applyingIV = false; }
   }
   async function dismissPendingIV() {
-    if (!ivPopup || !ch) return;
-    const iv = ivPopup.iv;
+    if (!ch) return;
+    const iv = (ivPopup && ivPopup.iv) || (ivDetail && ivDetail.iv);
+    if (!iv) return;
     try {
       await api('POST', `/api/chapters/${ch.num}/analysis/intervention-dismiss`, { id: iv.sid, iv: pendingIvIndex(iv) });
       hideIVPopup();
@@ -1107,17 +1303,60 @@
     const num = ch.num;
     try {
       const res = await api('POST', `/api/chapters/${num}/resync-ui`);
-      progress.set(await api('GET', '/api/progress'));
-      await reloadChapterFull();
+      // Apply the chapter payload the endpoint already returns: the fresh
+      // blocks carry the re-tiled scene/subscene metadata, so chips and inline
+      // critic marks materialize immediately — no second GET racing the SSE
+      // progress update (that race used to require closing/reopening the
+      // chapter before the new interface showed up).
+      if (res?.chapter && loadedNum === num) applyChapter(num, res.chapter);
+      else await reloadChapterFull();
+      if (res?.progress) progress.set(res.progress);
+      else progress.set(await api('GET', '/api/progress'));
+      // Force reactive rebuilds even if the block array reference happened to
+      // compare equal: sheetBlocks re-derives from the fresh metadata and the
+      // keyed-each re-renders every paragraph (chips + colored marks).
+      lastChapterBlocksRef = null;
+      ivRev++;
       sheetDirty = false;
-      // Backend returns { status, scenes, chapter, progress } — "scenes" is
-      // the number of scene blocks re-tiled. Fall back defensively so the
-      // toast never claims "0 blocks" when the resync actually worked.
+      // The resync re-tiled the subscene paragraphs, so the locator window
+      // offsets are stale — refetch and bump ivRev again when it lands so the
+      // inline marks re-anchor to the fresh beat boundaries immediately.
+      ivLocator = null; ivLocatorNum = -1;
+      loadIVLocator(num).then(() => { if (loadedNum === num) ivRev++; });
+      // Backend returns { status, scenes, realigned, chapter, progress } —
+      // "scenes" is the number of scene blocks re-tiled. Fall back defensively
+      // so the toast never claims "0 blocks" when the resync actually worked.
       const n = res?.scenes ?? res?.blocks ?? (ch?.blocks?.length ?? 0);
       addToast($t('writing.resync.done', { n }), 'success');
     } catch (e) { addToast(e.message, 'error'); }
     finally { resyncing = false; }
   }
+  // Transitional one-shot action for chapters written BEFORE the subscene/beat
+  // tiling existed: their scenes carry no beat units, so critic marks can only
+  // ever cover a whole scene. This calls POST /subdivide-beats (pure structural
+  // segmentation, no LLM, prose untouched), then behaves like a normal Refresh
+  // UI so chips + inline marks land on the targeted beat right away.
+  let subdividing = false;
+  async function doSubdivideBeats() {
+    if (!ch || subdividing) return;
+    subdividing = true;
+    const num = ch.num;
+    try {
+      const res = await api('POST', `/api/chapters/${num}/subdivide-beats`);
+      if (res?.chapter && loadedNum === num) applyChapter(num, res.chapter);
+      else await reloadChapterFull();
+      if (res?.progress) progress.set(res.progress);
+      else progress.set(await api('GET', '/api/progress'));
+      lastChapterBlocksRef = null;
+      ivRev++;
+      sheetDirty = false;
+      ivLocator = null; ivLocatorNum = -1;
+      loadIVLocator(num).then(() => { if (loadedNum === num) ivRev++; });
+      addToast($t('writing.subdivide.done', { n: res?.subdivided ?? 0, u: res?.subscenes ?? 0 }), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { subdividing = false; }
+  }
+
   function doResetChapter() {
     if (!ch) return;
     const num = ch.num;
@@ -1534,7 +1773,7 @@
                             {#if (() => { const ivs = ivSegmentsFor(b.text, b.id); const fms = factMarkSegments(b.text, b.id); return ivs || fms; })()}
                               {@const ivSegs = ivSegmentsFor(b.text, b.id)}
                               {@const fmSegs = factMarkSegments(b.text, b.id)}
-                              <span class="whitespace-pre-wrap">{#each (fmSegs && !ivSegs ? fmSegs : (ivSegs || [{ t: b.text }])) as seg, si (si)}{#if seg.iv}<mark class="iv-mark" role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation|preventDefault={(e) => openIVPopup(e, findIvForSegment(seg.t))} on:mousedown|stopPropagation={(e) => e.preventDefault()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, findIvForSegment(seg.t)); } }}>{seg.t}</mark>{:else if seg.fact}<mark class="fact-mark">{seg.t}</mark>{:else}{seg.t}{/if}{/each}</span>
+                              <span class="whitespace-pre-wrap">{#each (fmSegs && !ivSegs ? fmSegs : (ivSegs || [{ t: b.text }])) as seg, si (si)}{#if seg.iv}<mark class="iv-mark" style={ivMarkStyle(seg.ivKey)} role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation|preventDefault={(e) => openIVPopup(e, findIvForKey(seg.ivKey) || findIvForSegment(seg.t))} on:mousedown|stopPropagation={(e) => e.preventDefault()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, findIvForKey(seg.ivKey) || findIvForSegment(seg.t)); } }}>{seg.t}</mark>{:else if seg.fact}<mark class="fact-mark">{seg.t}</mark>{:else}{seg.t}{/if}{/each}</span>
                             {:else}
                               <span class="whitespace-pre-wrap">{b.text}</span>
                             {/if}
@@ -1598,21 +1837,80 @@
                   </div>
                 {/if}
                 {#if ivPopup}
-                  <div class="fixed z-50 w-80 max-w-[90vw] bg-base-200 border border-secondary/40 rounded-lg p-3 shadow-xl space-y-2"
-                       style="left: {Math.min(ivPopup.x, (typeof window !== 'undefined' ? window.innerWidth - 170 : ivPopup.x))}px; top: {ivPopup.y}px; transform: translate(-50%, -100%); margin-top: -8px;">
-                    <div class="text-xs font-semibold text-secondary/90">{$t('writing.iv.popupTitle')}</div>
+                  {@const ivC = ivColor(ivPopup.iv.key || ivPopup.iv)}
+                  <div class="fixed z-50 rounded-lg p-3 shadow-xl"
+                       use:popupMeasure
+                       style={popupPos(ivPopup) + 'border:1px solid ' + ivC + ';box-shadow:0 8px 24px rgba(0,0,0,.28), inset 0 3px 0 0 ' + ivC +';background:#ffffff;color:#1f2937'}
+                       role="dialog" aria-label={$t('writing.iv.popupTitle')}>
+                    <div class="text-xs font-semibold flex items-center gap-1.5 mb-1" style={'color:' + ivC}>
+                      <span class="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={'background:' + ivC}></span>
+                      {$t('writing.iv.popupTitle')}
+                    </div>
                     <div class="text-[11px] opacity-70">{@html ivActionLabelHtml(ivPopup.iv)}</div>
                     {#if ivPopup.iv.current_text}
-                      <div class="bg-base-100 rounded p-2 text-xs whitespace-pre-wrap line-clamp-6 opacity-80">{ivPopup.iv.current_text}</div>
+                      <div class="bg-base-100 rounded p-2 mt-1 text-xs whitespace-pre-wrap overflow-hidden" style="max-height:96px">{ivPopup.iv.current_text}</div>
                     {:else}
                       <div class="text-xs italic opacity-60">{$t('writing.iv.stale')}</div>
                     {/if}
                     {#if ivPopup.iv.feedback}
-                      <div class="text-xs leading-snug whitespace-pre-wrap">{ivPopup.iv.feedback}</div>
+                      <div class="text-xs leading-snug whitespace-pre-wrap overflow-hidden mt-1" style="max-height:80px">{ivPopup.iv.feedback}</div>
                     {/if}
-                    <div class="flex gap-2 justify-end">
-                      <button class="btn btn-ghost btn-xs" on:click={dismissPendingIV} disabled={$taskRunning}>{$t('writing.iv.dismiss')}</button>
-                      <button class="btn btn-secondary btn-xs" on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
+                    <div class="flex gap-2 justify-between items-center mt-2">
+                      <button class="btn btn-link btn-xs p-0 h-auto underline decoration-dotted" style={'color:' + ivC} on:click|stopPropagation={openIVDetail}>{$t('writing.iv.viewFull')}</button>
+                      <div class="flex gap-2">
+                        <button class="btn btn-ghost btn-xs" on:click={dismissPendingIV} disabled={$taskRunning}>{$t('writing.iv.dismiss')}</button>
+                        <button class="btn btn-xs text-base-100 border-0" style={'background:' + ivC} on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+                {#if ivDetail}
+                  <div class="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" role="presentation"
+                       on:click={hideIVPopup} on:keydown={(e) => e.key === 'Escape' && hideIVPopup()} tabIndex="-1">
+                    <div class="card w-full max-w-2xl bg-base-200 shadow-2xl" style={'border:1px solid ' + ivDetail.color + ';border-top:4px solid ' + ivDetail.color}
+                         role="dialog" aria-modal="true" aria-label={$t('writing.iv.popupTitle')}
+                         on:click|stopPropagation on:keydown|stopPropagation>
+                      <div class="card-body p-5 overflow-hidden">
+                        <h3 class="card-title text-sm items-center gap-2" style={'color:' + ivDetail.color}>
+                          <span class="inline-block w-3 h-3 rounded-full" style={'background:' + ivDetail.color}></span>
+                          {$t('writing.iv.popupTitle')}
+                          <button class="btn btn-circle btn-ghost btn-xs ml-auto" on:click={hideIVPopup} aria-label="close">✕</button>
+                        </h3>
+                        <div class="text-xs opacity-75">{@html ivActionLabelHtml(ivDetail.iv)}</div>
+                        <div class="divider my-1"></div>
+                        <div class="flex-1 min-h-0 overflow-y-auto space-y-3 text-sm" style="max-height:60vh">
+                          {#if ivDetail.iv.title}
+                            <div class="font-semibold">{ivDetail.iv.title}</div>
+                          {/if}
+                          {#if ivDetail.iv.feedback}
+                            <div>
+                              <div class="text-[11px] uppercase tracking-wide opacity-50 mb-1">{$t('writing.iv.feedbackLabel')}</div>
+                              <div class="whitespace-pre-wrap leading-relaxed">{ivDetail.iv.feedback}</div>
+                            </div>
+                          {/if}
+                          {#if ivDetail.iv.current_text}
+                            <div>
+                              <div class="text-[11px] uppercase tracking-wide opacity-50 mb-1">{$t('writing.iv.currentLabel')}</div>
+                              <div class="bg-base-100 rounded p-3 text-xs whitespace-pre-wrap leading-relaxed" style={'border-left:3px solid ' + ivDetail.color}>{ivDetail.iv.current_text}</div>
+                            </div>
+                          {:else}
+                            <div class="text-xs italic opacity-60">{$t('writing.iv.stale')}</div>
+                          {/if}
+                          {#if ivDetail.iv.replacement || ivDetail.iv.proposed_text}
+                            <div>
+                              <div class="text-[11px] uppercase tracking-wide opacity-50 mb-1">{$t('writing.iv.proposedLabel')}</div>
+                              <div class="bg-base-100 rounded p-3 text-xs whitespace-pre-wrap leading-relaxed border-l-4 border-success">{ivDetail.iv.replacement || ivDetail.iv.proposed_text}</div>
+                            </div>
+                          {/if}
+                          {#if ivDetail.iv.severity}
+                            <div class="text-[11px] opacity-50">{$t('writing.iv.severityLabel')}: {ivDetail.iv.severity}</div>
+                          {/if}
+                        </div>
+                        <div class="card-actions justify-end mt-2">
+                          <button class="btn btn-ghost btn-sm" on:click={dismissPendingIV} disabled={$taskRunning}>{$t('writing.iv.dismiss')}</button>
+                          <button class="btn btn-sm text-base-100 border-0" style={'background:' + ivDetail.color} on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 {/if}
@@ -1650,6 +1948,10 @@
                   <button class="btn btn-outline btn-sm" on:click={doResyncUI} disabled={$taskRunning || resyncing} title={$t('writing.resync.tip')}>
                     {#if resyncing}<span class="loading loading-spinner loading-xs"></span>{/if}
                     {$t('writing.resync.btn')}
+                  </button>
+                  <button class="btn btn-outline btn-sm" on:click={doSubdivideBeats} disabled={$taskRunning || subdividing || resyncing} title={$t('writing.subdivide.tip')}>
+                    {#if subdividing}<span class="loading loading-spinner loading-xs"></span>{/if}
+                    {$t('writing.subdivide.btn')}
                   </button>
                 {/if}
                 <div class="flex-1"></div>
@@ -1816,15 +2118,20 @@
   }
   .keyfact-chip:hover { opacity: 1; transform: scale(1.08); }
   #ChapterSheetEditor :global(.iv-mark) {
-    background: color-mix(in oklab, var(--fallback-secondary, oklch(var(--secondary))) 22%, transparent);
-    border-bottom: 1.5px dashed var(--fallback-secondary, oklch(var(--secondary)));
+    /* Per-suggestion tint comes from the inline style (ivMarkStyle): a solid
+       highlighter background + matching underline, one color per critic
+       intervention. The theme is NOT hardcoded here — the popup/modal read
+       the same ivColor() hash, so card theme always equals its highlight.
+       These rules only add hover affordance on top of the inline tint. */
     color: inherit;
     padding: 0 1px;
     border-radius: 2px;
     cursor: pointer;
+    transition: filter 0.12s ease, box-shadow 0.12s ease;
   }
   #ChapterSheetEditor :global(.iv-mark:hover) {
-    background: color-mix(in oklab, var(--fallback-secondary, oklch(var(--secondary))) 38%, transparent);
+    filter: brightness(0.96) saturate(1.4);
+    box-shadow: 0 0 0 2px color-mix(in oklab, currentColor 8%, transparent);
   }
     .save-sheet-bar.sticky {
     bottom: 0.75rem;

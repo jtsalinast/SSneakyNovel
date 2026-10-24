@@ -105,7 +105,7 @@ func SyncChapterBlocks(ch *ChapterState) {
 	// chapter is segmented with blank-line paragraphs: merge runs of
 	// consecutive same-mode paragraphs (dialogue vs prose) into beats, exactly
 	// like the in-scene segmentation but applied over the whole chapter, so
-	// the viewer stays faithful to "blocks are tropes, not line breaks". The
+	// the viewer stays faithful to "blocks are subscenes, not line breaks". The
 	// grouping is SKIPPED when it would merge paragraphs that already live in
 	// separate blocks (lossless-edit guard) or when the separator is a single
 	// newline (that mode intentionally mirrors one block per line).
@@ -519,7 +519,7 @@ func syncSceneBlocks(ch *ChapterState) bool {
 // hard break marker; otherwise dialogue vs paragraph classification applies.
 func classifyTropeBlock(text string) string {
 	if strings.Contains(text, "\n\n") && looksLikeTropeRun(text) {
-		return "trope"
+		return "subscene"
 	}
 	return classifyBlock(text)
 }

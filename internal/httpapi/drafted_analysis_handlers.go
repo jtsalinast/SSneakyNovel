@@ -421,7 +421,7 @@ func (h *Handlers) DeleteActAnalysis(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------------------
 // Chapter bestseller critique handlers — same editorial frame as the outline
-// pass, scoped to ONE drafted chapter, with trope-unit interventions.
+// pass, scoped to ONE drafted chapter, with subscene interventions.
 // ---------------------------------------------------------------------------
 
 // chapterAnalyzeTarget resolves {num} from the URL to a real chapter index.
@@ -778,6 +778,10 @@ func (h *Handlers) PostChapterResyncUI(w http.ResponseWriter, r *http.Request) {
 	before := *ch
 	before.Blocks = append([]story.Block(nil), ch.Blocks...)
 	scenes := story.ResyncChapterInterface(ch)
+	// Re-anchor pending bestseller-critic interventions onto the fresh
+	// scene/subscene tiling BEFORE saving, so inline highlights survive the
+	// resync without regenerating the analysis (no LLM calls).
+	realigned := story.RealignPendingInterventions(ch)
 	if err := story.SaveProgress(h.progressPath, h.state); err != nil {
 		*ch = before
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err)
@@ -792,12 +796,78 @@ func (h *Handlers) PostChapterResyncUI(w http.ResponseWriter, r *http.Request) {
 		resp.ContentRev = fmt.Sprintf("%x", story.HashContent(resp.Content))
 	}
 	h.writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "resynced",
-		"scenes":   scenes,
-		"chapter":  resp,
-		"progress": story.ProgressView(h.state),
+		"status":    "resynced",
+		"scenes":    scenes,
+		"realigned": realigned,
+		"chapter":   resp,
+		"progress":  story.ProgressView(h.state),
 	})
 	h.startKnowledgeSync()
+}
+
+// PostChapterSubdivideBeats is the TRANSITIONAL counterpart of Refresh UI:
+// chapters written before per-scene beat bookkeeping landed have scenes with
+// no subscene/beat units at all, so critic highlights can only ever cover a
+// whole scene. This endpoint segments every already-written scene into beats
+// (structural splitTropesFromParas — no LLM calls, prose untouched) and
+// persists the plan. Afterwards pressing the normal "Refresh UI" re-tiles the
+// blocks with real subscene chips and the inline marks land on the targeted
+// beat. Idempotent: safe to run more than once.
+func (h *Handlers) PostChapterSubdivideBeats(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) || h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+	idx := story.FindChapterIdx(h.state, num)
+	if idx < 0 {
+		h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+		return
+	}
+	ch := &h.state.Chapters[idx]
+	if strings.TrimSpace(ch.Content) == "" {
+		h.writeErrorReq(w, r, http.StatusConflict, "chapter_has_no_content")
+		return
+	}
+	before := *ch
+	before.Blocks = append([]story.Block(nil), ch.Blocks...)
+	subdivided, err := story.SubdivideScenesIntoBeats(ch)
+	if err != nil {
+		*ch = before
+		h.writeErrorReq(w, r, http.StatusConflict, err.Error())
+		return
+	}
+	if err := story.SaveProgress(h.progressPath, h.state); err != nil {
+		*ch = before
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err)
+		return
+	}
+	scenes := 0
+	units := 0
+	if ch.ScenePlan != nil {
+		scenes = len(ch.ScenePlan.Scenes)
+		for i := range ch.ScenePlan.Scenes {
+			units += len(ch.ScenePlan.Scenes[i].TropeUnits)
+		}
+	}
+	resp := *ch
+	if resp.Content != "" {
+		resp.WordCount = prose.CountProseUnits(resp.Content)
+		resp.ContentRev = fmt.Sprintf("%x", story.HashContent(resp.Content))
+	}
+	h.broadcastProgress()
+	h.writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "subdivided",
+		"scenes":     scenes,
+		"subscenes":  units,
+		"subdivided": subdivided,
+		"chapter":    resp,
+		"progress":   story.ProgressView(h.state),
+	})
 }
 
 // DeleteChapterAnalysis clears one chapter's stored editorial report.

@@ -405,10 +405,10 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 		plan.Scenes[pos].ParaStart = paraAcc
 		plan.Scenes[pos].ParaEnd = paraAcc + len(bestParas)
 		paraAcc += len(bestParas)
-		// Segment the accepted scene into trope units and record their
+		// Segment the accepted scene into subscenes and record their
 		// paragraph ranges + block spans on the plan. This is what lets a
 		// later critique (fact-check or bestseller chapter critic) repair one
-		// trope unit instead of the whole scene or chapter.
+		// subscene instead of the whole scene or chapter.
 		if sc.TropeUnits == nil || len(sc.TropeUnits) == 0 {
 			units := tropesOfScene(best, &plan.Scenes[pos])
 			if logger != nil && len(units) > 1 {
@@ -433,7 +433,7 @@ func generateChapterScenesSequentially(ctx context.Context, apiCfg *config.APICo
 	content = strings.Join(parts, "\n\n")
 
 	// recordFinalSceneSpans re-derives every scene's EXACT paragraph span and
-	// trope units over the FINAL joined content. It must run after any length
+	// subscenes over the FINAL joined content. It must run after any length
 	// adjustment too: when a compression/expansion pass changes the paragraph
 	// count, stale ParaStart/ParaEnd fail recordedSceneParaSpans' tiling check
 	// and the viewer silently drops back to one-block-per-paragraph — losing

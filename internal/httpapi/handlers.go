@@ -647,6 +647,32 @@ func (h *Handlers) GetChapterContent(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, ch)
 }
 
+// GetChapterIVLocator returns the reader-side scene/subscene tiling of one
+// written chapter: units[scenePos][unitIdx] = [paraStart, paraEnd, unitText].
+// The sheet uses it to confine bestseller-critic inline highlights to the
+// targeted subscene's paragraphs (instead of tinting whole scenes when an
+// anchor cannot be located inside a single block). Computed with exactly the
+// same segmentation used when proposals are stamped and after-resync
+// realignment runs, so marks land where Apply would rewrite.
+func (h *Handlers) GetChapterIVLocator(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+	idx := story.FindChapterIdx(h.state, num)
+	if idx < 0 {
+		h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+		return
+	}
+	units := story.ChapterInterventionLocator(h.state, num)
+	h.writeJSON(w, http.StatusOK, map[string]any{"units": units})
+}
+
 // —— story.Block compile ——
 
 // parseChapterBlockIDs extracts {num} and {id} path values.
@@ -723,7 +749,7 @@ func (h *Handlers) PutChapterBlock(w http.ResponseWriter, r *http.Request) {
 		if err := story.UpdateBlock(ch, id, body.Text); err != nil {
 			return err
 		}
-		// Surgical repair of a trope unit re-derives that chapter's fact/critic
+		// Surgical repair of a subscene re-derives that chapter's fact/critic
 		// findings roll-up so the colored dots on the blocks reflect the edited
 		// text instead of the stale pre-edit state (the underlying conflict /
 		// analysis records are untouched; only the per-unit mapping is rebuilt).
@@ -1224,7 +1250,7 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 		}()
 		h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "revising"})
 	case "surgical_trope":
-		// Repair ONLY the trope unit owning the first locatable issue — the rest
+		// Repair ONLY the subscene owning the first locatable issue — the rest
 		// of the chapter stays untouched. Then re-run the fact-check pass so a
 		// clean draft leaves review-ready state and a still-failing one raises a
 		// fresh conflict with updated targets.

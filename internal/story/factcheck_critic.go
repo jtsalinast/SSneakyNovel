@@ -77,7 +77,7 @@ func actForChapter(state *Progress, num int) (int, string, bool) {
 }
 
 // buildCriticSceneMapBlock renders the chapter's beat sheet with per-scene
-// paragraph ranges and trope-unit labels so the critic can attribute issues.
+// paragraph ranges and subscene labels so the critic can attribute issues.
 func buildCriticSceneMapBlock(ch ChapterState, lang string) string {
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
@@ -88,10 +88,10 @@ func buildCriticSceneMapBlock(ch ChapterState, lang string) string {
 	}
 	var sb strings.Builder
 	if en {
-		sb.WriteString("[Chapter structure — scenes and their trope units]\n")
+		sb.WriteString("[Chapter structure — scenes and their subscenes]\n")
 		sb.WriteString("Issues that live inside ONE scene must be reported with scope=\"scene\", that scene's id, and a verbatim quote taken from its text below.\n")
 	} else {
-		sb.WriteString("[Estructura del capítulo — escenas y sus unidades de tropo]\n")
+		sb.WriteString("[Estructura del capítulo — escenas y sus subescenas]\n")
 		sb.WriteString("Los problemas que viven dentro de UNA escena deben reportarse con scope=\"scene\", el id de esa escena y una cita textual tomada de su texto abajo.\n")
 	}
 	for _, sc := range ch.ScenePlan.Scenes {
@@ -103,9 +103,9 @@ func buildCriticSceneMapBlock(ch ChapterState, lang string) string {
 		unitsLine := ""
 		if len(unitDescs) > 0 {
 			if en {
-				unitsLine = fmt.Sprintf(" — trope units: %s", strings.Join(unitDescs, " → "))
+				unitsLine = fmt.Sprintf(" — subscenes: %s", strings.Join(unitDescs, " → "))
 			} else {
-				unitsLine = fmt.Sprintf(" — unidades de tropo: %s", strings.Join(unitDescs, " → "))
+				unitsLine = fmt.Sprintf(" — subescenas: %s", strings.Join(unitDescs, " → "))
 			}
 		}
 		fmt.Fprintf(&sb, "- Scene id=%d \"%s\" (~%d words)%s\n", sc.ID, title, sc.WordsBudget, unitsLine)
@@ -161,7 +161,7 @@ func buildChapterCriticPrompt(cfg *config.Config, state *Progress, idx int, cont
 		sb.WriteString(sceneBlock)
 		sb.WriteString(memoryContext)
 		sb.WriteString("[Chapter under review]\n" + content + "\n\n")
-		sb.WriteString("Rules:\n- New information neither the story-so-far nor the outline mentions is not a contradiction.\n- Only solid objective contradictions warrant FAIL. When in doubt, PASS.\n- For every issue decide its repair SCOPE: \"scene\" when rewriting the single offending scene (or one trope unit inside it) fixes it; \"chapter\" only when the problem is structural and spans several scenes (wrong act placement, duplicated arc beats across the chapter, POV drift through the whole text).\n- A scene-scope issue MUST carry scene_id (from the chapter structure above) and a verbatim quote of up to ~25 words copied exactly from the chapter text where the problem lives.\n- Deduplicate by root event: several angles on the same conflict count as ONE issue.\n\nReturn JSON only (no other text):\n{" + `"result": "PASS", "scope": "none", "issues": [], "summary": "one line"` + "}\nor\n{" + `"result": "FAIL", "scope": "scene", "issues": [{"type": "continuity|premature_event|re_enactment|identity|timeline|craft", "scope": "scene", "scene_id": 2, "quote": "verbatim excerpt…", "issue": "what contradicts what", "fix": "concrete repair guidance"}], "summary": "one line"` + "}\nUse scope \"chapter\" (and scene_id 0, empty quote) only for structural problems no single-scene rewrite can fix.")
+		sb.WriteString("Rules:\n- New information neither the story-so-far nor the outline mentions is not a contradiction.\n- Only solid objective contradictions warrant FAIL. When in doubt, PASS.\n- For every issue decide its repair SCOPE: \"scene\" when rewriting the single offending scene (or one subscene inside it) fixes it; \"chapter\" only when the problem is structural and spans several scenes (wrong act placement, duplicated arc beats across the chapter, POV drift through the whole text).\n- A scene-scope issue MUST carry scene_id (from the chapter structure above) and a verbatim quote of up to ~25 words copied exactly from the chapter text where the problem lives.\n- Deduplicate by root event: several angles on the same conflict count as ONE issue.\n\nReturn JSON only (no other text):\n{" + `"result": "PASS", "scope": "none", "issues": [], "summary": "one line"` + "}\nor\n{" + `"result": "FAIL", "scope": "scene", "issues": [{"type": "continuity|premature_event|re_enactment|identity|timeline|craft", "scope": "scene", "scene_id": 2, "quote": "verbatim excerpt…", "issue": "what contradicts what", "fix": "concrete repair guidance"}], "summary": "one line"` + "}\nUse scope \"chapter\" (and scene_id 0, empty quote) only for structural problems no single-scene rewrite can fix.")
 		return sb.String()
 	}
 	sb.WriteString("Eres un editor literario de fama mundial cuyos listados han producido múltiples superventas, ejecutando la pasada final de consistencia y calidad sobre UN capítulo redactado de una novela en curso.\n\n")
@@ -180,7 +180,7 @@ func buildChapterCriticPrompt(cfg *config.Config, state *Progress, idx int, cont
 	sb.WriteString(sceneBlock)
 	sb.WriteString(memoryContext)
 	sb.WriteString("[Capítulo bajo revisión]\n" + content + "\n\n")
-	sb.WriteString("Reglas:\n- Información nueva que ni la historia ni el outline mencionan no es una contradicción.\n- Solo contradicciones objetivas sólidas ameritan FAIL. Ante la duda, PASS.\n- Para cada problema decide su ALCANCE de reparación: \"scene\" cuando reescribir la única escena ofensora (o una unidad de tropo dentro de ella) lo resuelve; \"chapter\" solo cuando el problema es estructural y abarca varias escenas (ubicación de acto equivocada, latidos de arco duplicados a lo largo del capítulo, deriva de POV en todo el texto).\n- Un problema de alcance escena DEBE llevar scene_id (de la estructura arriba) y una cita textual de hasta ~25 palabras copiada exactamente del capítulo donde vive el problema.\n- Deduplica por evento raíz: varios ángulos del mismo conflicto cuentan como UN problema.\n\nDevuelve solo JSON (sin otro texto):\n{" + `"result": "PASS", "scope": "none", "issues": [], "summary": "una línea"` + "}\no\n{" + `"result": "FAIL", "scope": "scene", "issues": [{"type": "continuity|premature_event|re_enactment|identity|timeline|craft", "scope": "scene", "scene_id": 2, "quote": "extracto textual…", "issue": "qué contradice a qué", "fix": "guía concreta de reparación"}], "summary": "una línea"` + "}\nUsa alcance \"chapter\" (y scene_id 0, cita vacía) solo para problemas estructurales que ninguna reescena de una escena puede arreglar.")
+	sb.WriteString("Reglas:\n- Información nueva que ni la historia ni el outline mencionan no es una contradicción.\n- Solo contradicciones objetivas sólidas ameritan FAIL. Ante la duda, PASS.\n- Para cada problema decide su ALCANCE de reparación: \"scene\" cuando reescribir la única escena ofensora (o una subescena dentro de ella) lo resuelve; \"chapter\" solo cuando el problema es estructural y abarca varias escenas (ubicación de acto equivocada, latidos de arco duplicados a lo largo del capítulo, deriva de POV en todo el texto).\n- Un problema de alcance escena DEBE llevar scene_id (de la estructura arriba) y una cita textual de hasta ~25 palabras copiada exactamente del capítulo donde vive el problema.\n- Deduplica por evento raíz: varios ángulos del mismo conflicto cuentan como UN problema.\n\nDevuelve solo JSON (sin otro texto):\n{" + `"result": "PASS", "scope": "none", "issues": [], "summary": "una línea"` + "}\no\n{" + `"result": "FAIL", "scope": "scene", "issues": [{"type": "continuity|premature_event|re_enactment|identity|timeline|craft", "scope": "scene", "scene_id": 2, "quote": "extracto textual…", "issue": "qué contradice a qué", "fix": "guía concreta de reparación"}], "summary": "una línea"` + "}\nUsa alcance \"chapter\" (y scene_id 0, cita vacía) solo para problemas estructurales que ninguna reescena de una escena puede arreglar.")
 	return sb.String()
 }
 
@@ -283,7 +283,7 @@ func scenePosFromIssue(plan *ScenePlan, iss CriticIssue) int {
 }
 
 // repairChapterWithCritic runs the evolved critic over a freshly generated
-// chapter draft and repairs scene-scoped issues surgically (trope-unit level
+// chapter draft and repairs scene-scoped issues surgically (subscene level
 // when the quote locates a unit, whole-scene level otherwise). It returns the
 // possibly-repaired content plus the leftover issues that still require the
 // classic full-chapter retry loop (empty slice = chapter passes).

@@ -90,6 +90,8 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/chapters/{num}/analysis/intervention-dismiss", h.PostChapterInterventionDismiss)
 	mux.HandleFunc("PUT /api/chapters/{num}/sheet", h.PutChapterSheet)
 	mux.HandleFunc("POST /api/chapters/{num}/resync-ui", h.PostChapterResyncUI)
+	mux.HandleFunc("POST /api/chapters/{num}/subdivide-beats", h.PostChapterSubdivideBeats)
+	mux.HandleFunc("GET /api/chapters/{num}/iv-locator", h.GetChapterIVLocator)
 	mux.HandleFunc("DELETE /api/chapters/{num}/critique", h.DeleteChapterAnalysis)
 	mux.HandleFunc("POST /api/outline/generate-continuation", h.PostOutlineGenerateContinuation)
 	mux.HandleFunc("POST /api/outline/preplan/generate", h.PostPrePlanGenerate)

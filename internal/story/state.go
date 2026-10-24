@@ -52,7 +52,7 @@ type ChapterState struct {
 	ScenePlan *ScenePlan `json:"scene_plan,omitempty"`
 	// Analysis is the bestseller-editor pass over THIS DRAFTED CHAPTER
 	// (POST /api/chapters/{num}/analyze): pillar scores plus suggestions
-	// whose interventions target concrete trope units of the written prose.
+	// whose interventions target concrete subscenes of the written prose.
 	// nil until the author runs an analysis on this chapter.
 	Analysis *ChapterAnalysisReport `json:"analysis,omitempty"`
 	// TropeIssues is a per-(scenePos, tropeIndex) roll-up of every OPEN
@@ -74,7 +74,7 @@ type ChapterState struct {
 	LastInterfaceReport string `json:"last_interface_report,omitempty"`
 }
 
-// TropeIssueGroup aggregates the findings located at one trope unit.
+// TropeIssueGroup aggregates the findings located at one subscene.
 type TropeIssueGroup struct {
 	ScenePos   int      `json:"scene_pos"`
 	TropeIndex int      `json:"trope_index"`
@@ -140,7 +140,7 @@ type WritingConflict struct {
 	SuggestedActions []ConflictActionOption `json:"suggested_actions"`
 	// SceneTargets locates the (scene position, trope-unit index) owning each
 	// entry of Issues (-1,-1 when unlocatable). The UI offers a surgical
-	// "edit only this trope" repair per located target, so single-unit
+	// "edit only this subscene" repair per located target, so single-unit
 	// contradictions no longer force full-chapter rewrites.
 	SceneTargets [][2]int `json:"scene_targets,omitempty"`
 	// SurgicalAttempts counts how many single-trope repairs have already been
