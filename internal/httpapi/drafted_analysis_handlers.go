@@ -388,10 +388,10 @@ func (h *Handlers) PostActInterventionsApply(w http.ResponseWriter, r *http.Requ
 	h.logger.TaskEnd("act_interventions_apply", true)
 	h.broadcastProgress()
 	h.writeJSON(w, http.StatusOK, map[string]any{
-		"status":      "applied",
-		"id":          body.ID,
+		"status":        "applied",
+		"id":            body.ID,
 		"interventions": applied,
-		"progress":    story.ProgressView(h.state),
+		"progress":      story.ProgressView(h.state),
 	})
 }
 
@@ -747,6 +747,57 @@ func bodyTexts(in []struct {
 		out[i] = story.SheetBlock{ID: b.ID, Text: b.Text}
 	}
 	return out
+}
+
+// PostChapterResyncUI rebuilds a chapter's editor bookkeeping (blocks, scene/
+// trope spans, fallback scene plan) from the EXISTING prose without rewriting
+// anything. Legacy chapters generated before the chips / contextual-critic UI
+// landed have no scene metadata, so their chips and critic highlights stay
+// hidden; this endpoint materializes them in place so the new interface works
+// over already-written text. Returns the refreshed chapter payload.
+func (h *Handlers) PostChapterResyncUI(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) || h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+	idx := story.FindChapterIdx(h.state, num)
+	if idx < 0 {
+		h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+		return
+	}
+	ch := &h.state.Chapters[idx]
+	if strings.TrimSpace(ch.Content) == "" {
+		h.writeErrorReq(w, r, http.StatusConflict, "chapter_has_no_content")
+		return
+	}
+	before := *ch
+	before.Blocks = append([]story.Block(nil), ch.Blocks...)
+	scenes := story.ResyncChapterInterface(ch)
+	if err := story.SaveProgress(h.progressPath, h.state); err != nil {
+		*ch = before
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err)
+		return
+	}
+	story.RefreshTropeIssuesForChapter(h.state, ch)
+	story.SaveChapterMarkdown(h.projectDir(), *ch, h.state.Title)
+	h.broadcastProgress()
+	resp := *ch
+	if resp.Content != "" {
+		resp.WordCount = prose.CountProseUnits(resp.Content)
+		resp.ContentRev = fmt.Sprintf("%x", story.HashContent(resp.Content))
+	}
+	h.writeJSON(w, http.StatusOK, map[string]any{
+		"status":   "resynced",
+		"scenes":   scenes,
+		"chapter":  resp,
+		"progress": story.ProgressView(h.state),
+	})
+	h.startKnowledgeSync()
 }
 
 // DeleteChapterAnalysis clears one chapter's stored editorial report.

@@ -141,6 +141,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_analyze_done": {
 
 		LangEN: "Chapter analysis complete — %d editorial suggestions"},
+	"log.chapter_analyze_no_suggestions": {
+
+		LangEN: "Chapter %d scored %d/100 but the editor sent no actionable suggestions — re-run the critique; if it repeats, the model is answering with grades only"},
 	"log.chapter_analyze_proposing": {
 
 		LangEN: "Editor is drafting small trope interventions for this chapter point..."},

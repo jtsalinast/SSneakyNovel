@@ -27,6 +27,7 @@ import (
 	"showmethestory/internal/prose"
 	"showmethestory/internal/sse"
 	"strings"
+	"time"
 )
 
 const (
@@ -50,14 +51,14 @@ const (
 type TropeLabel string
 
 const (
-	TropeOpening      TropeLabel = "opening"       // scene setup / arrival
-	TropeTension      TropeLabel = "tension"       // will-they-won't-they, friction
-	TropeDialogue     TropeLabel = "dialogue"      // dialogue-led exchange
-	TropeAction       TropeLabel = "action"        // chase/fight/physical turn
-	TropeReveal       TropeLabel = "reveal"        // discovery / information drop
+	TropeOpening       TropeLabel = "opening"       // scene setup / arrival
+	TropeTension       TropeLabel = "tension"       // will-they-won't-they, friction
+	TropeDialogue      TropeLabel = "dialogue"      // dialogue-led exchange
+	TropeAction        TropeLabel = "action"        // chase/fight/physical turn
+	TropeReveal        TropeLabel = "reveal"        // discovery / information drop
 	TropeIntrospection TropeLabel = "introspection" // interiority / processing
-	TropeAftermath    TropeLabel = "aftermath"     // quiet resolution / hook close
-	TropeTransition   TropeLabel = "transition"    // movement/time bridge
+	TropeAftermath     TropeLabel = "aftermath"     // quiet resolution / hook close
+	TropeTransition    TropeLabel = "transition"    // movement/time bridge
 )
 
 // paragraphUnits splits scene/chapter prose into trimmed paragraph units and
@@ -132,7 +133,7 @@ func splitTropesFromParas(paras []string, sceneProse, sep string) ([]string, [][
 		}
 		var kept []string
 		first, last := -1, -1
-		for i, p := range paras[start : min(end, len(paras))] {
+		for i, p := range paras[start:min(end, len(paras))] {
 			if paraIsBreak(p) {
 				continue
 			}
@@ -741,7 +742,7 @@ func rewriteSceneTrope(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 	// beat, so ±15% on the WHOLE scene was far too tight and rejected valid
 	// surgical fixes whenever the fixed beat grew or shrank a little.
 	const strictLo, strictHi = 75, 125
-	bestScene, bestDev := "", int(^uint(0) >> 1)
+	bestScene, bestDev := "", int(^uint(0)>>1)
 	for attempt := 0; attempt <= maxTropeRewriteRetries; attempt++ {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
@@ -1003,4 +1004,184 @@ func SaveChapterTropeSnapshot(progressPath string, state *Progress, idx int, tit
 	ch := state.Chapters[idx]
 	SaveChapterMarkdown(filepath.Dir(progressPath), ch, title)
 	return SaveProgress(progressPath, state)
+}
+
+// ResyncChapterInterface re-derives all the editor bookkeeping a chapter needs
+// (blocks, scene/trope spans, fallback scene plan for plan-less legacy prose)
+// WITHOUT touching the prose itself. Chapters generated before the chips /
+// contextual-critic features landed have scene_pos = -1 or missing block
+// ranges, so the frontend hides their chips and anchors. This forces the same
+// scene-aware sync the sheet-save path runs, plus the break-derived pseudo
+// scene plan, so existing text suddenly exposes its full metadata UI. Returns
+// the number of scenes materialized.
+func ResyncChapterInterface(ch *ChapterState) int {
+	if strings.TrimSpace(ch.Content) == "" {
+		SyncChapterBlocksSceneAware(ch, ch.Content)
+		return 0
+	}
+	// Force a FULL re-tile instead of the incremental path: SyncChapterBlocks
+	// keeps previous block boundaries when they still match the prose, so a
+	// chapter whose stale blocks were split one-per-paragraph (or merged into a
+	// single block) would "resync" to zero changes and keep hiding its scene/
+	// trope chips. Dropping the old block list makes the sync re-derive every
+	// boundary from the current scene plan / fallback tiling; block IDs are
+	// freshly allocated but the prose itself is untouched.
+	ch.Blocks = nil
+	ch.NextBlockID = 0
+	ensureFallbackScenePlan(ch)
+	repairSceneSpans(ch)
+	SyncChapterBlocksSceneAware(ch, ch.Content)
+	scenes := 0
+	units := 0
+	if ch.ScenePlan != nil {
+		scenes = len(ch.ScenePlan.Scenes)
+		for i := range ch.ScenePlan.Scenes {
+			units += len(ch.ScenePlan.Scenes[i].TropeUnits)
+		}
+	}
+	if units == 0 {
+		units = len(ch.Blocks)
+	}
+	ch.InterfaceSyncedAt = time.Now().Unix()
+	ch.InterfaceSyncCount++
+	ch.LastInterfaceReport = fmt.Sprintf("%d scenes, %d trope units, %d blocks", scenes, units, len(ch.Blocks))
+	return scenes
+}
+
+// repairSceneSpans re-derives the absolute paragraph span (ParaStart/ParaEnd)
+// of every planned scene from the CURRENT prose, walking the same budget-based
+// estimator the sequential writer uses, and re-tiles each scene's trope units
+// over its repaired span with the writer's own splitter. Chapters whose plan
+// was produced before per-scene bookkeeping landed — or whose prose changed
+// afterwards — carry stale spans that make recordedSceneParaSpans reject the
+// exact tiling; without repair the whole chapter collapses into fallback
+// pseudo-scenes and the UI shows a single "Scene 1" chip with no trope chips.
+// No-op when there is no plan or no content.
+func repairSceneSpans(ch *ChapterState) {
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 2 || strings.TrimSpace(ch.Content) == "" {
+		return
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 {
+		return
+	}
+	plan := ch.ScenePlan
+
+	// Preferred strategy: trust the HARD BREAK markers ("---" / "***) the
+	// sequential writer emits between scenes. The marker paragraph itself is
+	// consumed as the scene boundary (it belongs to no scene), so every group
+	// EXCLUDES its trailing marker and the groups tile the prose exactly with
+	// no gaps. Previously the marker stayed inside the previous scene's span;
+	// retiled trope units never cover it (splitTropesFromParas emits prose-only
+	// ranges), so recordedSceneParaSpans saw a gap at the end of each scene,
+	// discarded the whole exact tiling and the chapter fell back to budget
+	// estimates that hide the real scene boundaries in the UI.
+	if bs := breakSceneSpansNoMarker(paras); len(bs) == len(plan.Scenes) {
+		for pos := range plan.Scenes {
+			sc := &plan.Scenes[pos]
+			sc.ParaStart, sc.ParaEnd = bs[pos][0], bs[pos][1]
+			retileSceneTropeUnits(sc, paras, sep)
+		}
+		return
+	}
+
+	// Budget-proportional walk (same math as refreshSceneBlockRanges, but in
+	// paragraph space): each scene consumes paragraphs until its word budget is
+	// covered; the last scene always absorbs the tail so spans tile exactly.
+	cum := 0
+	for pos := range plan.Scenes {
+		if cum >= len(paras) {
+			// Ran out of prose: give degenerate empty spans to the remaining
+			// scenes instead of leaving stale numbers pointing at wrong text.
+			for p := pos; p < len(plan.Scenes); p++ {
+				plan.Scenes[p].ParaStart = len(paras)
+				plan.Scenes[p].ParaEnd = len(paras)
+				plan.Scenes[p].TropeUnits = nil
+				plan.Scenes[p].TropeRanges = nil
+			}
+			break
+		}
+		n := sceneParaEstimate(paras, cum, plan, pos)
+		hi := min(cum+n, len(paras))
+		if pos == len(plan.Scenes)-1 {
+			hi = len(paras)
+		}
+		if hi <= cum {
+			hi = min(cum+1, len(paras))
+		}
+		sc := &plan.Scenes[pos]
+		sc.ParaStart, sc.ParaEnd = cum, hi
+		retileSceneTropeUnits(sc, paras, sep)
+		cum = hi
+	}
+}
+
+// retileSceneTropeUnits re-segments one scene's trope units over its current
+// [ParaStart,ParaEnd) span using the writer's own splitter (shared by the
+// break-marker and budget-walk repairs).
+func retileSceneTropeUnits(sc *Scene, paras []string, sep string) {
+	lo, hi := sc.ParaStart, sc.ParaEnd
+	if lo < 0 || hi <= lo || hi > len(paras) {
+		sc.TropeUnits = nil
+		sc.TropeRanges = nil
+		return
+	}
+	sceneParas := paras[lo:hi]
+	beats, ranges := splitTropesFromParas(sceneParas, "", sep)
+	if len(beats) == 0 {
+		beats = []string{strings.Join(sceneParas, sep)}
+		ranges = [][2]int{{0, len(sceneParas)}}
+	} else if len(ranges) == len(beats) && len(sceneParas) > 0 {
+		// splitTropesFromParas emits PROSE-only ranges (break markers inside the
+		// span are skipped). When a scene's span still contains such a marker the
+		// units would leave a gap, recordedSceneParaSpans would judge the tiling
+		// stale and discard every exact scene boundary — one "Scene 1" chip again.
+		// Extend each unit to absorb the paragraphs between it and the next so the
+		// units tile [0, len(sceneParas)) exactly; block sync drops break-only
+		// paragraphs from the visible text anyway.
+		filled := make([][2]int, len(ranges))
+		for i := range ranges {
+			end := len(sceneParas)
+			if i+1 < len(ranges) {
+				end = ranges[i+1][0]
+			}
+			if end < ranges[i][1] {
+				end = ranges[i][1]
+			}
+			filled[i] = [2]int{ranges[i][0], end}
+		}
+		ranges = filled
+	}
+	applyTropeSegmentation(sc, beats, ranges)
+}
+
+// breakSceneSpansNoMarker derives HARD-BREAK-delimited scene spans that tile
+// the prose EXACTLY: the paragraph right after each break marker belongs to
+// the NEXT group, but the marker itself is consumed as the boundary of the
+// previous group (markers carry no prose, so dropping them from spans loses
+// nothing visible). Unlike breakSceneSpans, consecutive/edge markers never
+// create gaps, which makes these spans directly usable as Scene.ParaStart /
+// ParaEnd for recordedSceneParaSpans' exact-tiling check.
+func breakSceneSpansNoMarker(paras []string) [][2]int {
+	if len(paras) == 0 {
+		return nil
+	}
+	var spans [][2]int
+	start := -1
+	for j := range paras {
+		if paraIsBreak(paras[j]) {
+			if start >= 0 {
+				spans = append(spans, [2]int{start, j})
+				start = -1
+			}
+			continue // stray/consecutive markers outside any group are ignored
+		}
+		if start < 0 {
+			start = j
+		}
+	}
+	if start >= 0 {
+		spans = append(spans, [2]int{start, len(paras)})
+	}
+	return spans
 }

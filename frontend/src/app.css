@@ -407,13 +407,30 @@ body {
   box-shadow: 0 0 0 2px rgb(0 0 0 / 0.04);             /* ring muy tenue al enfocar */
 }
 
-/* Story blocks: fact-highlighted = info tint. The selected block keeps NO
-   background colour (only its floating action toolbar marks the selection). */
+/* Story blocks: the selected block keeps NO background colour (only its
+   floating action toolbar marks the selection). Fact highlighting is now
+   applied at the SPAN level (#ChapterProseViewer mark.fact-mark) instead of
+   tinting the whole paragraph blue — clicking a "Key fact" chip must not
+   paint the entire block sky-blue. The legacy .story-block-highlight rule is
+   kept transparent for any other caller that still sets it. */
 #ChapterProseViewer .story-block-selected {
   background-color: transparent;
 }
 #ChapterProseViewer .story-block-highlight {
-  background-color: oklch(50% 0.10 250 / 0.16);        /* info 20% → 16%           */
+  background-color: transparent;
+}
+/* Inline highlighter ("marcatextos") for key facts: only the exact sentence
+   where the fact lives gets the yellow marker tint. */
+#ChapterProseViewer mark.fact-mark {
+  background: color-mix(in srgb, #fde047 55%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
+  color: inherit;
+}
+@media (prefers-color-scheme: dark) {
+  #ChapterProseViewer mark.fact-mark {
+    background: color-mix(in srgb, #facc15 30%, transparent);
+  }
 }
 
 /* Scene marker chip between trope blocks of different scenes: almost

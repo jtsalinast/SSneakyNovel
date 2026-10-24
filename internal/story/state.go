@@ -64,6 +64,14 @@ type ChapterState struct {
 	// descriptions. Rebuilt by refreshTropeIssues whenever the conflict or
 	// the analysis changes.
 	TropeIssues []TropeIssueGroup `json:"trope_issues,omitempty"`
+	// Interface bookkeeping for the transient "Actualizar interfaz" action:
+	// when the editor metadata (blocks/scene-trope tiling/chips) was last
+	// re-derived from the existing prose, how many times, and a human-readable
+	// summary of what the latest resync materialized. Diagnostics only — they
+	// never touch the prose.
+	InterfaceSyncedAt   int64  `json:"interface_synced_at,omitempty"`
+	InterfaceSyncCount  int    `json:"interface_sync_count,omitempty"`
+	LastInterfaceReport string `json:"last_interface_report,omitempty"`
 }
 
 // TropeIssueGroup aggregates the findings located at one trope unit.

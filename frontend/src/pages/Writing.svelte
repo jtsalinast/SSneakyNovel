@@ -138,6 +138,19 @@
     chapterBlocks = full.blocks || [];
     loadedRev = full.content_rev || '';
   }
+  // Force a reload of the selected chapter's payload (blocks, scene/trope
+  // meta, content_rev) even when the prose hash is unchanged — used by the
+  // "Actualizar interfaz" resync, which rewrites metadata but not text.
+  async function reloadChapterFull() {
+    if (!ch) return null;
+    const num = ch.num;
+    loadedNum = num;
+    try {
+      const full = await api('GET', '/api/chapters/' + num);
+      applyChapter(num, full);
+      return full;
+    } catch (e) { addToast(e.message, 'error'); return null; }
+  }
   async function maybeLoadContent(c) {
     const rev = c.content_rev || '';
     if (c.num === loadedNum && rev === loadedRev) return;
@@ -480,6 +493,66 @@
     } catch (e) { addToast(e.message, 'error'); }
   }
 
+  // —— Key-fact inline highlighter ("marcatextos") ————————————————————
+  // Clicking a "Key fact" chip used to tint the WHOLE paragraph sky-blue via
+  // .story-block-highlight. Now we locate the exact SENTENCE the fact refers
+  // to (its reference quote when available, otherwise a fuzzy scan of the
+  // block text against the fact content) and wrap only that span in a yellow
+  // <mark class="fact-mark">. The active fact is cleared whenever the sheet
+  // content changes so stale highlights never linger over edited prose.
+  let activeFactBlockId = null;
+  const splitSentences = (s) => s.split(/(?<=[.!?\u2026])\s+/);
+  function factMarkSegments(text, blockId) {
+    if (!activeFact || activeFactBlockId !== blockId || !text) return null;
+    const ref = (activeFact.references || []).find(r => !r.stale && r.chapter === ch?.num && r.block_id === blockId);
+    const cands = [ref?.quote, ...(ref?.quotes || []), activeFact.content].filter(x => x && String(x).trim());
+    for (const raw of cands) {
+      const q = normText(String(raw)).toLowerCase();
+      if (q.length < 4) continue;
+      // Exact containment inside one sentence → highlight that sentence.
+      for (const sent of splitSentences(text)) {
+        const ns = normText(sent).toLowerCase();
+        if (!ns) continue;
+        if (ns.includes(q) || q.includes(ns)) {
+          const i = text.indexOf(sent);
+          if (i >= 0) return [{ t: text.slice(0, i) }, { t: sent, fact: true }, { t: text.slice(i + sent.length) }].filter(s => s.t);
+        }
+      }
+      // Fuzzy fallback: first long word run of the fact that appears verbatim
+      // in the text marks its containing sentence.
+      const words = q.replace(/[^\p{L}\p{N}\s]/gu, '').split(/\s+/).filter(Boolean);
+      for (let w = Math.min(words.length, 8); w >= 3; w--) {
+        const pre = words.slice(0, w).join(' ');
+        const idx = normText(text).toLowerCase().indexOf(pre);
+        if (idx >= 0) {
+          // Map the normalized offset back onto the raw text by counting
+          // collapsed-whitespace tokens (same technique as ivSegmentsFor).
+          let nh = 0, ri = 0;
+          while (nh < idx && ri < text.length) {
+            if (/\s/.test(text[ri])) { while (ri < text.length && /\s/.test(text[ri])) ri++; nh++; }
+            else { ri++; nh++; }
+          }
+          for (const sent of splitSentences(text)) {
+            const si = text.indexOf(sent);
+            if (si <= ri && ri < si + sent.length) {
+              return [{ t: text.slice(0, si) }, { t: sent, fact: true }, { t: text.slice(si + sent.length) }].filter(s => s.t);
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+  function toggleFactHighlight(fact, blockId) {
+    knowledgeExpanded = true;
+    if (activeFact && activeFact.id === fact.id && activeFactBlockId === blockId) {
+      activeFact = null; activeFactBlockId = null; highlightedBlock = null; return;
+    }
+    activeFact = fact;
+    activeFactBlockId = blockId;
+    highlightedBlock = null; // no whole-paragraph blue tint anymore
+  }
+
   // —— Pending bestseller-critic interventions (inline highlights) —————
   // After the chapter critique runs, proposals are auto-drafted (backend) and
   // arrive as TropeIntervention entries with status "pending". Each one is
@@ -567,6 +640,21 @@
       if (marks.some(m => sp[0] < m[1] && m[0] < sp[1])) return; // overlap
       marks.push(sp);
     };
+    const sceneBlocks = chapterBlocks.filter(b => b.scene_pos === meta.scene_pos);
+    const firstOfScene = sceneBlocks.length ? sceneBlocks[0].id : null;
+    // First block of the trope unit this IV targets. Must be computed from the
+    // IV's OWN unit index: using the current block's index made Tier 4 attach
+    // the mark to whichever block was being rendered, so EVERY paragraph of
+    // the unit claimed to be the target and no highlight survived the
+    // overlap-skip (i.e. nothing highlighted at all).
+    const firstOfUnitFor = (ivUnit0) => {
+      for (const sb of sceneBlocks) {
+        const t0 = sb.trope_index != null ? sb.trope_index - 1 : null;
+        if (ivUnit0 == null) return sb.id; // no unit info: first block of scene
+        if (t0 == null || !sb.trope_count || sb.trope_count <= 1 || t0 === ivUnit0) return sb.id;
+      }
+      return null;
+    };
     const sceneHay = normText(sheetSceneProse(meta.scene_pos));
     const chapHay = normText(chapterContent || '');
     for (const iv of pendingIVs) {
@@ -604,6 +692,17 @@
           break;
         }
       }
+      if (hit) continue;
+      // Tier 4 (positional fallback): the anchor text can't be located
+      // anywhere (reworded prose, truncated quote). Still show it IN CONTEXT,
+      // Grammarly-style: attach the mark to the first block of the targeted
+      // trope unit (or of the scene when the IV has no unit index), so the
+      // critic's feedback never disappears into the report-only section at
+      // the bottom of the page.
+      const ivUnit0 = iv.trope_index != null ? iv.trope_index : null;
+      const isTargetBlock = blockId === firstOfUnitFor(ivUnit0)
+        || (ivUnit0 == null && blockId === firstOfScene);
+      if (isTargetBlock) addMark([0, n.length]);
     }
     if (!marks.length) return null;
     marks.sort((a, b) => a[0] - b[0]);
@@ -988,6 +1087,31 @@
       addToast($t('writing.toasts.factcheckStarted', { num: ch.num }), 'info');
     } catch (e) { addToast(e.message, 'error'); }
   }
+
+  // "Actualizar interfaz": transient action that re-derives the chapter's
+  // editor bookkeeping server-side (blocks, scene/trope chips, critic marks,
+  // key-ffact associations) WITHOUT touching the prose. Chapters generated
+  // before the chip/highlight features existed carry stale metadata; this
+  // resyncs them in place so the new UI works on already-written chapters
+  // instead of forcing a full rewrite.
+  let resyncing = false;
+  async function doResyncUI() {
+    if (!ch || resyncing) return;
+    resyncing = true;
+    const num = ch.num;
+    try {
+      const res = await api('POST', `/api/chapters/${num}/resync-ui`);
+      progress.set(await api('GET', '/api/progress'));
+      await reloadChapterFull();
+      sheetDirty = false;
+      // Backend returns { status, scenes, chapter, progress } — "scenes" is
+      // the number of scene blocks re-tiled. Fall back defensively so the
+      // toast never claims "0 blocks" when the resync actually worked.
+      const n = res?.scenes ?? res?.blocks ?? (ch?.blocks?.length ?? 0);
+      addToast($t('writing.resync.done', { n }), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { resyncing = false; }
+  }
   function doResetChapter() {
     if (!ch) return;
     const num = ch.num;
@@ -1340,11 +1464,47 @@
                         {#if markerBefore(chapterBlocks, bi, sheetMeta)}
                           {@const m = markerBefore(chapterBlocks, bi, sheetMeta)}
                           {@const smi = m.kind === 'scene' ? firstUnitIssuesOfScene(m.pos - 1) : null}
-                          <div class="sheet-chip-row flex justify-center py-0.5" data-bid={-bi - 1}>
+                          <!-- Key facts referenced by the blocks of the trope unit this
+                               chip opens (falling back to the whole scene when the block
+                               has no unit index): shown as compact "#N" chips so facts
+                               travel WITH the trope markers, never on the scene chip.
+                               Clicking one toggles an inline highlighter mark over the
+                               exact sentence the fact refers to (no whole-block tint). -->
+                          {@const chipFacts = m.kind === 'trope' ? (() => {
+                            // Key facts belong to TROPE chips, never to the scene chip:
+                            // they travel with the unit that references them.
+                            const cur = sheetMeta.get(b.id);
+                            if (!cur || cur.scene_pos == null || cur.scene_pos < 0) return [];
+                            const t0 = cur.trope_index != null ? cur.trope_index - 1 : null;
+                            const unitBlocks = chapterBlocks.filter(x => {
+                              if (x.scene_pos !== cur.scene_pos) return false;
+                              if (t0 == null || !x.trope_count || x.trope_count <= 1) return true;
+                              const xt = x.trope_index != null ? x.trope_index - 1 : null;
+                              return xt == null || xt === t0;
+                            });
+                            const ids = new Set();
+                            const out = [];
+                            for (const ub of unitBlocks) {
+                              for (const f of blockFacts(ub.id)) {
+                                if (!ids.has(f.id)) { ids.add(f.id); out.push({ fact: f, bid: ub.id }); }
+                              }
+                            }
+                            return out.slice(0, 6);
+                          })() : []}
+                          <div class="sheet-chip-row flex flex-wrap items-center justify-center gap-1 py-0.5" data-bid={-bi - 1}>
                             <span class="group inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope {m.kind === 'scene' ? 'bg-primary/10 border border-primary/20' : 'bg-secondary/10 border border-secondary/20'} cursor-default select-none" contenteditable="false">
                               <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase {m.kind === 'scene' ? 'text-primary/70' : 'text-secondary/70'} select-none">
                                 {#if m.kind === 'scene'}{$t('writing.blockSceneMarker', [m.pos])}{:else}{$t('writing.tropeMarkerChip', [m.label || ('#' + m.idx), m.idx, m.count])}{/if}
                               </span>
+                              {#if chipFacts.length}
+                                <span class="flex items-center gap-0.5 select-none">
+                                  {#each chipFacts as cf (cf.fact.id)}
+                                    <button type="button" class="keyfact-chip" contenteditable="false"
+                                            title={$t('writing.keyFactChip.tip') + ': ' + (cf.fact.content || '')}
+                                            on:click|stopPropagation|preventDefault={() => toggleFactHighlight(cf.fact, cf.bid)}>{$t('writing.keyFactChip')} #{cf.fact.id}</button>
+                                  {/each}
+                                </span>
+                              {/if}
                               {#if smi?.fact?.length}
                                 <InfoTip text={tropeIssueTipText(smi, 'fact')} label={$t('writing.tropeDots.factTitle')}>
                                   <span slot="trigger" class="trope-dot trope-dot-fact" role="button" tabindex="-1" aria-label={$t('writing.tropeDots.factTitle')}></span>
@@ -1354,7 +1514,7 @@
                             </span>
                           </div>
                         {/if}
-                        <div id={'story-block-' + b.id} class="sheet-para relative rounded -mx-2 px-2 py-1 leading-relaxed whitespace-pre-wrap {highlightedBlock === b.id || activeFact?.references?.some(r => !r.stale && r.chapter === ch.num && r.block_id === b.id) ? 'story-block-highlight' : selectedBlockId === b.id ? 'story-block-selected' : ''}"
+                        <div id={'story-block-' + b.id} class="sheet-para relative rounded -mx-2 px-2 py-1 leading-relaxed whitespace-pre-wrap {selectedBlockId === b.id ? 'story-block-selected' : ''}"
                              data-bid={b.id}
                              contenteditable={editingBlockId === b.id ? 'false' : 'true'}>
                           {#if editingBlockId === b.id}
@@ -1364,8 +1524,14 @@
                               <button class="btn btn-primary btn-xs" on:click={saveBlockEdit} disabled={$taskRunning || !editingText.trim()}>{$t('common.save')}</button>
                             </div>
                           {:else}
-                            {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-1" contenteditable="false">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation={() => { activeFact = fact; highlightedBlock = b.id; knowledgeExpanded = true; }}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
-                            <span class="whitespace-pre-wrap">{#if ivSegmentsFor(b.text, b.id)}{#each ivSegmentsFor(b.text, b.id) as seg, si (si)}{#if seg.iv}<span class="iv-mark" contenteditable="false" role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation={(e) => openIVPopup(e, findIvForSegment(seg.t))} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, findIvForSegment(seg.t)); } }}>{seg.t}</span>{:else}{seg.t}{/if}{/each}{:else}{b.text}{/if}</span>
+                            {#if blockFacts(b.id).length}<div class="flex flex-wrap gap-1 mb-1" contenteditable="false">{#each blockFacts(b.id) as fact}<button class="badge badge-warning badge-sm cursor-pointer" on:click|stopPropagation|preventDefault={() => toggleFactHighlight(fact, b.id)}>{$t('facts.marker')} #{fact.id}</button>{/each}</div>{/if}
+                            {#if (() => { const ivs = ivSegmentsFor(b.text, b.id); const fms = factMarkSegments(b.text, b.id); return ivs || fms; })()}
+                              {@const ivSegs = ivSegmentsFor(b.text, b.id)}
+                              {@const fmSegs = factMarkSegments(b.text, b.id)}
+                              <span class="whitespace-pre-wrap">{#each (fmSegs && !ivSegs ? fmSegs : (ivSegs || [{ t: b.text }])) as seg, si (si)}{#if seg.iv}<mark class="iv-mark" role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation|preventDefault={(e) => openIVPopup(e, findIvForSegment(seg.t))} on:mousedown|stopPropagation={(e) => e.preventDefault()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, findIvForSegment(seg.t)); } }}>{seg.t}</mark>{:else if seg.fact}<mark class="fact-mark">{seg.t}</mark>{:else}{seg.t}{/if}{/each}</span>
+                            {:else}
+                              <span class="whitespace-pre-wrap">{b.text}</span>
+                            {/if}
                             {#if tropeIssuesFor(b)}
                               {@const ti = tropeIssuesFor(b)}
                               <span class="inline-flex items-center gap-1 align-top ml-1" contenteditable="false">
@@ -1475,6 +1641,10 @@
                     <button class="btn btn-outline btn-sm" on:click={doPolish} disabled={$taskRunning} title={$t('writing.btn.polish.tip')}>{$t('writing.btn.polish')}</button>
                   {/if}
                   <button class="btn btn-outline btn-sm" on:click={copyContent}>{$t('writing.btn.copy')}</button>
+                  <button class="btn btn-outline btn-sm" on:click={doResyncUI} disabled={$taskRunning || resyncing} title={$t('writing.resync.tip')}>
+                    {#if resyncing}<span class="loading loading-spinner loading-xs"></span>{/if}
+                    {$t('writing.resync.btn')}
+                  </button>
                 {/if}
                 <div class="flex-1"></div>
                 <div class="join">
@@ -1620,6 +1790,25 @@
     user-select: none;
     -webkit-user-select: none;
   }
+  /* "Key fact #N" chips living inside the scene/trope marker row. They stay
+     subtle like the markers but brighten on hover; clicking jumps to the
+     fact's source block (same behavior as the paragraph-level badges). */
+  .keyfact-chip {
+    user-select: none;
+    -webkit-user-select: none;
+    font-size: 9px;
+    line-height: 1.2;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    background: color-mix(in oklab, var(--fallback-warning, oklch(var(--warning))) 18%, transparent);
+    border: 1px solid color-mix(in oklab, var(--fallback-warning, oklch(var(--warning))) 45%, transparent);
+    color: var(--fallback-warning-foreground, oklch(var(--warning)));
+    opacity: 0.75;
+    transition: opacity 0.15s ease, transform 0.12s ease;
+    cursor: pointer;
+  }
+  .keyfact-chip:hover { opacity: 1; transform: scale(1.08); }
   #ChapterSheetEditor :global(.iv-mark) {
     background: color-mix(in oklab, var(--fallback-secondary, oklch(var(--secondary))) 22%, transparent);
     border-bottom: 1.5px dashed var(--fallback-secondary, oklch(var(--secondary)));

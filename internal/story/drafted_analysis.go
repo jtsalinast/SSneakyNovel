@@ -206,10 +206,15 @@ func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string
 			var ivs []TropeIntervention
 			for _, iv := range s.Interventions {
 				iv.Feedback = strings.TrimSpace(iv.Feedback)
-				if iv.Feedback == "" || !validateTargets(iv.ChapterNum, iv.ScenePos, iv.TropeIndex) {
+				if iv.Feedback == "" {
 					continue
 				}
-				iv.Status = "pending"
+				// Clamp out-of-range targets into the live tiling instead of
+				// silently dropping them: an editor model that overshoots a
+				// scene/trope index still meant THAT chapter's prose, so the
+				// feedback stays visible (contextual highlight) rather than
+				// vanishing into "0 editorial suggestions".
+				iv.ChapterNum, iv.ScenePos, iv.TropeIndex = clampInterventionTarget(validateTargets, iv.ChapterNum, iv.ScenePos, iv.TropeIndex)
 				ivs = append(ivs, iv)
 			}
 			if len(ivs) > 4 {
@@ -222,6 +227,59 @@ func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string
 		kept = append(kept, s)
 	}
 	return kept
+}
+
+// clampInterventionTarget nudges an intervention triplet whose exact target is
+// not part of the live scene/trope tiling onto the CLOSEST valid one, keeping
+// the critic feedback highlightable. The validator only answers yes/no, so the
+// clamp walks a small neighborhood (same scene first, then neighbouring scenes
+// and units) and falls back to leaving the triplet untouched when nothing near
+// validates — the frontend's unit-level fallback still renders it in context.
+func clampInterventionTarget(valid func(chapterNum, scenePos, tropeIndex int) bool, chap, pos, idx int) (int, int, int) {
+	if valid(chap, pos, idx) {
+		return chap, pos, idx
+	}
+	try := func(p, i int) (int, int, bool) {
+		if p < 0 || i < 0 {
+			return p, i, false
+		}
+		if valid(chap, p, i) {
+			return p, i, true
+		}
+		return p, i, false
+	}
+	// Scene-only sentinel: a validator built over a plan WITHOUT trope units
+	// (legacy chapters whose per-scene bookkeeping never landed) answers yes
+	// for (chap, pos, -1). When that happens the scene exists but no unit is
+	// registered, so keep the ORIGINAL index — sanitize leaves it untouched and
+	// the frontend's unit-level fallback resolves it against the live tiling at
+	// highlight time instead of dropping the feedback.
+	if pos >= 0 && valid(chap, pos, -1) {
+		return chap, pos, idx
+	}
+	// Same scene, next/prev units first (index drift is the most common error).
+	for d := 1; d <= 6; d++ {
+		if p, i, ok := try(pos, idx+d); ok {
+			return chap, p, i
+		}
+		if p, i, ok := try(pos, idx-d); ok {
+			return chap, p, i
+		}
+	}
+	// Then neighbouring scenes at a nearby unit.
+	for dp := 1; dp <= 3; dp++ {
+		for _, p := range []int{pos + dp, pos - dp} {
+			for di := 0; di <= 6; di++ {
+				if q, i, ok := try(p, idx+di); ok {
+					return chap, q, i
+				}
+				if q, i, ok := try(p, max(idx-di, 0)); ok {
+					return chap, q, i
+				}
+			}
+		}
+	}
+	return chap, pos, idx
 }
 
 // finalizePillars applies the shared rubric contract (analysis_pillars.go) to
@@ -367,11 +425,36 @@ func fallbackTropeMapBlock(ch ChapterState, lang string) string {
 	return sb.String()
 }
 
+// sceneMinParagraphs is the smallest number of paragraphs a break-delimited
+// group may have to count as its OWN pseudo-scene in the fallback plan;
+// shorter groups merge into their predecessor. Keeps stray "---"-adjacent
+// fragments from exploding a chapter into dozens of one-paragraph "scenes".
+const sceneMinParagraphs = 2
+
+// mergeShortSpans coalesces spans shorter than minLen into their predecessor
+// so a break-derived tiling never produces degenerate single-line pseudo-
+// scenes. The first span always survives even when short.
+func mergeShortSpans(spans [][2]int, minLen int) [][2]int {
+	out := make([][2]int, 0, len(spans))
+	for _, sp := range spans {
+		if len(out) > 0 && sp[1]-sp[0] < minLen {
+			out[len(out)-1][1] = sp[1]
+			continue
+		}
+		out = append(out, sp)
+	}
+	return out
+}
+
 // ensureFallbackScenePlan records the break-derived pseudo-scene/trope tiling
 // on a SYNTHETIC ScenePlan for plan-less chapters, so intervention targets
 // (scene_pos + trope_index) resolve consistently across proposal time
 // (fallbackTropeMapBlock), apply time (rewriteSceneTrope) and highlight time
-// (tropeUnitProseAt). No-op when a real plan exists or there is no prose.
+// (tropeUnitProseAt). Chapters WITHOUT any "---" breaks still get a plan: the
+// prose is tiled into paragraph groups of roughly equal size (≈5 paragraphs
+// per pseudo-scene, minimum 2 scenes whenever the text has enough paragraphs),
+// otherwise the whole chapter would collapse into a single scene chip with no
+// visible boundaries. No-op when a real plan exists or there is no prose.
 func ensureFallbackScenePlan(ch *ChapterState) {
 	if ch.ScenePlan != nil && len(ch.ScenePlan.Scenes) > 0 {
 		return
@@ -384,6 +467,22 @@ func ensureFallbackScenePlan(ch *ChapterState) {
 		sep = "\n\n"
 	}
 	spans := breakSceneSpans(paras)
+	if len(spans) == 1 && len(paras) >= 4 {
+		// No hard breaks anywhere: derive soft pseudo-scenes by grouping
+		// consecutive paragraphs so every part of the prose gets scene/trope
+		// chips instead of hiding behind one giant "Scene 1".
+		group := max(sceneMinParagraphs, min(6, len(paras)/3))
+		spans = spans[:0:0]
+		for i := 0; i < len(paras); i += group {
+			end := min(i+group, len(paras))
+			// Never leave a trailing fragment shorter than the minimum.
+			if len(paras)-end < sceneMinParagraphs {
+				end = len(paras)
+			}
+			spans = append(spans, [2]int{i, end})
+		}
+	}
+	spans = mergeShortSpans(spans, sceneMinParagraphs)
 	if len(spans) == 0 {
 		return
 	}
@@ -611,55 +710,192 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 			settingsForPrompt = selected
 		}
 	}
-	prompt := buildChapterEditorPrompt(cfg, state, settingsForPrompt, idx, lang)
-	system := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing ONE DRAFTED CHAPTER (actual manuscript prose) of a novel in progress. Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
+	// The editor pass is now a SEQUENCE of small calls instead of one mega
+	// prompt: first an overall impression (summary + global score), then ONE
+	// call per pillar. A single long answer used to get truncated by max_tokens
+	// right where the "suggestions" array lives — the report kept its grades
+	// but shipped zero actionable points ("scored 68/100 — 0 editorial
+	// suggestions"). Per-pillar answers are short enough that each pillar MUST
+	// return its own suggestions whenever it scores below the bestseller bar.
 	logger.InfoKey("log.chapter_analyze_running", ch.Num)
-	var result ChapterAnalysisReport
-	const maxParseAttempts = 3
-	for attempt := 0; attempt < maxParseAttempts; attempt++ {
-		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, prompt, logger)
+	now := time.Now().Unix()
+	chapterTargets := draftedTargetValidator(state, []int{ch.Num})
+	result := ChapterAnalysisReport{}
+	pillarsFailed := 0
+
+	overallSystem := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing ONE DRAFTED CHAPTER (actual manuscript prose) of a novel in progress. Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
+	for attempt := 0; attempt < 2; attempt++ {
+		oprompt := buildChapterOverallPrompt(cfg, state, settingsForPrompt, idx, lang)
+		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, overallSystem, oprompt, logger)
 		if raw == "" {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return fmt.Errorf("API call failed or was canceled")
 		}
-		result = ChapterAnalysisReport{}
+		var ov struct {
+			Summary      string `json:"summary"`
+			OverallScore int    `json:"overall_score"`
+		}
 		ok := false
-		// Progressive salvage: strict extraction first, then a repair pass for
-		// responses whose final closers were cut off by max_tokens (the most
-		// common cause of "not valid chapter-analysis JSON" on long reports).
 		for _, j := range candidateChapterJSONs(raw) {
-			if json.Unmarshal([]byte(j), &result) == nil && (result.Summary != "" || len(result.Suggestions) > 0) {
+			if json.Unmarshal([]byte(j), &ov) == nil && (strings.TrimSpace(ov.Summary) != "" || ov.OverallScore > 0) {
 				ok = true
 				break
 			}
-			result = ChapterAnalysisReport{}
 		}
 		if ok {
+			result.Summary = strings.TrimSpace(ov.Summary)
+			result.OverallScore = ov.OverallScore
 			break
 		}
-		if attempt == maxParseAttempts-1 {
-			return fmt.Errorf("model response is not valid chapter-analysis JSON")
-		}
-		if logger != nil {
-			logger.WarnKey("log.chapter_analyze_bad_json_retry", ch.Num, attempt+1)
-		}
-		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
+	}
+	if result.Summary == "" && result.OverallScore == 0 {
+		return fmt.Errorf("model response is not valid chapter-analysis JSON")
 	}
 
-	now := time.Now().Unix()
-	result.Suggestions = sanitizeDraftedSuggestions(result.Suggestions, now, fmt.Sprintf("chpa_%d", ch.Num), nil, false)
+	for _, pk := range analysisPillarKeys {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		pp, err := buildPillarEditorPrompt(cfg, state, settingsForPrompt, idx, lang, pk)
+		if err != nil {
+			continue
+		}
+		psystem := "You are a world-famous literary editor specializing in turning novels into global bestsellers, grading ONE pillar of a rubric over ONE drafted chapter of a novel. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
+		got := false
+		ppNoSugg := false
+		for attempt := 0; attempt < 2 && !got; attempt++ {
+			if attempt > 0 {
+				if ppNoSugg {
+					pp += "\n\nYour previous response graded this pillar below 90 but contained ZERO suggestions — that is a failed answer. Now return the SAME JSON shape with at least ONE concrete suggestion (title, detail, action) telling the author exactly what to change in this chapter's prose for this pillar."
+				} else {
+					pp += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
+				}
+			}
+			raw := llm.CallAPIWithRetryLog(ctx, apiCfg, psystem, pp, logger)
+			if raw == "" {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				break
+			}
+			var pr struct {
+				Pillar       PillarAssessment    `json:"pillar"`
+				Suggestions  []DraftedSuggestion `json:"suggestions"`
+				Criteria     []struct {
+					Key   string `json:"key"`
+					Level int    `json:"level"`
+				} `json:"criteria_levels"`
+				Note         string              `json:"note"`
+				Score        int                 `json:"score"`
+			}
+			for _, j := range candidateChapterJSONs(raw) {
+				pr = struct {
+					Pillar       PillarAssessment    `json:"pillar"`
+					Suggestions  []DraftedSuggestion `json:"suggestions"`
+					Criteria     []struct {
+						Key   string `json:"key"`
+						Level int    `json:"level"`
+					} `json:"criteria_levels"`
+					Note         string              `json:"note"`
+					Score        int                 `json:"score"`
+				}{}
+				if json.Unmarshal([]byte(j), &pr) != nil {
+					continue
+				}
+				pa := pr.Pillar
+				if pa.Key == "" {
+					pa.Key = pk
+					pa.Score = pr.Score
+					pa.Note = pr.Note
+					pa.CriteriaLevels = pr.Criteria
+				}
+				if pa.Key != pk {
+					continue
+				}
+				// Per-pillar answers ship suggestions WITHOUT interventions
+				// (advice-only pass). The shared sanitizer would drop the whole
+				// suggestion when its declared target is not in the live tiling —
+				// that silent discard was the root cause of "scored 68/100 but
+				// zero editorial suggestions". Advice-only points are always kept;
+				// concrete targets arrive later via Propose interventions.
+				sugg := sanitizeDraftedSuggestions(pr.Suggestions, now, fmt.Sprintf("chpa_%d", ch.Num), chapterTargets, false)
+				if len(sugg) == 0 && pa.Score > 0 && pa.Score < strongPillarScore && attempt == 0 {
+					// Graded below the bestseller bar yet returned no actionable
+					// point: the model answered with grades only. Force one retry
+					// instead of persisting an unactionable verdict.
+					logger.WarnKey("log.chapter_analyze_pillar_no_suggestions", ch.Num, pk, pa.Score)
+					ppNoSugg = true
+					continue // force the retry pass with the strict reminder
+				}
+				if len(pa.Checklist) == 0 && len(pa.CriteriaLevels) == 0 && len(sugg) == 0 && pa.Score <= 0 {
+					continue // empty garbage answer — retry
+				}
+				result.PillarScores = append(result.PillarScores, pa)
+				result.Suggestions = append(result.Suggestions, sugg...)
+				got = true
+				break
+			}
+			if !got && logger != nil {
+				logger.WarnKey("log.chapter_analyze_bad_json_retry", ch.Num, attempt+1)
+			}
+		}
+		if !got {
+			pillarsFailed++
+		}
+	}
+	// Every suggestion must carry its repaired criteria keys so finalizePillars
+	// can derive levels from them; per-pillar calls already scope them.
 	if result.OverallScore < 0 || result.OverallScore > 100 {
 		result.OverallScore = 0
 	}
 	result.PillarScores = finalizePillars(result.PillarScores, result.Suggestions)
+	// The chapter pass grades PROSE that already exists: interventions that
+	// arrive bundled with the per-pillar reports are kept (validated against
+	// the live scene/trope tiling) so their feedback can highlight inline
+	// right away. Advice-only points still get auto-proposed below.
+	//
+	// IMPORTANT: the validator is built from the LIVE tiling, so it must be
+	// created AFTER ensureFallbackScenePlan/repairSceneSpans materialize the
+	// trope units — building it first made every target invalid and silently
+	// collapsed real reports into "0 editorial suggestions".
+	ensureFallbackScenePlan(ch)
+	repairSceneSpans(ch)
+	if ch.ScenePlan != nil {
+		for pos := range ch.ScenePlan.Scenes {
+			sc := &ch.ScenePlan.Scenes[pos]
+			if len(sc.TropeUnits) > 0 {
+				continue
+			}
+			lo, hi := sc.ParaStart, sc.ParaEnd
+			if lo < 0 || hi <= lo {
+				continue
+			}
+			pars, sp := splitBlockParagraphs(ch.Content)
+			if hi > len(pars) {
+				continue
+			}
+			retileSceneTropeUnits(sc, pars, sp)
+		}
+	}
+	liveTargets := draftedTargetValidator(state, []int{ch.Num})
+	result.Suggestions = sanitizeDraftedSuggestions(result.Suggestions, now, fmt.Sprintf("chpa_%d", ch.Num), liveTargets, true)
 	result.Summary = strings.TrimSpace(result.Summary)
 	result.GeneratedAt = time.Now().Format(time.RFC3339)
 	result.BasedOnStructure = structureLabel(cfg.Story.Structure, lang)
 	result.ChapterNum = ch.Num
 	result.DraftFingerprint = fingerprint
+	// Diagnostic: a low score with zero suggestions almost always means the
+	// model answered with grades only (schema drift / truncated tail). With the
+	// per-pillar sequence it can also mean every pillar call failed to parse.
+	if logger != nil && len(result.Suggestions) == 0 && result.OverallScore > 0 && result.OverallScore < 90 {
+		logger.WarnKey("log.chapter_analyze_no_suggestions", ch.Num, result.OverallScore)
+	}
+	if pillarsFailed > 0 && logger != nil {
+		logger.WarnKey("log.chapter_analyze_pillars_failed", ch.Num, pillarsFailed)
+	}
 	ch.Analysis = &result
 	refreshTropeIssuesWithConflict(ch, state.PendingWritingConflict)
 
@@ -684,6 +920,289 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Multi-call chapter critique — prompt builders
+// ---------------------------------------------------------------------------
+
+// chapterPromptContext gathers everything both the overall-impression call and
+// the per-pillar calls need: novel metadata block, act placement, condensed
+// history, chapter outline, the written-structure map and the (truncated)
+// drafted prose. Shared so every small call sees the same material.
+type chapterPromptContext struct {
+	meta        string
+	where       string // EN
+	whereEs     string // ES
+	structure   string
+	history     string
+	tropeMap    string
+	content     string
+	words       int
+	prevCheckEN string
+	prevCheckES string
+}
+
+func buildChapterPromptContext(cfg *config.Config, state *Progress, settings *ProjectSettings, idx int, lang string) chapterPromptContext {
+	sc := cfg.Story
+	ch := state.Chapters[idx]
+	var meta strings.Builder
+	add := func(label, v string) {
+		if strings.TrimSpace(v) != "" {
+			fmt.Fprintf(&meta, "%s: %s\n", label, strings.TrimSpace(v))
+		}
+	}
+	add("Story idea", sc.StoryIdea)
+	add("Genre / subgenre", strings.TrimSpace(sc.Type+" / "+sc.Subgenre))
+	add("Theme", sc.Theme)
+	add("Tone", sc.Tone)
+	add("Story structure (framework the book must follow)", sc.Structure)
+	add("Writing style & POV", strings.TrimSpace(sc.WritingStyle+" / "+sc.WritingPOV))
+	add("Ideal reader profile", sc.AudienceProfile)
+	add("Inspirational pieces (comp titles / mood references)", sc.InspirationalPieces)
+	add("Conflict scale", sc.EffectiveConflict())
+	add("Protagonist type", sc.EffectiveProtagonist())
+	if settings != nil {
+		cast := make([]string, 0, len(settings.Characters))
+		for _, c := range settings.Characters {
+			cast = append(cast, c.Name)
+		}
+		add("Registered characters", strings.Join(cast, ", "))
+	}
+	actNo, actName, hasAct := actForChapter(state, ch.Num)
+	structureName := structureLabel(sc.Structure, lang)
+	history := Truncate(buildHistorySummary(state, idx), 4000)
+	tropeMap := chapterTropeMapBlock(ch, lang)
+	content := draftTruncate(ch.Content, 26000)
+	whereEn := fmt.Sprintf("Chapter #%d \"%s\" of %d", ch.Num, ch.Title, len(state.Chapters))
+	whereEs := fmt.Sprintf("Capítulo #%d \"%s\" de %d", ch.Num, ch.Title, len(state.Chapters))
+	if hasAct {
+		whereEn += fmt.Sprintf(", inside ACT %d (%s) of the book's planned structure", actNo, actName)
+		whereEs += fmt.Sprintf(", dentro del ACTO %d (%s) de la estructura planificada", actNo, actName)
+	}
+	pc := chapterPromptContext{
+		meta: meta.String(), where: whereEn, whereEs: whereEs,
+		structure: structureName, history: history, tropeMap: tropeMap,
+		content: content, words: ch.WordCount,
+	}
+	// Iterative scoring: show the previous pass's graded checklist so a
+	// re-critique re-grades the SAME rubric against corrected material.
+	if prev := ch.Analysis; prev != nil {
+		pc.prevCheckEN = renderPreviousChecklistBlock(prev, "THIS CHAPTER")
+		pc.prevCheckES = pc.prevCheckEN
+	}
+	return pc
+}
+
+// pillarCriteriaBlockEN renders one pillar's fixed checklist for the prompt.
+func pillarCriteriaBlockEN(pillarKey string) string {
+	items := PillarChecklist(pillarKey)
+	var b strings.Builder
+	b.WriteString("Checklist to grade (grade EVERY item 0-100 against BESTSELLER level):\n")
+	for _, c := range items {
+		fmt.Fprintf(&b, "- key=%q — %s\n", c.Key, c.Name)
+	}
+	return b.String()
+}
+
+// pillarCriteriaBlockES renders one pillar's fixed checklist for the prompt.
+func pillarCriteriaBlockES(pillarKey string) string {
+	items := PillarChecklist(pillarKey)
+	var b strings.Builder
+	b.WriteString("Lista de control a calificar (califica CADA ítem 0-100 contra nivel BESTSELLER):\n")
+	for _, c := range items {
+		fmt.Fprintf(&b, "- key=%q — %s\n", c.Key, c.Name)
+	}
+	return b.String()
+}
+
+// pillarFocusEN describes what each per-pillar call must judge and which
+// suggestion categories it may emit.
+func pillarFocusEN(pillarKey string) (focus, categories string) {
+	switch pillarKey {
+	case "reader_profile":
+		return "Ideal reader profile — does this chapter deliver what this reader came for? Genre expectations met without cliché?", "hook|other"
+	case "inspirational_pieces":
+		return "Inspirational pieces — does the chapter live up to the comp titles' standard without copying them?", "other|emotion"
+	case "tone":
+		return "Tone — is the intended tone sustained and escalating properly across the chapter's scenes?", "emotion|hook|tone"
+	default:
+		return "Story structure — does the chapter advance the framework's beats for its position? Dead zones, rushed payoffs, weak ending hook?", "structure|pacing|scene_economy|stakes"
+	}
+}
+
+// pillarCategoryNames maps a pillar key to its display name (EN/ES).
+func pillarCategoryNames(pillarKey, lang string) (name, desc string) {
+	en := normalizeLangEN(lang)
+	switch pillarKey {
+	case "reader_profile":
+		if en {
+			return "Ideal reader profile", "does this chapter deliver what this reader came for?"
+		}
+		return "Perfil de lector ideal", "¿este capítulo entrega lo que este lector vino a buscar?"
+	case "inspirational_pieces":
+		if en {
+			return "Inspirational pieces", "does the chapter live up to the comp titles' standard without copying them?"
+		}
+		return "Obras inspiracionales", "¿el capítulo está a la altura del estándar de las obras de referencia sin copiarlas?"
+	case "tone":
+		if en {
+			return "Tone", "is the intended tone sustained and escalating properly across the chapter's scenes?"
+		}
+		return "Tono", "¿el tono previsto se sostiene y escala correctamente a lo largo de las escenas?"
+	default:
+		if en {
+			return "Story structure", "does the chapter advance the framework's beats for its position?"
+		}
+		return "Estructura narrativa", "¿el capítulo avanza los beats del marco para su posición?"
+	}
+}
+
+// buildChapterOverallPrompt asks for the impression-level verdict only: a
+// summary plus a global score. Deliberately tiny output so it can never be
+// truncated where suggestions would live.
+func buildChapterOverallPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, idx int, lang string) string {
+	ch := state.Chapters[idx]
+	pc := buildChapterPromptContext(cfg, state, settings, idx, lang)
+	schema := `{"summary":"...","overall_score":75}`
+	if normalizeLangEN(lang) {
+		return fmt.Sprintf(`You are %s, a world-famous literary editor whose lists have produced multiple global bestsellers. You are giving the FIRST-IMPRESSION verdict on ONE DRAFTED CHAPTER of a novel in progress: %s AS DRAFTED PROSE (actual manuscript text shown below — not an outline). Judge it as a standalone reading experience AND as one link in its act's chain.
+
+NOVEL PARAMETERS (the author's contract with the reader):
+%s
+STORY STRUCTURE FRAMEWORK IN USE: %s
+
+[Story-so-far, condensed]
+%s
+%s
+[Chapter outline — the contract this chapter must fulfil]
+%s
+
+%s
+[CHAPTER PROSE (%d words)]
+%s
+
+Write an honest editorial summary of this chapter (what works, what holds it back from bestseller level, 120-250 words) and an overall_score 0-100 against BESTSELLER level (90+ means genuinely strong as-is; most drafted chapters land mid-range; grade different chapters differently wherever their quality differs).
+
+Return STRICT JSON only (no markdown fences, no extra prose): %s
+Write the summary in the SAME language as the chapter prose above.`,
+			editorPersona(lang), pc.where, pc.meta, pc.structure, pc.history, pc.prevCheckEN,
+			strings.TrimSpace(ch.Outline), pc.tropeMap, pc.words, pc.content, schema)
+	}
+	return fmt.Sprintf(`Eres %s, un editor literario mundialmente famoso cuyas listas han producido múltiples bestsellers globales. Estás dando el veredicto de PRIMERA IMPRESIÓN sobre UN CAPÍTULO BORRONEADO de una novela en curso: %s COMO PROSA REAL (manuscrito mostrado abajo — no un outline). Júzgalo como experiencia de lectura autónoma y como eslabón de la cadena de su acto.
+
+PARÁMETROS DE LA NOVELA (el contrato del autor con el lector):
+%s
+MARCO DE ESTRUCTURA NARRATIVA EN USO: %s
+
+[Historia hasta ahora, condensada]
+%s
+%s
+[Outline del capítulo — el contrato que este capítulo debe cumplir]
+%s
+
+%s
+[PROSA DEL CAPÍTULO (%d palabras)]
+%s
+
+Escribe un resumen editorial honesto de este capítulo (qué funciona, qué lo aleja del nivel bestseller, 120-250 palabras) y un overall_score 0-100 contra nivel BESTSELLER (90+ significa genuinamente fuerte tal cual; la mayoría de capítulos borroneados caen en la franja media; capítulos distintos deben recibir notas distintas allí donde su calidad difiera).
+
+Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa extra): %s
+Escribe el resumen en el MISMO idioma que la prosa del capítulo de arriba.`,
+		editorPersona(lang), pc.whereEs, pc.meta, pc.structure, pc.history, pc.prevCheckES,
+		strings.TrimSpace(ch.Outline), pc.tropeMap, pc.words, pc.content, schema)
+}
+
+// buildPillarEditorPrompt asks for the verdict on ONE pillar of the rubric
+// over ONE drafted chapter: criteria levels + note + at least one actionable
+// suggestion when the pillar scores below the bestseller bar. Keeping each
+// answer short guarantees the suggestions array survives generation.
+func buildPillarEditorPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, idx int, lang, pillarKey string) (string, error) {
+	found := false
+	for _, k := range analysisPillarsKeysForPrompt() {
+		if k == pillarKey {
+			found = true
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("unknown pillar %q", pillarKey)
+	}
+	ch := state.Chapters[idx]
+	pc := buildChapterPromptContext(cfg, state, settings, idx, lang)
+	focus, categories := pillarFocusEN(pillarKey)
+	name, _ := pillarCategoryNames(pillarKey, lang)
+	schema := fmt.Sprintf(`{"pillar":{"key":%q,"criteria_levels":[{"key":"...","level":0}],"note":"..."},"suggestions":[{"category":"%s","pillar":%q,"criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[%d]}]}`,
+		pillarKey, categories, pillarKey, ch.Num)
+	if normalizeLangEN(lang) {
+		return fmt.Sprintf(`You are %s, a world-famous literary editor whose lists have produced multiple global bestsellers. Grade exactly ONE pillar of your bestseller rubric over ONE drafted chapter: %s AS DRAFTED PROSE.
+
+PILLAR UNDER REVIEW: %s — %s
+
+NOVEL PARAMETERS:
+%s
+STORY STRUCTURE FRAMEWORK IN USE: %s
+
+[Story-so-far, condensed]
+%s
+%s
+[Chapter outline — the contract this chapter must fulfil]
+%s
+
+%s
+[Written structure — target interventions with THESE exact indexes]
+%s
+[CHAPTER PROSE (%d words)]
+%s
+
+%s
+Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
+- Grade EVERY checklist item 0-100 against BESTSELLER level, not "competent". 90+ means genuinely strong as-is. Derive the pillar verdict from these levels, never guess.
+- Every suggestion MUST declare its "pillar" (%q), the checklist "criteria" keys it repairs, and a realistic "score_impact".
+- If ANY item scores below 90 you MUST return at least one concrete suggestion (up to 3) ordered by impact — a low score with zero suggestions is a failed answer. Only when EVERY item is 90+ may suggestions be empty.
+- DO NOT include replacement prose or "interventions" arrays in this pass: advice only. Feedback-style micro-fixes come later via "Propose interventions".
+- applies_to_chapters should just name this chapter (%d).
+- Write note, titles, details and actions in the SAME language as the chapter prose above.
+
+Return STRICT JSON only (no markdown fences, no prose): %s`,
+			editorPersona(lang), pc.where, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckEN,
+			strings.TrimSpace(ch.Outline), pc.tropeMap, pillarCriteriaBlockEN(pillarKey), pc.words, pc.content,
+			pillarKey, ch.Num, schema), nil
+	}
+	return fmt.Sprintf(`Eres %s, un editor literario mundialmente famoso cuyas listas han producido múltiples bestsellers globales. Califica exactamente UN pilar de tu rúbrica bestseller sobre UN capítulo borroneado: %s COMO PROSA REAL.
+
+PILAR BAJO REVISIÓN: %s — %s
+
+PARÁMETROS DE LA NOVELA:
+%s
+MARCO DE ESTRUCTURA NARRATIVA EN USO: %s
+
+[Historia hasta ahora, condensada]
+%s
+%s
+[Outline del capítulo — el contrato que este capítulo debe cumplir]
+%s
+
+%s
+[Estructura escrita — apunta intervenciones con ESTOS índices exactos]
+%s
+[PROSA DEL CAPÍTULO (%d palabras)]
+%s
+
+%s
+Estándar de nota (eres despiadado — tu reputación descansa en libros que llegan a #1 mundial):
+- Califica CADA ítem de la lista 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa genuinamente fuerte tal cual. La nota del pilar se deriva de esos niveles, nunca se adivina.
+- Cada sugerencia DEBE declarar su "pillar" (%q), las claves "criteria" que repara y un "score_impact" realista.
+- Si ALGÚN ítem puntúa bajo 90 DEBES devolver al menos una sugerencia concreta (hasta 3) ordenadas por impacto — una nota baja con cero sugerencias es una respuesta fallida. Solo cuando CADA ítem sea 90+ las sugerencias pueden ir vacías.
+- NO incluyas prosa de reemplazo ni arrays "interventions" en esta pasada: solo consejo. Las micro-correcciones llegan después vía "Proponer intervenciones".
+- applies_to_chapters debe nombrar solo este capítulo (%d).
+- Escribe note, títulos, detalles y acciones en el MISMO idioma que la prosa del capítulo de arriba.
+
+Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s`,
+		editorPersona(lang), pc.whereEs, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckES,
+		strings.TrimSpace(ch.Outline), pc.tropeMap, pillarCriteriaBlockES(pillarKey), pc.words, pc.content,
+		pillarKey, ch.Num, schema), nil
+}
+
+func analysisPillarsKeysForPrompt() []string { return analysisPillarKeys }
 
 // candidateChapterJSONs extracts, in decreasing order of trustworthiness, every
 // plausible JSON object inside a raw model response for the chapter-analysis
@@ -1465,8 +1984,23 @@ func draftedTargetValidator(state *Progress, allowedChapters []int) func(chapter
 		}
 	}
 	return func(chapterNum, scenePos, tropeIndex int) bool {
-		_, ok := valid[[3]int{chapterNum, scenePos, tropeIndex}]
-		return ok
+		if _, ok := valid[[3]int{chapterNum, scenePos, tropeIndex}]; ok {
+			return true
+		}
+		// Scene-level sentinel: clampInterventionTarget probes (chap,pos,-1) to
+		// detect plans WITHOUT registered trope units. Accepting any in-range
+		// scene pos here lets out-of-range unit indices clamp instead of being
+		// dropped — this was the root cause of "0 editorial suggestions" on
+		// chapters whose per-scene bookkeeping never landed.
+		if tropeIndex == -1 && chapterNum > 0 && scenePos >= 0 {
+			for _, ch := range state.Chapters {
+				if ch.Num != chapterNum || ch.ScenePlan == nil {
+					continue
+				}
+				return scenePos < len(ch.ScenePlan.Scenes)
+			}
+		}
+		return false
 	}
 }
 

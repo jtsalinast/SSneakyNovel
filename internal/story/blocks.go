@@ -205,7 +205,19 @@ func SyncChapterBlocks(ch *ChapterState) {
 					sc = psc
 					metaOK = hasMeaningfulSceneMeta(sc)
 					planAligned = true
+				} else {
+					// Span metadata is stale (e.g. after a surgical rewrite that
+					// changed paragraph counts): still honour the PLANNED scene so
+					// real titles/descriptions reach the chips instead of collapsing
+					// everything into synthetic pseudo-scenes with no info.
+					sc = psc
+					metaOK = hasMeaningfulSceneMeta(sc)
 				}
+			} else {
+				// No break-derived span for this planned scene: trust the plan
+				// outright (same rationale as above).
+				sc = ch.ScenePlan.Scenes[spos]
+				metaOK = hasMeaningfulSceneMeta(sc)
 			}
 			if !planAligned && len(ch.ScenePlan.Scenes) == len(fbSceneOpen) {
 				// Recorded spans missing/stale: only trust the plan when its scene
@@ -418,7 +430,12 @@ func groupsOverlapTropeChange(blocks []Block, paras []string, groups [][2]int) b
 // boundaries must tile the whole content; otherwise derived ranges are stale
 // (e.g. after a manual edit) and paragraph mode is safer.
 func syncSceneBlocks(ch *ChapterState) bool {
-	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 2 {
+	// A single-scene plan is still worth tiling at trope granularity: the
+	// fallback planner materializes one scene per break-delimited group, so
+	// requiring >=2 scenes here used to send every legacy/plan-less chapter
+	// down the paragraph path, where fbSceneStart counts only HARD BREAKS —
+	// leaving just one "Scene 1" chip and no trope chips in the UI.
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 1 {
 		return false
 	}
 	paras, sep := splitBlockParagraphs(ch.Content)
