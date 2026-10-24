@@ -737,7 +737,7 @@ func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 // proportional mapping. Returns nil when unusable.
 func recordedSceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 	plan := ch.ScenePlan
-	if plan == nil || len(plan.Scenes) < 2 {
+	if plan == nil || len(plan.Scenes) < 1 {
 		return nil
 	}
 	spans := make([][2]int, 0, len(plan.Scenes))

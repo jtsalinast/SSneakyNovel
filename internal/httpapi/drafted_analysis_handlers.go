@@ -459,7 +459,7 @@ func (h *Handlers) PostChapterAnalyze(w http.ResponseWriter, r *http.Request) {
 		defer h.endTask()
 		ctx := h.ensureTaskTokens(h.taskCtx)
 		h.logger.TaskStart("chapter_analyze")
-		err := story.AnalyzeDraftedChapter(ctx, h.apiCfg, h.cfg, h.state, h.settings, num, h.progressPath, h.logger)
+		err := story.AnalyzeChapterPlan(ctx, h.apiCfg, h.cfg, h.state, h.settings, num, h.progressPath, h.logger)
 		if err == nil {
 			err = story.SaveProgress(h.progressPath, h.state)
 		}

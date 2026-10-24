@@ -244,10 +244,16 @@
     // trope unit. The backend tiles units 1-based (trope_index = ui+1), so the
     // previous block legitimately has a HIGHER index after a re-tile; requiring
     // `ct > pt` used to swallow every chip but the first. Any difference
-    // (ct !== pt) is a boundary; one trope unit per scene needs no chip.
+    // (ct !== pt) is a boundary. Single-unit scenes also deserve their chip —
+    // it is the carrier of the "Key fact #N" chips (facts travel with tropes,
+    // never with the scene marker), so suppressing them here used to hide all
+    // key-fact chips in chapters whose resync produced one trope per scene.
     const pt = prev && prev.trope_index != null ? prev.trope_index : 0;
     const ct = cur.trope_index != null ? cur.trope_index : 0;
     if (ct !== pt && (cur.trope_count || 0) >= 1 && (prev?.trope_count ?? 1) >= 1) {
+      return { kind: 'trope', pos: cur.scene_pos + 1, label: cur.trope_label || '', idx: ct, count: cur.trope_count || 0 };
+    }
+    if ((cur.trope_count || 0) === 1 && ct === 1) {
       return { kind: 'trope', pos: cur.scene_pos + 1, label: cur.trope_label || '', idx: ct, count: cur.trope_count || 0 };
     }
     return null;

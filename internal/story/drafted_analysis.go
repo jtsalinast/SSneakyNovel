@@ -178,6 +178,22 @@ func normalizeLangEN(lang string) bool {
 // When validateTargets is false (initial analysis pass) interventions are
 // dropped entirely — they only appear after an explicit propose action.
 func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string, validateTargets func(chapterNum, scenePos, tropeIndex int) bool, keepInterventions bool) []DraftedSuggestion {
+	// Idempotency guard: chapter reports are re-sanitized on EVERY save round
+	// (proposal/apply passes call this again over the already-processed list).
+	// Regenerating IDs at that point orphans the frontend's pending-intervention
+	// keys and silently resets applied/dismissed statuses; worse, an ID change
+	// made right before the auto-propose loop meant ProposeChapterInterventions
+	// could no longer find the suggestion it was asked to enrich ("suggestion_not_
+	// found") — the exact "critic scores < 100 but never generates inline
+	// suggestions" regression. A second pass over processed input must therefore
+	// preserve IDs verbatim; fresh model output always arrives with an empty ID.
+	reprocessing := false
+	for _, s := range in {
+		if strings.TrimSpace(s.ID) != "" {
+			reprocessing = true
+			break
+		}
+	}
 	kept := make([]DraftedSuggestion, 0, len(in))
 	for i, s := range in {
 		s.Title = strings.TrimSpace(s.Title)
@@ -188,6 +204,14 @@ func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string
 		}
 		if s.Title == "" && s.Detail == "" {
 			continue
+		}
+		// Chapter reports are cached by DraftFingerprint and re-saved on every
+		// proposal/apply round; a second sanitize pass over an already-processed
+		// report must NOT regenerate IDs (that would orphan the frontend's
+		// pending-intervention keys and reset applied statuses). Preserve the
+		// original ID when present.
+		if s.ID == "" {
+			s.ID = fmt.Sprintf("%s_%d_%d", prefix, now, i)
 		}
 		s.Recommendations = nil
 		cleanApps := make([]int, 0, len(s.AppliesToChapters))
@@ -200,8 +224,12 @@ func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string
 		}
 		sort.Ints(cleanApps)
 		s.AppliesToChapters = cleanApps
-		s.ID = fmt.Sprintf("%s_%d_%d", prefix, now, i)
-		s.Status = "pending"
+		if !reprocessing {
+			// Fresh model output always starts pending. A re-sanitize pass over an
+			// already-processed report must NOT reset statuses: doing so resurrected
+			// applied/dismissed suggestions as "pending" on every save round.
+			s.Status = "pending"
+		}
 		if keepInterventions && validateTargets != nil {
 			var ivs []TropeIntervention
 			for _, iv := range s.Interventions {
@@ -221,8 +249,47 @@ func sanitizeDraftedSuggestions(in []DraftedSuggestion, now int64, prefix string
 				ivs = ivs[:4]
 			}
 			s.Interventions = ivs
+			// INVARIANT: every surviving intervention must carry Status="pending"
+			// when it enters the report fresh. The frontend filters inline
+			// highlights by `iv.status === 'pending'`; interventions parsed from
+			// model JSON arrive with an EMPTY status (the proposal schema only
+			// declares chapter/scene/trope/label/feedback), which used to make
+			// perfectly valid bundled suggestions invisible in the sheet — the
+			// exact "critic scores < 100 but shows no inline suggestions"
+			// symptom. Already-processed reports re-sanitized on save keep
+			// their applied/dismissed statuses untouched.
+			for j := range s.Interventions {
+				if s.Interventions[j].Status == "" {
+					s.Interventions[j].Status = "pending"
+				}
+			}
 		} else {
-			s.Interventions = nil
+			// Advice-only pass. The previous behavior dropped EVERY bundled
+			// intervention here, which made the critic look broken ("score is
+			// not 100/100 yet zero inline suggestions") whenever the pipeline
+			// was interrupted before the auto-propose step — and the analysis
+			// fingerprint then cached the suggestion-less report forever. Keep
+			// the model's own interventions as UNVALIDATED anchors: the frontend
+			// resolves them against the live tiling at highlight time (unit-level
+			// fallback), and ProposeChapterInterventions replaces them with
+			// validated ones when the author triggers it manually.
+			var ivs []TropeIntervention
+			for _, iv := range s.Interventions {
+				iv.Feedback = strings.TrimSpace(iv.Feedback)
+				if iv.Feedback == "" {
+					continue
+				}
+				ivs = append(ivs, iv)
+			}
+			if len(ivs) > 4 {
+				ivs = ivs[:4]
+			}
+			s.Interventions = ivs
+			for j := range s.Interventions {
+				if s.Interventions[j].Status == "" {
+					s.Interventions[j].Status = "pending"
+				}
+			}
 		}
 		kept = append(kept, s)
 	}
@@ -390,7 +457,7 @@ func fallbackTropeMapBlock(ch ChapterState, lang string) string {
 	if len(paras) == 0 || sep == "" {
 		sep = "\n\n"
 	}
-	spans := breakSceneSpans(paras)
+	spans := writtenSceneTiling(&ch, paras)
 	if len(spans) == 0 {
 		return ""
 	}
@@ -446,6 +513,81 @@ func mergeShortSpans(spans [][2]int, minLen int) [][2]int {
 	return out
 }
 
+// writtenSceneTiling returns the [start,end) paragraph spans of every scene as
+// THE READER (SyncChapterBlocks / syncSceneBlocks) sees them: exact recorded
+// spans when they tile the prose, budget-proportional mapping when a real plan
+// exists but its bookkeeping is stale, and the break/soft-grouped fallback
+// tiling for plan-less chapters. Proposal-time code MUST derive targets through
+// this helper so the trope map sent to the editor model, the target validator
+// and the CurrentText anchor all agree with the chips drawn in the sheet —
+// divergent tilings used to make every intervention fail validation ("0
+// editorial suggestions" despite a low critic score).
+func writtenSceneTiling(ch *ChapterState, paras []string) [][2]int {
+	if ch != nil && ch.ScenePlan != nil && len(ch.ScenePlan.Scenes) > 0 {
+		// The reader (syncSceneBlocks) accepts plans with a SINGLE scene; the
+		// recorded-span checker historically demanded >=2, so a one-scene plan
+		// diverged here and proposals anchored on the wrong tiling. Mirror the
+		// reader exactly: trust recorded spans whenever they tile the prose.
+		if spans := recordedSceneParaSpans(ch, paras); spans != nil {
+			return spans
+		}
+		if spans := sceneParaSpans(ch, paras); spans != nil {
+			return spans
+		}
+	}
+	return fallbackSceneTiling(paras)
+}
+
+// liveTropeUnitIndex maps ONE absolute paragraph index onto the trope-unit
+// index the reader actually highlights for it. The unit spans come from
+// sceneTropeUnitSpans — the EXACT function syncSceneBlocks uses to build the
+// chips — including its "recorded units are stale → re-segment live" rule, so
+// an intervention stamped at proposal time can never anchor on a different
+// segmentation than the chip it lands on. Returns -1 when the chapter has no
+// usable scene tiling at all.
+func liveTropeUnitIndex(ch *ChapterState, absPara int) (scenePos, unitIdx int, ok bool) {
+	if ch == nil {
+		return -1, -1, false
+	}
+	paras, _ := splitBlockParagraphs(ch.Content)
+	if len(paras) == 0 {
+		return -1, -1, false
+	}
+	spans := writtenSceneTiling(ch, paras)
+	for pos, sp := range spans {
+		if absPara < sp[0] || absPara >= sp[1] {
+			continue
+		}
+		units := sceneTropeUnitSpans(ch, pos, paras[sp[0]:sp[1]])
+		for ui, u := range units {
+			if absPara-sp[0] >= u[0] && absPara-sp[0] < u[1] {
+				return pos, ui, true
+			}
+		}
+		return pos, 0, true
+	}
+	return -1, -1, false
+}
+
+// fallbackSceneTiling tiles paragraphs into pseudo-scenes exactly like
+// ensureFallbackScenePlan does: hard-break groups first, soft paragraph groups
+// when there are no breaks, short groups merged into their predecessor.
+func fallbackSceneTiling(paras []string) [][2]int {
+	spans := breakSceneSpans(paras)
+	if len(spans) == 1 && len(paras) >= 4 {
+		group := max(sceneMinParagraphs, min(6, len(paras)/3))
+		spans = spans[:0:0]
+		for i := 0; i < len(paras); i += group {
+			end := min(i+group, len(paras))
+			if len(paras)-end < sceneMinParagraphs {
+				end = len(paras)
+			}
+			spans = append(spans, [2]int{i, end})
+		}
+	}
+	return mergeShortSpans(spans, sceneMinParagraphs)
+}
+
 // ensureFallbackScenePlan records the break-derived pseudo-scene/trope tiling
 // on a SYNTHETIC ScenePlan for plan-less chapters, so intervention targets
 // (scene_pos + trope_index) resolve consistently across proposal time
@@ -466,23 +608,7 @@ func ensureFallbackScenePlan(ch *ChapterState) {
 	if sep == "" {
 		sep = "\n\n"
 	}
-	spans := breakSceneSpans(paras)
-	if len(spans) == 1 && len(paras) >= 4 {
-		// No hard breaks anywhere: derive soft pseudo-scenes by grouping
-		// consecutive paragraphs so every part of the prose gets scene/trope
-		// chips instead of hiding behind one giant "Scene 1".
-		group := max(sceneMinParagraphs, min(6, len(paras)/3))
-		spans = spans[:0:0]
-		for i := 0; i < len(paras); i += group {
-			end := min(i+group, len(paras))
-			// Never leave a trailing fragment shorter than the minimum.
-			if len(paras)-end < sceneMinParagraphs {
-				end = len(paras)
-			}
-			spans = append(spans, [2]int{i, end})
-		}
-	}
-	spans = mergeShortSpans(spans, sceneMinParagraphs)
+	spans := fallbackSceneTiling(paras)
 	if len(spans) == 0 {
 		return
 	}
@@ -718,6 +844,16 @@ func AnalyzeDraftedChapter(ctx context.Context, apiCfg *config.APIConfig, cfg *c
 	// but shipped zero actionable points ("scored 68/100 — 0 editorial
 	// suggestions"). Per-pillar answers are short enough that each pillar MUST
 	// return its own suggestions whenever it scores below the bestseller bar.
+	// Materialize the live scene/trope tiling BEFORE building any target
+	// validator. The validator snapshots state.Chapters at creation time; when it
+	// was built before ensureFallbackScenePlan/repairSceneSpans ran, a chapter
+	// whose ScenePlan was still nil produced an EMPTY snapshot — every bundled
+	// intervention failed validation and the sanitizer collapsed real reports to
+	// "0 editorial suggestions" despite scores far from 100/100 (the planning
+	// critic never had this problem because its suggestions carry no targets).
+	ensureFallbackScenePlan(ch)
+	repairSceneSpans(ch)
+	SyncChapterBlocksSceneAware(ch, ch.Content)
 	logger.InfoKey("log.chapter_analyze_running", ch.Num)
 	now := time.Now().Unix()
 	chapterTargets := draftedTargetValidator(state, []int{ch.Num})
@@ -1130,12 +1266,12 @@ func buildPillarEditorPrompt(cfg *config.Config, state *Progress, settings *Proj
 	pc := buildChapterPromptContext(cfg, state, settings, idx, lang)
 	focus, categories := pillarFocusEN(pillarKey)
 	name, _ := pillarCategoryNames(pillarKey, lang)
-	schema := fmt.Sprintf(`{"pillar":{"key":%q,"criteria_levels":[{"key":"...","level":0}],"note":"..."},"suggestions":[{"category":"%s","pillar":%q,"criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[%d]}]}`,
-		pillarKey, categories, pillarKey, ch.Num)
+	schema := fmt.Sprintf(`{"pillar":{"key":%q,"criteria_levels":[{"key":"...","level":0}],"note":"..."},"suggestions":[{"category":"%s","pillar":%q,"criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[%d],"interventions":[{"chapter_num":%d,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS trope unit only"}]}]}`,
+		pillarKey, categories, pillarKey, ch.Num, ch.Num)
 	if normalizeLangEN(lang) {
 		return fmt.Sprintf(`You are %s, a world-famous literary editor whose lists have produced multiple global bestsellers. Grade exactly ONE pillar of your bestseller rubric over ONE drafted chapter: %s AS DRAFTED PROSE.
 
-PILLAR UNDER REVIEW: %s — %s
+PILLAR UNDER REVIEW: %s
 
 NOVEL PARAMETERS:
 %s
@@ -1158,18 +1294,19 @@ Grading standard (you are ruthless — your reputation rests on books that hit #
 - Grade EVERY checklist item 0-100 against BESTSELLER level, not "competent". 90+ means genuinely strong as-is. Derive the pillar verdict from these levels, never guess.
 - Every suggestion MUST declare its "pillar" (%q), the checklist "criteria" keys it repairs, and a realistic "score_impact".
 - If ANY item scores below 90 you MUST return at least one concrete suggestion (up to 3) ordered by impact — a low score with zero suggestions is a failed answer. Only when EVERY item is 90+ may suggestions be empty.
-- DO NOT include replacement prose or "interventions" arrays in this pass: advice only. Feedback-style micro-fixes come later via "Propose interventions".
+- %s
+- NEVER include replacement prose: an intervention only points at a trope unit and describes the fix in "feedback"; the actual rewrite happens later, when the author applies it.
 - applies_to_chapters should just name this chapter (%d).
 - Write note, titles, details and actions in the SAME language as the chapter prose above.
 
 Return STRICT JSON only (no markdown fences, no prose): %s`,
 			editorPersona(lang), pc.where, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckEN,
 			strings.TrimSpace(ch.Outline), pc.tropeMap, pillarCriteriaBlockEN(pillarKey), pc.words, pc.content,
-			pillarKey, ch.Num, schema), nil
+			pillarKey, interventionsRulesBlock(lang), ch.Num, schema), nil
 	}
 	return fmt.Sprintf(`Eres %s, un editor literario mundialmente famoso cuyas listas han producido múltiples bestsellers globales. Califica exactamente UN pilar de tu rúbrica bestseller sobre UN capítulo borroneado: %s COMO PROSA REAL.
 
-PILAR BAJO REVISIÓN: %s — %s
+PILAR BAJO REVISIÓN: %s
 
 PARÁMETROS DE LA NOVELA:
 %s
@@ -1192,14 +1329,15 @@ Estándar de nota (eres despiadado — tu reputación descansa en libros que lle
 - Califica CADA ítem de la lista 0-100 contra nivel BESTSELLER, no "correcto". 90+ significa genuinamente fuerte tal cual. La nota del pilar se deriva de esos niveles, nunca se adivina.
 - Cada sugerencia DEBE declarar su "pillar" (%q), las claves "criteria" que repara y un "score_impact" realista.
 - Si ALGÚN ítem puntúa bajo 90 DEBES devolver al menos una sugerencia concreta (hasta 3) ordenadas por impacto — una nota baja con cero sugerencias es una respuesta fallida. Solo cuando CADA ítem sea 90+ las sugerencias pueden ir vacías.
-- NO incluyas prosa de reemplazo ni arrays "interventions" en esta pasada: solo consejo. Las micro-correcciones llegan después vía "Proponer intervenciones".
+- %s
+- NUNCA incluyas prosa de reemplazo: una intervención solo señala una unidad de tropo y describe la corrección en "feedback"; la reescritura real ocurre después, cuando el autor la aplica.
 - applies_to_chapters debe nombrar solo este capítulo (%d).
 - Escribe note, títulos, detalles y acciones en el MISMO idioma que la prosa del capítulo de arriba.
 
 Devuelve SOLO JSON estricto (sin cercas markdown, sin prosa): %s`,
 		editorPersona(lang), pc.whereEs, name, focus, pc.meta, pc.structure, pc.history, pc.prevCheckES,
 		strings.TrimSpace(ch.Outline), pc.tropeMap, pillarCriteriaBlockES(pillarKey), pc.words, pc.content,
-		pillarKey, ch.Num, schema), nil
+		pillarKey, interventionsRulesBlock(lang), ch.Num, schema), nil
 }
 
 func analysisPillarsKeysForPrompt() []string { return analysisPillarKeys }
@@ -1458,14 +1596,7 @@ func tropeUnitProseAt(ch *ChapterState, scenePos, tropeIdx int) string {
 		return ""
 	}
 	paras, _ := splitBlockParagraphs(ch.Content)
-	spans := sceneParaSpans(ch, paras)
-	if spans == nil {
-		// No usable scene plan (or degenerate budgets): fall back to the SAME
-		// break-delimited pseudo-scene tiling SyncChapterBlocks uses for the
-		// reader chips, so proposals still carry a CurrentText anchor and the
-		// sheet can highlight them.
-		spans = breakSceneSpans(paras)
-	}
+	spans := writtenSceneTiling(ch, paras)
 	if scenePos >= len(spans) {
 		return ""
 	}
@@ -1548,6 +1679,13 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 	// Plan-less chapters get a synthetic break-derived scene/trope tiling so
 	// proposal, apply and highlight all resolve the same (scene_pos, trope_index).
 	ensureFallbackScenePlan(ch)
+	// Re-derive recorded spans/units from the CURRENT prose before building the
+	// target validator: stale ParaStart/ParaEnd after manual edits or older data
+	// made recordedSceneParaSpans reject the exact tiling, so the map block and
+	// the validator disagreed and EVERY intervention failed validation — the
+	// critic showed no inline suggestions despite scores far from 100/100.
+	repairSceneSpans(ch)
+	SyncChapterBlocksSceneAware(ch, ch.Content)
 	targets := draftedTargetValidator(state, []int{ch.Num})
 	planBuf := strings.Builder{}
 	fmt.Fprintf(&planBuf, "%s", chapterTropeMapBlock(*ch, cfg.Language))
@@ -1981,17 +2119,50 @@ func draftedTargetValidator(state *Progress, allowedChapters []int) func(chapter
 					valid[[3]int{ch.Num, pos, u.Index}] = lbl
 				}
 			}
+			// Fallback label for scenes whose recorded units carry an empty/
+			// unknown Label (older data or synthetic plans built without the
+			// writer's classifier). Without this the strict label whitelist
+			// rejected EVERY unit of such chapters — the proposal validator
+			// then discarded all model answers ("no_valid_interventions") and
+			// the critic showed zero inline suggestions despite low scores.
+			if len(sc.TropeUnits) > 0 {
+				firstLbl := TropeTransition
+				if labels[sc.TropeUnits[0].Label] {
+					firstLbl = sc.TropeUnits[0].Label
+				}
+				if _, ok := valid[[3]int{ch.Num, pos, sc.TropeUnits[0].Index}]; !ok {
+					valid[[3]int{ch.Num, pos, sc.TropeUnits[0].Index}] = string(firstLbl)
+				}
+			}
 		}
 	}
 	return func(chapterNum, scenePos, tropeIndex int) bool {
 		if _, ok := valid[[3]int{chapterNum, scenePos, tropeIndex}]; ok {
 			return true
 		}
+		// Unit-level tolerance: when a scene HAS registered units but the exact
+		// index misses (model drift beyond clamp's reach, or a plan persisted
+		// before retile ran), accept any in-range unit of that scene instead of
+		// dropping the feedback. The frontend resolves the highlight against the
+		// live tiling anyway; losing the suggestion is worse than a fuzzy target.
+		if chapterNum > 0 && scenePos >= 0 && tropeIndex >= 0 {
+			for _, ch := range state.Chapters {
+				if ch.Num != chapterNum || ch.ScenePlan == nil || scenePos >= len(ch.ScenePlan.Scenes) {
+					continue
+				}
+				units := ch.ScenePlan.Scenes[scenePos].TropeUnits
+				if len(units) > 0 && tropeIndex < len(units) {
+					return true
+				}
+			}
+		}
 		// Scene-level sentinel: clampInterventionTarget probes (chap,pos,-1) to
 		// detect plans WITHOUT registered trope units. Accepting any in-range
 		// scene pos here lets out-of-range unit indices clamp instead of being
 		// dropped — this was the root cause of "0 editorial suggestions" on
-		// chapters whose per-scene bookkeeping never landed.
+		// chapters whose per-scene bookkeeping never landed. Also accepts
+		// tropeIndex==0 as the scene-only fallback used by plan-less tilings:
+		// every scene always exposes at least unit 0 to the reader.
 		if tropeIndex == -1 && chapterNum > 0 && scenePos >= 0 {
 			for _, ch := range state.Chapters {
 				if ch.Num != chapterNum || ch.ScenePlan == nil {
