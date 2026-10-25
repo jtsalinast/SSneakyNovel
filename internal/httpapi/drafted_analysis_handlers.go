@@ -802,7 +802,11 @@ func (h *Handlers) PostChapterResyncUI(w http.ResponseWriter, r *http.Request) {
 		"chapter":   resp,
 		"progress":  story.ProgressView(h.state),
 	})
-	h.startKnowledgeSync()
+	// NOTE: no startKnowledgeSync() here on purpose. Resync only rebuilds
+	// editor bookkeeping (blocks/spans) — the prose and its content revision
+	// are untouched, so there is nothing new for fact extraction to consume.
+	// Triggering it made every "Refresh UI" leave the UI stuck showing a fake
+	// "syncing facts" state even though no LLM work ever ran.
 }
 
 // PostChapterSubdivideBeats is the TRANSITIONAL counterpart of Refresh UI:

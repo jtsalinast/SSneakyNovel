@@ -640,11 +640,53 @@ func (h *Handlers) GetChapterContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch := h.state.Chapters[idx]
+	// Self-heal editor bookkeeping (blocks + scene/trope spans + fallback plan)
+	// for chapters written before the chips UI landed. This is exactly what the
+	// manual "Refresh UI" button does, but it runs lazily on read so a plain F5
+	// shows every scene/subscene chip without pressing the button first. The
+	// repair is idempotent and cheap; it only re-tiles when the recorded spans
+	// are stale (interfaceSyncedAt==0 marks never-repaired chapters).
+	if ch.Content != "" && ch.InterfaceSyncedAt == 0 {
+		cch := &h.state.Chapters[idx]
+		before := *cch
+		before.Blocks = append([]story.Block(nil), cch.Blocks...)
+		story.ResyncChapterInterface(cch)
+		if !sameBlocks(before.Blocks, cch.Blocks) || before.NextBlockID != cch.NextBlockID {
+			// Block IDs/boundaries changed: persist so the next load is stable.
+			if err := story.SaveProgress(h.progressPath, h.state); err != nil {
+				h.state.Chapters[idx] = before
+				cch = &h.state.Chapters[idx]
+			}
+		} else {
+			// Prose already tiles cleanly: keep the previous block IDs intact and
+			// only persist the repaired scene-plan metadata.
+			cch.Blocks = before.Blocks
+			cch.NextBlockID = before.NextBlockID
+			_ = story.SaveProgress(h.progressPath, h.state)
+		}
+		ch = *cch
+	}
 	if ch.Content != "" {
 		ch.WordCount = prose.CountProseUnits(ch.Content)
 		ch.ContentRev = fmt.Sprintf("%x", story.HashContent(ch.Content))
 	}
 	h.writeJSON(w, http.StatusOK, ch)
+}
+
+// sameBlocks reports whether two block lists are identical in ID, boundaries
+// and text (used by the lazy resync in GetChapterContent to decide whether the
+// re-tile actually changed anything worth persisting differently).
+func sameBlocks(a, b []story.Block) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Text != b[i].Text || a[i].ScenePos != b[i].ScenePos ||
+			a[i].TropeIndex != b[i].TropeIndex || a[i].TropeCount != b[i].TropeCount {
+			return false
+		}
+	}
+	return true
 }
 
 // GetChapterIVLocator returns the reader-side scene/subscene tiling of one
@@ -783,14 +825,29 @@ func (h *Handlers) PostChapterBlockInsert(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body struct {
-		AfterID int    `json:"after_id"`
-		Text    string `json:"text"`
+		AfterID  int    `json:"after_id"`
+		BeforeID int    `json:"before_id"`
+		Text     string `json:"text"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "block_text_required")
 		return
 	}
 	h.blockEditChapter(w, r, num, func(ch *story.ChapterState) error {
+		// before_id anchors the new block right BEFORE that block (used by the
+		// "Add subscene before" chip action); after_id keeps the legacy semantics.
+		if body.BeforeID != 0 {
+			i := story.FindBlockIdx(ch, body.BeforeID)
+			if i < 0 {
+				return story.ErrBlockNotFound
+			}
+			anchor := 0 // i==0 -> insert at the very beginning
+			if i > 0 {
+				anchor = ch.Blocks[i-1].ID
+			}
+			_, err := story.InsertBlockAfter(ch, anchor, body.Text)
+			return err
+		}
 		_, err := story.InsertBlockAfter(ch, body.AfterID, body.Text)
 		return err
 	})

@@ -206,6 +206,7 @@
   let revisingBlockId = null;  // block whose AI revision feedback is being typed
   let blockFeedback = '';
   let insertAfterId = null;    // id of the block after which a new block is inserted (0 = start)
+  let insertBeforeId = null;   // id of the block BEFORE which a new subscene block is inserted
 
   // —— Continuous-sheet editor (Word-like) ——————————————————————————
   // The chapter is one always-editable prose surface instead of a stack of
@@ -256,54 +257,63 @@
     return m;
   };
 
-  // Chip shown BEFORE block i: scene marker when the scene changes (including
-  // at i===0 — the first scene's chip was previously swallowed by an `i<=0`
-  // guard), trope marker when the same scene moves to its next trope unit.
+  // Chips shown BEFORE block i. Scenes and subscenes are NEVER merged into a
+  // single chip: when both boundaries coincide we return a LIST where the
+  // SCENE chip comes first (rendered on top) and its subscene chip second
+  // (rendered below). A scene chip appears whenever the scene changes
+  // (including at i===0 — the first scene's chip must always render); a
+  // subscene chip appears whenever the trope/beat index changes inside the
+  // same scene, or as the first-beat chip right under a scene chip.
   // Legacy tolerance: blocks synced before `scene_has_meta` existed leave the
   // field undefined; treat that as "has meta" instead of silently dropping
   // every scene chip. Only an explicit `false` (plan-less fallback scenes with
-  // no real metadata) suppresses the chip.
-  function markerBefore(blocks, i, meta) {
-    if (!blocks || i >= blocks.length) return null;
+  // no real metadata) suppresses the scene chip (the subscene chip still
+  // renders from trope bookkeeping alone).
+  function markersBefore(blocks, i, meta) {
+    if (!blocks || i >= blocks.length) return [];
     const cur = meta.get(blocks[i].id);
-    if (!cur || cur.scene_pos == null || cur.scene_pos < 0) return null;
+    if (!cur || cur.scene_pos == null || cur.scene_pos < 0) return [];
     const prev = i > 0 ? meta.get(blocks[i - 1].id) : null;
+    const out = [];
+    // —— SCENE chip (top row) ——————————————————————————————————————————————
     const ps = prev && prev.scene_pos != null ? prev.scene_pos : -1;
-    if (ps !== cur.scene_pos) {
-      if (cur.scene_has_meta !== false) {
-        return { kind: 'scene', pos: cur.scene_pos + 1, title: cur.scene_title || '', desc: cur.scene_description || '', label: cur.trope_label || '', idx: cur.trope_index || 0, count: cur.trope_count || 0 };
+    if (ps !== cur.scene_pos && cur.scene_has_meta !== false) {
+      // Scene chips carry a tooltip with the scene's description. Prefer the
+      // block-synced meta; fall back to the chapter's accepted scene plan so
+      // the tooltip works even when sync metadata lacks title/description.
+      let sTitle = cur.scene_title || '';
+      let sDesc = cur.scene_description || '';
+      if (!sDesc || !sTitle) {
+        const planned = ((ch?.scene_plan?.scenes && ch.scene_plan.scenes.length ? ch.scene_plan.scenes : planByChapter[ch?.num]) || [])[cur.scene_pos];
+        if (planned) {
+          if (!sTitle) sTitle = planned.title || '';
+          if (!sDesc) sDesc = planned.description || planned.purpose || '';
+        }
       }
-      return null;
+      out.push({ kind: 'scene', pos: cur.scene_pos + 1, title: sTitle, desc: sDesc });
     }
-    // Trope chip: any change of trope index inside the same scene marks a new
-    // trope unit. The backend tiles units 1-based (trope_index = ui+1), so the
-    // previous block legitimately has a HIGHER index after a re-tile; requiring
+    // —— SUBSCENE chip (bottom row) —————————————————————————————————————————
+    // Any change of trope index between consecutive blocks marks a new beat.
+    // The backend tiles units 1-based (trope_index = ui+1), so after a
+    // re-tile the previous block legitimately has a HIGHER index; requiring
     // `ct > pt` used to swallow every chip but the first. Any difference
-    // (ct !== pt) is a boundary. Single-unit scenes also deserve their chip —
-    // it is the carrier of the "Key fact #N" chips (facts travel with tropes,
-    // never with the scene marker), so suppressing them here used to hide all
-    // key-fact chips in chapters whose resync produced one trope per scene.
+    // (ct !== pt) is a boundary. When a scene boundary just fired, the FIRST
+    // beat of the new scene also gets its chip (ct === 1) — that is the
+    // "subscene 1 chip under the scene chip" the sheet must always show.
     const pt = prev && prev.trope_index != null ? prev.trope_index : 0;
     const ct = cur.trope_index != null ? cur.trope_index : 0;
-    if (ct !== pt && (cur.trope_count || 0) >= 1 && (prev?.trope_count ?? 1) >= 1) {
-      return { kind: 'trope', pos: cur.scene_pos + 1, label: cur.trope_label || '', idx: ct, count: cur.trope_count || 0 };
+    const sceneBoundary = ps !== cur.scene_pos;
+    const isSubsceneChip = (ct !== pt && (cur.trope_count || 0) >= 1 && (prev?.trope_count ?? 1) >= 1)
+      || (sceneBoundary && ct === 1 && (cur.trope_count || 0) >= 1);
+    if (isSubsceneChip) {
+      out.push({ kind: 'trope', pos: cur.scene_pos + 1, label: cur.trope_label || '', idx: ct, count: cur.trope_count || 0 });
     }
-    if ((cur.trope_count || 0) === 1 && ct === 1) {
-      return { kind: 'trope', pos: cur.scene_pos + 1, label: cur.trope_label || '', idx: ct, count: cur.trope_count || 0 };
-    }
-    return null;
+    return out;
   }
-  function markerTip(m) {
-    if (!m) return '';
-    if (m.kind === 'scene') {
-      // Tooltip shows the scene-plan description of the incoming scene.
-      let s = $t('writing.blockSceneMarker', [m.pos]);
-      if (m.desc) s += '\n\n' + m.desc;
-      else if (m.title) s += '\n\n' + m.title;
-      return s.trim();
-    }
-    return $t('writing.blockTropeHint', [m.label, m.idx, m.count]);
-  }
+  // (markerTip was removed together with the emergent tooltips on the sheet
+  // chips — hovering a chip now reveals the "add subscene before" action.)
+  // firstUnitIssuesOfScene is kept for the block-level trope dots; the scene
+  // chip itself no longer renders issue dots (chips stay clean: label only).
 
   // Serialize the contenteditable sheet back into {id,text} paragraphs.
   // Each top-level child carries data-bid (chip rows keep the bid of the
@@ -475,6 +485,17 @@
   }
   function startBlockInsert(afterId) {
     insertAfterId = afterId;
+    insertBeforeId = null;
+    insertText = '';
+    editingBlockId = null;
+    revisingBlockId = null;
+  }
+  // "Add subscene before": opens the same inline insert editor, but anchored
+  // BEFORE the given block. The backend InsertBlockAfter treats after_id=0 as
+  // "at the beginning", so any positive id - 1 maps to "before that block".
+  function startBlockInsertBefore(blockId) {
+    insertBeforeId = blockId;
+    insertAfterId = null;
     insertText = '';
     editingBlockId = null;
     revisingBlockId = null;
@@ -483,6 +504,7 @@
     editingBlockId = null;
     revisingBlockId = null;
     insertAfterId = null;
+    insertBeforeId = null;
   }
 
   async function saveBlockEdit(confirmed = false) {
@@ -513,9 +535,12 @@
   }
 
   async function saveBlockInsert() {
-    if (insertAfterId == null || !insertText.trim() || !ch) return;
+    if ((insertAfterId == null && insertBeforeId == null) || !insertText.trim() || !ch) return;
     try {
-      const full = await api('POST', `/api/chapters/${ch.num}/blocks`, { after_id: insertAfterId, text: insertText }, factHeaders(false));
+      // before_id inserts the new block right BEFORE the anchored block
+      // ("Add subscene before" chip); after_id keeps the legacy semantics.
+      const payload = insertBeforeId != null ? { before_id: insertBeforeId, text: insertText } : { after_id: insertAfterId, text: insertText };
+      const full = await api('POST', `/api/chapters/${ch.num}/blocks`, payload, factHeaders(false));
       applyChapter(ch.num, full);
       cancelBlockOps();
       addToast($t('writing.block.inserted'), 'success');
@@ -1138,24 +1163,50 @@
   $: writingConflict = p?.pending_writing_conflict || null;
   // Scene-plan review gate: the backend pauses chapter generation after
   // planning scenes (unless automation is on) and persists the pending
-  // chapter number, so the editor auto-opens even after a page reload.
+  // chapter number. The beat-sheet editor now lives INLINE in the
+  // "Scene matrix" tab, so a pending plan just selects that chapter and
+  // keeps the user on tab 1 (no modal to open anymore).
   $: scenePlanPendingNum = p?.pending_scene_plan_chapter || 0;
-  let showScenePlan = false;
   let scenePlanChapter = null;
   $: if (scenePlanPendingNum && !$taskRunning) {
     if (scenePlanChapter !== scenePlanPendingNum) {
       scenePlanChapter = scenePlanPendingNum;
       addToast($t('writing.scenePlan.pendingToast', { num: scenePlanPendingNum }), 'info');
     }
-    showScenePlan = true;
+    // Select the pending chapter exactly once per gate, so the auto-selection
+    // never fights with the user while they work on other chapters.
+    const pi = chapters.findIndex(c => c.num === scenePlanPendingNum);
+    if (pi >= 0 && lastAutoSelectedPlanChapter !== scenePlanPendingNum) {
+      lastAutoSelectedPlanChapter = scenePlanPendingNum;
+      selectChapter(pi);
+    }
+    writingTab = 1;
   }
-  function openScenePlanEditor() {
-    scenePlanChapter = ch?.num ?? chapters[currentIdx]?.num ?? null;
-    showScenePlan = true;
+  let lastAutoSelectedPlanChapter = null;
+  $: scenePlanEditorNum = ch?.num ?? scenePlanChapter ?? scenePlanPendingNum ?? null;
+
+  // —— Scene-plan cache for the SCENE chip tooltips (tab 2) ——————————————————
+  // Only SCENE chips carry a tooltip (the black SmartSelect-style popover with
+  // that scene's description); subscene chips never do. The block-synced meta
+  // already carries title/description when available, but chapters drafted
+  // before that field existed (or whose plan lives only server-side) fall back
+  // to this lazily-loaded cache keyed by chapter number.
+  let planByChapter = {};
+  async function ensurePlanFor(num) {
+    if (!num || planByChapter[num] !== undefined) return;
+    planByChapter[num] = null; // mark "in flight / done" so we fetch once
+    try {
+      const res = await api('GET', `/api/chapters/${num}/scene-plan`);
+      planByChapter = { ...planByChapter, [num]: res?.plan?.scenes || [] };
+    } catch { /* no plan — chips simply show no tooltip */ }
   }
-  // When the auto-opened scene-plan review gate fires, follow the editor to
-  // the Scene-matrix tab so the user lands on the right pane.
-  $: if (showScenePlan) writingTab = 1;
+  // Warm the cache for the selected chapter while on the writing tab.
+  $: if (writingTab === 2 && ch?.num) ensurePlanFor(ch.num);
+  // Prefetch plans for every non-accepted chapter that has a beat sheet, so
+  // scene tooltips work even when browsing chapters without selecting them.
+  $: if (writingTab === 2 && chapters.length) {
+    for (const c of chapters) if (c.scene_plan?.scenes?.length) ensurePlanFor(c.num);
+  }
   $: orphanWriting = !!(ch && isCurrent && ch.status === 'writing' && !writingConflict && !$taskRunning);
 
   // --- Bestseller-editor critique passes (siblings of the outline one) ---
@@ -1177,6 +1228,14 @@
     api('POST', '/api/acts/analyze', { act_no: no })
       .then(() => addToast($t('act.analysis.toasts.started'), 'info'))
       .catch((e) => addToast(e.message, 'error'));
+  }
+  // Pre-plan acts that END right after chapter `num` — used to interleave the
+  // manual act-critique "steps" inside ChapterSidebarList at every point where
+  // one act hands over to the next (and after the last chapter for the final
+  // act, when its end_ch reaches or exceeds the chapter list).
+  function actsEndingAfter(num) {
+    if (!num) return [];
+    return preplanActs.filter(a => a.end_ch === num || (a.no === preplanActs.length && num >= a.end_ch && a.end_ch > 0));
   }
 
   async function resolveWritingConflict(action) {
@@ -1654,7 +1713,8 @@
       </div>
     {/if}
 
-    <!-- Row: chapter index (left) + scene-plan access (right) -->
+    <!-- Row: chapter index (left) + foreshadow tracker (right; this is where
+         the old "Scene plan" access card used to sit) -->
     <div id="WritingMetaRow" class="grid grid-cols-[minmax(0,1fr)_345px] gap-3 items-start">
       <div id="ChapterSidebarList" class="card bg-base-200 overflow-y-auto max-h-[calc(100vh-280px)] min-w-0">
         <ul class="menu menu-sm p-0 w-full">
@@ -1672,18 +1732,70 @@
                 {/if}
               </button>
             </li>
+            <!-- Act-critique "steps": when the pre-plan switches from one act
+                 to the next right after this chapter (or, for the last act,
+                 after the final chapter), offer its manual critique inline —
+                 these used to be an isolated button row below the tabs. -->
+            {#each actsEndingAfter(c.num) as act (act.no)}
+              <li>
+                <button class="flex gap-2 items-center border-t border-base-content/10"
+                        disabled={$taskRunning || !!p?.act_analyses?.[act.no]}
+                        title={$t('act.analysis.manualBtnTip', { start: act.start_ch, end: act.end_ch })}
+                        on:click={() => critiqueAct(act.no)}>
+                  <span class="shrink-0 text-warning text-xs">✦</span>
+                  <span class="flex-1 text-left text-xs opacity-80">{$t('act.analysis.manualBtn', { no: act.no, name: act.name || '' })}</span>
+                  {#if p?.act_analyses?.[act.no]}
+                    <span class="badge badge-success badge-xs shrink-0">✓</span>
+                  {/if}
+                </button>
+              </li>
+            {/each}
           {/each}
         </ul>
       </div>
 
-      <div id="CardSection_ScenePlanAccess" class="card bg-base-200 min-w-0">
-        <div class="card-body p-4 gap-2">
-          <h3 class="font-medium text-sm">{$t('writing.scenePlan.accessTitle')}</h3>
-          <p class="text-xs text-base-content/65">{$t('writing.scenePlan.accessHint', { num: ch?.num ?? '-' })}</p>
-          <button class="btn btn-outline btn-xs self-start" on:click={openScenePlanEditor} disabled={$taskRunning || !ch} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
-        </div>
+      <div id="CardSection_ForeshadowTracker" class="card bg-base-200 min-w-0">
+        {#if foreshadows.length > 0}
+          <div class="card-body p-4 gap-2">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="font-medium text-sm">{$t('writing.fs.title')}</h3>
+              <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.goto')}</button>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+              <span class="badge badge-ghost">{$t('writing.fs.total', { n: foreshadows.length })}</span>
+              <span class="badge badge-info badge-outline">{$t('writing.fs.active', { n: fsActive.length })}</span>
+              {#if fsOverdue.length > 0}
+                <span class="badge badge-error">{$t('writing.fs.overdue', { n: fsOverdue.length })}</span>
+              {/if}
+              {#if fsNearTarget.length > 0}
+                <span class="badge badge-warning badge-outline">{$t('writing.fs.nearTarget', { n: fsNearTarget.length })}</span>
+              {/if}
+            </div>
+            {#if fsOverdue.length > 0}
+              <p class="text-xs text-warning">{$t('writing.fs.overdueDetail', { names: fsOverdue.map(f => `#${f.id} ${f.name}`).join(', ') })}</p>
+            {:else if fsNearTarget.length > 0}
+              <p class="text-xs text-base-content/65">{$t('writing.fs.nearDetail', { names: fsNearTarget.map(f => f.name).join(', ') })}</p>
+            {/if}
+          </div>
+        {:else}
+          <div class="card-body p-4 flex items-center justify-between gap-2">
+            <p class="text-sm text-base-content/65">{$t('writing.fs.none')}</p>
+            <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.setup')}</button>
+          </div>
+        {/if}
       </div>
     </div><!-- /WritingMetaRow -->
+
+    <!-- CHAPTER TITLE: big heading above the stepper tabs so the user always
+         knows which chapter the three steps refer to. -->
+    <div id="ChapterTitleHeader" class="pt-12 pb-3 flex items-center gap-3 flex-wrap">
+      <h1 class="text-3xl font-bold leading-tight truncate max-w-full">
+        {#if ch}{ch.title}{:else}{$t('writing.emptySelection')}{/if}
+      </h1>
+      {#if ch}
+        <span class="badge badge-sm shrink-0 {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
+      {/if}
+    </div>
 
     <!-- STEP TABS: three horizontal step tabs below WritingMetaRow. The
          active one gets a white card + dark numbered badge; earlier steps
@@ -1731,15 +1843,15 @@
     </div><!-- /WritingStepTabs -->
 
     <!-- ═════════ TAB 1 · SCENE MATRIX ═════════
-         Scene-plan access card + the bestseller critic over the PENDING
-         scene plans (beat sheets). -->
+         The scene-plan beat-sheet editor INLINE (it used to live in a modal
+         opened from an access card) + the bestseller critic over the PENDING
+         scene plans. -->
     {#if writingTab === 1}
-      <div id="CardSection_ScenePlanAccess" class="card bg-base-200 mt-3 min-w-0">
-        <div class="card-body p-4 gap-2">
-          <h3 class="font-medium text-sm">{$t('writing.scenePlan.accessTitle')}</h3>
-          <p class="text-xs text-base-content/65">{$t('writing.scenePlan.accessHint', { num: ch?.num ?? '-' })}</p>
-          <button class="btn btn-outline btn-xs self-start" on:click={openScenePlanEditor} disabled={$taskRunning || !ch} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
-        </div>
+      <div class="mt-3 min-w-0">
+        {#key scenePlanEditorNum}
+          <ScenePlanEditor chapterNum={scenePlanEditorNum}
+            onGenerated={() => setWritingTab(2)} />
+        {/key}
       </div>
 
       <!-- Bestseller critic over the PENDING scene plans (beat sheets): same
@@ -1757,13 +1869,16 @@
     {/if}
 
     <!-- ═════════ SHARED BELOW-TABS AREA (tabs 2 & 3) ═════════
-         Act critic + foreshadow tracker stay visible on both the writing
-         and the review tabs. -->
+         Act critic reports stay visible on both the writing and the review
+         tabs. The manual act-critique buttons now live INSIDE the chapter
+         index (ChapterSidebarList) as extra "steps" placed where each act
+         ends; the foreshadow tracker card moved next to the chapter index. -->
     {#if writingTab === 2 || writingTab === 3}
     <!-- Bestseller critic over FINISHED ACTS of the pre-planning: one report
          per act, generated automatically right after the pipeline confirms
-         the act's last chapter (and manually here). Suggestions carry small
-         trope-unit interventions that rewriteSceneTrope repairs surgically. -->
+         the act's last chapter (and manually from the chapter-index rows).
+         Suggestions carry small trope-unit interventions that
+         rewriteSceneTrope repairs surgically. -->
     {#each actAnalyses as a (a.no)}
       <div id="CardSection_ActAnalysis_{a.no}" class="mt-3 space-y-1">
         <BestsellerCritiqueCard
@@ -1775,51 +1890,6 @@
           scrollId="CardSection_ActAnalysis_" + a.no />
       </div>
     {/each}
-    {#if preplanActs.length > 0}
-      <div class="flex flex-wrap gap-2 justify-end mt-2">
-        {#each preplanActs as act (act.no)}
-          <button class="btn btn-outline btn-xs" disabled={$taskRunning || !!p?.act_analyses?.[act.no]}
-            title={$t('act.analysis.manualBtnTip', { start: act.start_ch, end: act.end_ch })}
-            on:click={() => critiqueAct(act.no)}>
-            {$t('act.analysis.manualBtn', { no: act.no, name: act.name || '' })}
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    <!-- Foreshadow tracker: own row below the chapter index -->
-    {#if foreshadows.length > 0}
-      <div id="CardSection_ForeshadowSummary" class="card bg-base-200 mt-3">
-        <div class="card-body p-4 gap-2">
-          <div class="flex items-center justify-between gap-2">
-            <h3 class="font-medium text-sm">{$t('writing.fs.title')}</h3>
-            <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.goto')}</button>
-          </div>
-          <div class="flex flex-wrap gap-2 text-xs">
-            <span class="badge badge-ghost">{$t('writing.fs.total', { n: foreshadows.length })}</span>
-            <span class="badge badge-info badge-outline">{$t('writing.fs.active', { n: fsActive.length })}</span>
-            {#if fsOverdue.length > 0}
-              <span class="badge badge-error">{$t('writing.fs.overdue', { n: fsOverdue.length })}</span>
-            {/if}
-            {#if fsNearTarget.length > 0}
-              <span class="badge badge-warning badge-outline">{$t('writing.fs.nearTarget', { n: fsNearTarget.length })}</span>
-            {/if}
-          </div>
-          {#if fsOverdue.length > 0}
-            <p class="text-xs text-warning">{$t('writing.fs.overdueDetail', { names: fsOverdue.map(f => `#${f.id} ${f.name}`).join(', ') })}</p>
-          {:else if fsNearTarget.length > 0}
-            <p class="text-xs text-base-content/65">{$t('writing.fs.nearDetail', { names: fsNearTarget.map(f => f.name).join(', ') })}</p>
-          {/if}
-        </div>
-      </div>
-    {:else}
-      <div id="CardSection_ForeshadowSetup" class="card bg-base-200 mt-3">
-        <div class="card-body p-4 flex items-center justify-between gap-2">
-          <p class="text-sm text-base-content/65">{$t('writing.fs.none')}</p>
-          <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.setup')}</button>
-        </div>
-      </div>
-    {/if}
 
     {/if}
 
@@ -1835,7 +1905,7 @@
         {#if ch}
           <div id="CardSection_ChapterReader" class="card bg-base-200" use:setReaderCard>
             <div class="card-body p-4 gap-2">
-              <div class="flex items-center gap-2 flex-wrap">
+              <div class="chapter-head-row flex items-center gap-2 flex-wrap">
                 <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch.num, title: ch.title })}</h2>
                 <span class="badge badge-sm {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
                 {#if showTaskTokens}
@@ -1846,18 +1916,13 @@
               </div>
 
               {#if ch.outline}
-                <details class="bg-base-100 rounded">
+                <details class="chapter-outline-fold bg-base-100">
                   <summary class="p-2 text-xs text-base-content/65 cursor-pointer select-none">{$t('writing.chapter.outline')}</summary>
                   <div class="px-2 pb-2 text-sm text-base-content/70">{ch.outline}</div>
                 </details>
               {/if}
 
-              {#if ch.summary}
-                <details class="bg-base-100 rounded">
-                  <summary class="p-2 text-xs text-base-content/65 cursor-pointer select-none">{$t('writing.chapter.summary')}</summary>
-                  <div class="px-2 pb-2 text-sm text-base-content/70 whitespace-pre-wrap">{ch.summary}</div>
-                </details>
-              {/if}
+              <!-- The chapter summary moved to the "Review & accept" tab. -->
 
               {#if displayContent}
                 {#if isStreamingThis}
@@ -1890,58 +1955,88 @@
     on:click={onSheetClick}
                          on:scroll={hideSelMenu}>
                       {#each chapterBlocks as b, bi (b.id + ':' + ivRev)}
-                        {#if markerBefore(chapterBlocks, bi, sheetMeta)}
-                          {@const m = markerBefore(chapterBlocks, bi, sheetMeta)}
-                          {@const smi = m.kind === 'scene' ? firstUnitIssuesOfScene(m.pos - 1) : null}
-                          <!-- Key facts referenced by the blocks of the trope unit this
-                               chip opens (falling back to the whole scene when the block
-                               has no unit index): shown as compact "#N" chips so facts
-                               travel WITH the trope markers, never on the scene chip.
-                               Clicking one toggles an inline highlighter mark over the
-                               exact sentence the fact refers to (no whole-block tint). -->
-                          {@const chipFacts = m.kind === 'trope' ? (() => {
-                            // Key facts belong to TROPE chips, never to the scene chip:
-                            // they travel with the unit that references them.
-                            const cur = sheetMeta.get(b.id);
-                            if (!cur || cur.scene_pos == null || cur.scene_pos < 0) return [];
-                            const t0 = cur.trope_index != null ? cur.trope_index - 1 : null;
-                            const unitBlocks = chapterBlocks.filter(x => {
-                              if (x.scene_pos !== cur.scene_pos) return false;
-                              if (t0 == null || !x.trope_count || x.trope_count <= 1) return true;
-                              const xt = x.trope_index != null ? x.trope_index - 1 : null;
-                              return xt == null || xt === t0;
-                            });
-                            const ids = new Set();
-                            const out = [];
-                            for (const ub of unitBlocks) {
-                              for (const f of blockFacts(ub.id)) {
-                                if (!ids.has(f.id)) { ids.add(f.id); out.push({ fact: f, bid: ub.id }); }
-                              }
+                        {@const ms = markersBefore(chapterBlocks, bi, sheetMeta)}
+                        <!-- Key facts referenced by the blocks of the trope unit this
+                             boundary opens (falling back to the whole scene when the
+                             block has no unit index): shown as compact "#N" chips on
+                             their own row UNDER the subscene chip — facts travel WITH
+                             the trope markers, never on the scene chip. Clicking one
+                             toggles an inline highlighter mark over the exact sentence
+                             the fact refers to (no whole-block tint). -->
+                        {@const chipFactsRow = (() => {
+                          if (ms.length === 0) return [];
+                          const cur = sheetMeta.get(b.id);
+                          if (!cur || cur.scene_pos == null || cur.scene_pos < 0) return [];
+                          const t0 = cur.trope_index != null ? cur.trope_index - 1 : null;
+                          const unitBlocks = chapterBlocks.filter(x => {
+                            if (x.scene_pos !== cur.scene_pos) return false;
+                            if (t0 == null || !x.trope_count || x.trope_count <= 1) return true;
+                            const xt = x.trope_index != null ? x.trope_index - 1 : null;
+                            return xt == null || xt === t0;
+                          });
+                          const ids = new Set();
+                          const out = [];
+                          for (const ub of unitBlocks) {
+                            for (const f of blockFacts(ub.id)) {
+                              if (!ids.has(f.id)) { ids.add(f.id); out.push({ fact: f, bid: ub.id }); }
                             }
-                            return out.slice(0, 6);
-                          })() : []}
-                          <div class="sheet-chip-row flex flex-wrap items-center justify-center gap-1 py-0.5" data-bid={-bi - 1}>
-                            <span class="group inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope bg-base-content/5 border border-base-content/15 cursor-default select-none" contenteditable="false">
-                              <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-base-content/50 select-none">
-                                {#if m.kind === 'scene'}{$t('writing.blockSceneMarker', [m.pos])}{:else}{$t('writing.tropeMarkerChip', [m.label || ('#' + m.idx), m.idx, m.count])}{/if}
-                              </span>
-                              {#if chipFacts.length}
-                                <span class="flex items-center gap-0.5 select-none">
-                                  {#each chipFacts as cf (cf.fact.id)}
-                                    <button type="button" class="keyfact-chip" contenteditable="false"
-                                            title={$t('writing.keyFactChip.tip') + ': ' + (cf.fact.content || '')}
-                                            on:click|stopPropagation|preventDefault={() => toggleFactHighlight(cf.fact, cf.bid)}>{$t('writing.keyFactChip')} #{cf.fact.id}</button>
-                                  {/each}
+                          }
+                          return out.slice(0, 6);
+                        })()}
+                        {#if ms.length > 0}
+                          <!-- Scene and subscene chips are NEVER merged: each
+                               marker renders on its OWN centered row — the
+                               scene chip on top, the subscene chip below it. -->
+                          {#each ms as m, mi (m.kind + ':' + m.pos + ':' + (m.idx ?? 0))}
+                            <div class="sheet-chip-row group/chiprow relative flex flex-wrap items-center justify-center gap-1.5 py-0.5" data-bid={mi === 0 ? (-bi - 1) : (-bi - 100000 - mi)}>
+                              <!-- SCENE chips are ALWAYS fully visible (they own
+                                   the description tooltip). Subscene chips stay
+                                   subtle until hovered. Only SCENE chips carry the
+                                   "i" tooltip; subscene chips never do. -->
+                              <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope {m.kind === 'scene' ? 'chip-always-on' : ''} bg-base-content/5 border border-base-content/15 {m.kind === 'scene' ? 'cursor-help' : 'cursor-default'} select-none" contenteditable="false">
+                                <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-base-content/50 select-none">
+                                  {#if m.kind === 'scene'}{$t('writing.blockSceneMarker', [m.pos])}{:else}{$t('writing.tropeMarkerChip', [m.label || ('#' + m.idx), m.idx, m.count])}{/if}
                                 </span>
-                              {/if}
-                              {#if smi?.fact?.length}
-                                <InfoTip text={tropeIssueTipText(smi, 'fact')} label={$t('writing.tropeDots.factTitle')}>
-                                  <span slot="trigger" class="trope-dot trope-dot-fact" role="button" tabindex="-1" aria-label={$t('writing.tropeDots.factTitle')}></span>
+                              </span>
+                              {#if m.kind === 'scene' && (m.title || m.desc)}
+                                <!-- Scene-only affordance: an "i" icon OUTSIDE the
+                                     chip that opens the same black popover used by
+                                     the SmartSelect tips, with the scene's title
+                                     and description. Subscene chips have NO
+                                     tooltip at all. -->
+                                <InfoTip text={(m.title ? m.title + '\n\n' : '') + (m.desc || $t('writing.sceneDescEmpty'))} label={$t('writing.sceneDescTipLabel')}>
+                                  <span slot="trigger" class="scene-desc-icon" role="presentation">i</span>
                                 </InfoTip>
                               {/if}
-                              <span class="opacity-40 group-hover:opacity-100 transition-opacity"><InfoTip text={markerTip(m)} label={m.kind === 'scene' ? $t('writing.blockSceneMarker', [m.pos]) : $t('writing.blockTropeHint', [m.label, m.idx, m.count])} /></span>
-                            </span>
-                          </div>
+                              {#if m.kind === 'trope'}
+                                <!-- Hover action lives OUTSIDE the chip AND outside
+                                     the layout flow: an absolutely-positioned ghost
+                                     pill anchored to the row's right edge. It takes
+                                     ZERO width in the flex row, so the centered chip
+                                     never shifts left/right when the pill appears.
+                                     Only SUBSCENE rows get it — scene chips don't. -->
+                                <button type="button" contenteditable="false"
+                                        class="chip-add-before chip-add-before--ghost focus-visible:opacity-100 inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider bg-primary/10 text-primary hover:bg-primary/20"
+                                        on:click|stopPropagation|preventDefault={() => startBlockInsertBefore(b.id)}>＋ {$t('writing.block.insertBefore')}</button>
+                              {/if}
+                            </div>
+                          {/each}
+                          {#if chipFactsRow}
+                            <!-- Key-fact companion row under the subscene chip:
+                                 facts travel WITH the trope markers, never on the
+                                 scene chip. Clicking one toggles an inline
+                                 highlighter mark over the exact sentence the fact
+                                 refers to (no whole-block tint). -->
+                            <div class="sheet-chip-row flex flex-wrap items-center justify-center gap-1 py-0.5" data-bid={-bi - 200000}>
+                              <span class="flex items-center gap-0.5 select-none" contenteditable="false">
+                                {#each chipFactsRow as cf (cf.fact.id)}
+                                  <button type="button" class="keyfact-chip" contenteditable="false"
+                                          title={$t('writing.keyFactChip.tip') + ': ' + (cf.fact.content || '')}
+                                          on:click|stopPropagation|preventDefault={() => toggleFactHighlight(cf.fact, cf.bid)}>{$t('writing.keyFactChip')} #{cf.fact.id}</button>
+                                {/each}
+                              </span>
+                            </div>
+                          {/if}
                         {/if}
                         <div id={'story-block-' + b.id} class="sheet-para relative rounded -mx-2 px-2 py-1 leading-relaxed whitespace-pre-wrap {selectedBlockId === b.id ? 'story-block-selected' : ''}"
                              data-bid={b.id}
@@ -1997,6 +2092,36 @@
                           {/if}
                         </div>
                       {/each}
+                      <!-- "End of chapter" chip: same affordance as the subscene
+                           chips, but anchored to the END of the chapter. The action
+                           label says "add subscene before" because the new block is
+                           inserted BEFORE this end-of-chapter marker (i.e. right
+                           after the last written paragraph). -->
+                      {#if chapterBlocks.length > 0}
+                        {@const lastBid = chapterBlocks[chapterBlocks.length - 1].id}
+                        <div class="sheet-chip-row group/chiprow relative flex flex-wrap items-center justify-center gap-1.5 py-0.5" data-bid={-999998}>
+                          <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope bg-base-content/5 border border-base-content/15 cursor-default select-none" contenteditable="false">
+                            <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-base-content/50 select-none" title={$t('writing.block.endOfChapterTip')}>⬛ {$t('writing.block.endOfChapter')}</span>
+                          </span>
+                          <!-- Action pill lives OUTSIDE the chip AND outside the
+                               layout flow (absolute ghost at the row's right edge):
+                               zero width in the flex row, so the centered chip never
+                               shifts. Label says "add subscene before" because the
+                               new block lands BEFORE this end-of-chapter marker. -->
+                          <button type="button" contenteditable="false"
+                                  class="chip-add-before chip-add-before--ghost focus-visible:opacity-100 inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider bg-primary/10 text-primary hover:bg-primary/20"
+                                  on:click|stopPropagation|preventDefault={() => startBlockInsert(lastBid)}>＋ {$t('writing.block.insertBefore')}</button>
+                          {#if insertAfterId === lastBid}
+                            <div class="w-full bg-base-100 rounded p-2 mt-1 space-y-1 text-left" contenteditable="false">
+                              <textarea class="textarea textarea-sm w-full text-sm" bind:value={insertText} placeholder={$t('writing.block.insertPlaceholder')} disabled={$taskRunning}></textarea>
+                              <div class="flex gap-2 justify-end">
+                                <button class="btn btn-ghost btn-xs" on:click={cancelBlockOps}>{$t('common.cancel')}</button>
+                                <button class="btn btn-primary btn-xs" on:click={saveBlockInsert} disabled={$taskRunning || !insertText.trim()}>{$t('writing.block.insertSubmit')}</button>
+                              </div>
+                            </div>
+                          {/if}
+                        </div>
+                      {/if}
                     </div>
                   {:else}
                     {displayContent}
@@ -2131,7 +2256,8 @@
               <div id="ChapterActionsBar" class="flex gap-2 flex-wrap items-center mt-1">
                 {#if ch.status === 'pending' && isCurrent}
                   <button class="btn btn-primary btn-sm" on:click={doGenerate} disabled={$taskRunning}>{$t('writing.btn.generate')}</button>
-                  <button class="btn btn-outline btn-sm" on:click={openScenePlanEditor} disabled={$taskRunning} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
+                  <!-- The scene-plan editor is inline in the "Scene matrix" tab now; this button just jumps there. -->
+                  <button class="btn btn-outline btn-sm" on:click={() => setWritingTab(1)} disabled={$taskRunning} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
                 {/if}
                 {#if ch.draft_saved_at && !isStreamingThis}
                   <button class="btn btn-warning btn-sm" on:click={doResumeDraft} disabled={$taskRunning} title={$t('writing.chapter.resumeTip')}>{$t('writing.chapter.resume')}</button>
@@ -2257,42 +2383,57 @@
          facts binding — reviewFacts — so the prose chips of tab 2 never
          see it) plus the button that accepts the chapter. -->
     {#if writingTab === 3}
-      <div id="CardSection_ReviewAccept" class="card bg-base-200 mt-3 min-w-0">
-        <div class="card-body p-4 gap-3">
-          <div class="flex items-center gap-2 flex-wrap">
-            <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch?.num ?? '-', title: ch?.title ?? '' })}</h2>
-            {#if ch}
-              <span class="badge badge-sm {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
-            {/if}
-          </div>
-
+      <div id="CardSection_ReviewAccept" class="rounded-xl bg-white shadow-subtle mt-3 min-w-0 p-8">
+        <!-- HEADER: big clear title + status pill (mirrors the Scene matrix
+             inline card of tab 1 — same Notion/Revolut document style). -->
+        <div class="flex items-center gap-3 flex-wrap px-0 pt-0 pb-4 border-b border-neutral-100">
+          <h3 class="text-lg font-semibold text-neutral-900 flex-1 leading-tight">
+            {$t('writing.chapter.title', { num: ch?.num ?? '-', title: ch?.title ?? '' })}
+          </h3>
           {#if ch}
-            <h3 class="font-medium text-sm flex items-center gap-2">
-              {$t('writing.tab.factsTitle')}
-              <span class="badge badge-ghost badge-sm">{$t('facts.count', { count: reviewFacts.length })}</span>
-            </h3>
-            <KnowledgePanel chapterNum={ch.num} bind:facts={reviewFacts} bind:activeFact bind:expanded={knowledgeExpanded} on:jump={e => jumpToFact(e.detail)} />
-            {#if returnRef}<button class="btn btn-outline btn-xs self-start" on:click={() => jumpToFact(returnRef, true)}>{$t('facts.return')}</button>{/if}
-
-            <!-- Accept-chapter action: same handler as the workspace button,
-                 promoted here as the final step of the writing flow. -->
-            <div class="card-actions justify-end items-center gap-2 pt-2 border-t border-base-content/10">
-              {#if ch.status === 'accepted'}
-                <span class="badge badge-success gap-1.5 text-sm px-3 py-2 h-auto">✓ {$t('writing.tab.accepted')}</span>
-              {/if}
-              {#if ch.status === 'review' && isCurrent}
-                <button class="btn btn-success btn-sm" on:click={doConfirm} disabled={$taskRunning}>{$t('writing.btn.confirm')}</button>
-              {/if}
-            </div>
-          {:else}
-            <div class="text-center py-10 text-base-content/65 text-sm">{$t('writing.emptySelection')}</div>
+            {#if ch.status === 'accepted'}
+              <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">✓ {$t('writing.tab.accepted')}</span>
+            {:else if ch.status === 'review'}
+              <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-[11px] font-medium text-amber-700">• {$t('writing.tab.reviewBadge')}</span>
+            {:else}
+              <span class="inline-flex items-center rounded-full bg-neutral-100 border border-neutral-200 px-2.5 py-0.5 text-[11px] font-medium text-neutral-600">{statusMeta[ch.status]?.label || ch.status}</span>
+            {/if}
           {/if}
         </div>
+
+        {#if ch}
+          <!-- CHAPTER SUMMARY: its own Notion-style section with a muted
+               uppercase label, like every other block of the inline cards. -->
+          {#if ch.summary}
+            <div class="px-0 pt-5">
+              <div class="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 mb-1.5">{$t('writing.chapter.summary')}</div>
+              <p class="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap bg-neutral-50 border border-neutral-100 rounded-lg px-3.5 py-3">{ch.summary}</p>
+            </div>
+          {/if}
+
+          <!-- CONSISTENCY FACTS section -->
+          <div class="px-0 pt-5">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{$t('writing.tab.factsTitle')}</span>
+              <span class="rounded-full bg-neutral-100 border border-neutral-200 px-2 py-0.5 text-[10px] font-medium text-neutral-600">{$t('facts.count', { count: reviewFacts.length })}</span>
+            </div>
+            <KnowledgePanel chapterNum={ch.num} bind:facts={reviewFacts} bind:activeFact bind:expanded={knowledgeExpanded} on:jump={e => jumpToFact(e.detail)} />
+            {#if returnRef}<button class="btn btn-ghost btn-xs self-start text-neutral-500" on:click={() => jumpToFact(returnRef, true)}>{$t('facts.return')}</button>{/if}
+          </div>
+
+          <!-- FOOTER: accept action, hairline-separated like the scene-plan
+               editor footer. -->
+          <div class="flex justify-end items-center gap-2 px-0 pt-5 mt-5 border-t border-neutral-100">
+            {#if ch.status === 'review' && isCurrent}
+              <button class="btn btn-success btn-sm rounded-lg" on:click={doConfirm} disabled={$taskRunning}>{$t('writing.btn.confirm')}</button>
+            {/if}
+          </div>
+        {:else}
+          <div class="px-0 py-10 text-center text-sm text-neutral-400">{$t('writing.emptySelection')}</div>
+        {/if}
       </div>
     {/if}
   </div><!-- /WritingPageContainer -->
-
-  <ScenePlanEditor bind:open={showScenePlan} chapterNum={scenePlanChapter ?? ch?.num ?? scenePlanPendingNum} />
 {/if}
 
 <style>
@@ -2337,6 +2478,69 @@
     -webkit-user-select: none;
   }
   .chip-scene-or-trope:hover { opacity: 1; }
+  /* The hover-revealed "＋ add subscene" action lives OUTSIDE the chip (as a
+     sibling pill in the chip row); it appears when hovering anywhere on the
+     row, and must stay fully opaque even while the chip sits at its dim idle
+     opacity. Scoped via :global because group/chiprow is a Tailwind class. */
+  .chip-add-before {
+    user-select: none;
+    -webkit-user-select: none;
+    /* Zero footprint: out of flow + invisible to hit-testing while idle, so it
+       never overlaps the centered chip nor shifts the row layout. */
+    position: absolute;
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    z-index: 40;
+  }
+  /* Ghost variant: taken OUT of the flex flow. The pill is pinned to the
+     RIGHT EDGE of the row (never over the centered chip) and lives absolutely
+     positioned at right:8px — so it occupies ZERO space in the layout until
+     hovered and can never push the centered chip sideways or overlap it.
+     visibility:hidden (not just opacity:0) also removes it from hit-testing;
+     pointer-events re-activate on row hover. */
+  .chip-add-before--ghost {
+    left: auto;
+    /* Pinned to the far-right EDGE of the row (well clear of the centered
+       chip, even when the chip is wide) and vertically centered. */
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  :global(.group\/chiprow:hover) .chip-add-before,
+  .chip-add-before:focus-visible { opacity: 1; }
+  :global(.group\/chiprow:hover) .chip-add-before--ghost { pointer-events: auto; visibility: visible; }
+  /* SCENE chips are real structural markers — unlike the subtle subscene
+     chips they must ALWAYS be fully visible (never dimmed at idle). */
+  .chip-always-on { opacity: 1 !important; }
+  /* Small "i" trigger that lives OUTSIDE a scene chip and opens the black
+     SmartSelect-style popover with the scene title + description. Only scene
+     chips get one; subscene chips have no tooltip of any kind. */
+  .scene-desc-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklab, currentColor 30%, transparent);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--fallback-bc, oklch(var(--bc)));
+    opacity: 0.55;
+    cursor: help;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: opacity 0.12s ease, border-color 0.12s ease;
+  }
+  .scene-desc-icon:hover { opacity: 1; border-color: color-mix(in oklab, currentColor 60%, transparent); }
+  /* Chapter-head row (title + status badge) inside the reader card: roomy
+     Notion-like margins so the header breathes. */
+  .chapter-head-row { margin: 1.5rem; }
+  /* Collapsible outline/<details> in the chapter-writing area: same breathing
+     margin as the head row + soft rounded corners. */
+  .chapter-outline-fold { margin: 1.5rem; border-radius: 0.5rem; }
   .sheet-chip-text {
     user-select: none;
     -webkit-user-select: none;

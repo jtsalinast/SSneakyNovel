@@ -39,6 +39,12 @@ type Scene struct {
 	Description string `json:"description"`
 	PoV         string `json:"pov,omitempty"`
 	WordsBudget int    `json:"words_budget"`
+	// Variation states what concretely CHANGES because of this scene: an
+	// emotional shift, a plot advance, or a tactical-situation change written
+	// as a short delta ("Carisma +2", "Tiempo límite -3hrs", "prueba superada
+	// +1", "encuentra nuevo objetivo"…). Derived by the planner LLM; editable
+	// by the author alongside title/description/pov/budget.
+	Variation string `json:"variation,omitempty"`
 	// TropeRanges locates this scene's trope units inside the written scene
 	// prose as paragraph indexes [start,end) (see splitTropes). Derived after
 	// generation; nil until the scene has been written and segmented.
@@ -98,12 +104,13 @@ func scenePlanPrompt(ch ChapterState, outlineConstraints, targetBlock, lang stri
 Rules:
 - Cover the outline COMPLETELY: every beat must land in exactly one scene; invent no events outside the outline and do not advance later chapters' events.
 - Output %s
-- Each scene: title (short), description (2-4 sentences: what happens, who is present, where, the emotional turn), pov (the viewpoint character of that scene), words_budget (approximate words).
+- Each scene: title (short), description (2-4 sentences: what happens, who is present, where, the emotional turn), pov (the viewpoint character of that scene), words_budget (approximate words), variation (what concretely CHANGES because of this scene: an emotional shift, a plot advance, or a tactical-situation change — as a short delta such as "Charisma +2", "Deadline -3hrs", "trial passed +1", "finds a new objective", "trust with ally -1"). Every scene MUST carry a non-empty variation.
+- The FIRST scene must open the chapter with a HOOK: its description must state the specific opening hook (an unanswered question, an in-medias-res tension, a striking image or threat) that grabs the reader from the first line, and its variation must reflect what that hook sets in motion.
+- The LAST scene must end the chapter on a CLIFFHANGER: its description must state the specific cliffhanger (unresolved danger, revelation, reversal or burning question left hanging) implied by the outline, and its variation must be that unresolved stake.
 - The sum of all words_budget MUST equal the chapter target. Prefer 4–7 scenes; never fewer than %d nor more than %d.
-- The LAST scene must end the chapter on the hook/cliffhanger implied by the outline.
 
 Return ONLY a JSON array, no prose, no markdown fences:
-[{"title":"...","description":"...","pov":"...","words_budget":900}, ...]`, ch.Num, ch.Title, ch.Outline, outlineConstraints, targetBlock, scenePlanMinScenes, scenePlanMaxScenes))
+[{"title":"...","description":"...","pov":"...","words_budget":900,"variation":"..."}, ...]`, ch.Num, ch.Title, ch.Outline, outlineConstraints, targetBlock, scenePlanMinScenes, scenePlanMaxScenes))
 	} else {
 		sb.WriteString(fmt.Sprintf(`Eres un planificador de novelas. Divide el capítulo %d "%s" en un plan de escenas ordenado (beat sheet) que el escritor seguirá escena por escena.
 
@@ -113,12 +120,13 @@ Return ONLY a JSON array, no prose, no markdown fences:
 Reglas:
 - Cubre el outline COMPLETAMENTE: cada beat debe caer en exactamente una escena; no inventes eventos fuera del outline ni avances eventos de capítulos posteriores.
 - Salida: %s
-- Cada escena: título (corto), descripción (2-4 frases: qué ocurre, quién participa, dónde, el giro emocional), pov (personaje punto de vista de esa escena), words_budget (palabras aproximadas).
+- Cada escena: título (corto), descripción (2-4 frases: qué ocurre, quién participa, dónde, el giro emocional), pov (personaje punto de vista de esa escena), words_budget (palabras aproximadas), variation (qué CAMBIA concretamente por culpa de esta escena: un giro emocional, un avance de trama o un cambio de situación táctica — como un delta corto tipo "Carisma +2", "Tiempo límite -3hrs", "prueba superada +1", "encuentra nuevo objetivo", "confianza aliado -1"). Toda escena DEBE llevar una variation no vacía.
+- La PRIMERA escena debe abrir el capítulo con un HOOK: su descripción debe indicar el gancho de apertura específico (una pregunta sin respuesta, tensión in medias res, una imagen o amenaza impactante) que atrape al lector desde la primera línea, y su variation debe reflejar lo que ese hook pone en marcha.
+- La ÚLTIMA escena debe cerrar el capítulo con un CLIFFHANGER: su descripción debe indicar el cliffhanger específico (peligro sin resolver, revelación, giro o pregunta ardente que queda en el aire) implícito en el outline, y su variation debe ser esa apuesta sin resolver.
 - La suma de todos los words_budget DEBE ser igual al objetivo del capítulo. Prefiere 4–7 escenas; nunca menos de %d ni más de %d.
-- La ÚLTIMA escena debe cerrar el capítulo con el gancho implícito en el outline.
 
 Devuelve SOLO un arreglo JSON, sin prosa ni cercas markdown:
-[{"title":"...","description":"...","pov":"...","words_budget":900}, ...]`, ch.Num, ch.Title, ch.Outline, outlineConstraints, targetBlock, scenePlanMinScenes, scenePlanMaxScenes))
+[{"title":"...","description":"...","pov":"...","words_budget":900,"variation":"..."}, ...]`, ch.Num, ch.Title, ch.Outline, outlineConstraints, targetBlock, scenePlanMinScenes, scenePlanMaxScenes))
 	}
 	return sb.String()
 }
@@ -156,6 +164,7 @@ func normalizeScenePlan(scenes []Scene, targetWords int) []Scene {
 		s.Title = strings.TrimSpace(s.Title)
 		s.Description = strings.TrimSpace(s.Description)
 		s.PoV = strings.TrimSpace(s.PoV)
+		s.Variation = strings.TrimSpace(s.Variation)
 		if s.Title == "" && s.Description == "" {
 			continue
 		}
@@ -220,7 +229,29 @@ func normalizeScenePlan(scenes []Scene, targetWords int) []Scene {
 	for i := range out {
 		out[i].ID = i + 1
 	}
+	// Safety net for the hook/cliffhanger rules: if the model forgot to label
+	// the opening hook / closing cliffhanger in the first/last scene
+	// descriptions, prepend the tag so downstream prompts and the UI still
+	// carry the requirement.
+	if len(out) > 0 {
+		if !hasHookTag(out[0].Description) {
+			out[0].Description = strings.TrimSpace("HOOK — " + out[0].Description)
+		}
+		last := len(out) - 1
+		if last != 0 && !hasCliffhangerTag(out[last].Description) {
+			out[last].Description = strings.TrimSpace(out[last].Description + " — CLIFFHANGER")
+		}
+	}
 	return out
+}
+
+func hasHookTag(desc string) bool {
+	d := strings.ToUpper(desc)
+	return strings.Contains(d, "HOOK") || strings.Contains(d, "GANCHO")
+}
+
+func hasCliffhangerTag(desc string) bool {
+	return strings.Contains(strings.ToUpper(desc), "CLIFFHANGER")
 }
 
 // PlanChapterScenes generates (or regenerates) the scene plan for the current
@@ -306,6 +337,13 @@ func renderScenePlanBlock(plan *ScenePlan, lang string) string {
 				meta = fmt.Sprintf("%s — PoV: %s", meta, s.PoV)
 			} else {
 				meta = fmt.Sprintf("%s — PdV: %s", meta, s.PoV)
+			}
+		}
+		if v := strings.TrimSpace(s.Variation); v != "" {
+			if en {
+				meta = fmt.Sprintf("%s · changes: %s", meta, v)
+			} else {
+				meta = fmt.Sprintf("%s · cambia: %s", meta, v)
 			}
 		}
 		if en {
@@ -416,6 +454,7 @@ func SetScenePlanScenes(state *Progress, cfg *config.Config, chapterNum int, sce
 			normalized[i].Title = strings.TrimSpace(normalized[i].Title)
 			normalized[i].Description = strings.TrimSpace(normalized[i].Description)
 			normalized[i].PoV = strings.TrimSpace(normalized[i].PoV)
+			normalized[i].Variation = strings.TrimSpace(normalized[i].Variation)
 			if normalized[i].WordsBudget < scenePlanMinSceneWords {
 				normalized[i].WordsBudget = scenePlanMinSceneWords
 			}

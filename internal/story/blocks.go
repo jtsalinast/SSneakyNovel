@@ -14,6 +14,7 @@ import (
 	"showmethestory/internal/llm"
 	"showmethestory/internal/prose"
 	"showmethestory/internal/sse"
+	"sort"
 	"strings"
 )
 
@@ -444,6 +445,17 @@ func syncSceneBlocks(ch *ChapterState) bool {
 	}
 	spans := sceneParaSpans(ch, paras)
 	if spans == nil {
+		// Stale recorded spans (e.g. a sheet save added/removed paragraphs after
+		// the plan was written) make the exact tiling unusable. Before giving up
+		// on scene-aware blocks entirely, repair ParaStart/ParaEnd from the
+		// CURRENT prose (break markers first, budget walk as fallback) and retry.
+		// Without this, chapters edited outside the sequential writer collapse to
+		// the paragraph path where fbSceneStart counts only HARD BREAKS — the UI
+		// then shows a single "Scene 1" chip and hides every other scene chip.
+		repairSceneSpans(ch)
+		spans = sceneParaSpans(ch, paras)
+	}
+	if spans == nil {
 		return false
 	}
 	used := make([]bool, len(ch.Blocks))
@@ -677,10 +689,21 @@ func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 	totalBudget := 0
 	for _, sc := range plan.Scenes {
 		if sc.WordsBudget < 1 {
-			return nil // degenerate budget → can't map reliably
+			continue // degenerate budget → ignored; budgetWalkSceneSpans re-checks
 		}
 		totalBudget += sc.WordsBudget
 	}
+	if spans := budgetWalkSceneSpans(plan, paras, totalBudget); spans != nil {
+		return spans
+	}
+	return structuralSceneSpans(ch, plan, paras)
+}
+
+// budgetWalkSceneSpans distributes paragraphs proportionally to word budgets:
+// each boundary snaps to the paragraph whose cumulative words pass the
+// cumulative budget share. Returns nil when the mapping is unreliable
+// (degenerate budgets, more scenes than paragraphs, empty prose).
+func budgetWalkSceneSpans(plan *ScenePlan, paras []string, totalBudget int) [][2]int {
 	if totalBudget <= 0 || len(plan.Scenes) > len(paras) {
 		return nil
 	}
@@ -693,12 +716,13 @@ func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 	if totalWords == 0 {
 		return nil
 	}
-	// Distribute paragraphs proportionally to budgets; each boundary snaps to
-	// the paragraph whose cumulative words pass the cumulative budget share.
 	spans := make([][2]int, 0, len(plan.Scenes))
 	cumBudget := 0
 	start := 0
 	for pos, sc := range plan.Scenes {
+		if sc.WordsBudget < 1 {
+			return nil // degenerate budget → can't map reliably
+		}
 		cumBudget += sc.WordsBudget
 		end := len(paras)
 		if pos != len(plan.Scenes)-1 {
@@ -726,6 +750,172 @@ func sceneParaSpans(ch *ChapterState, paras []string) [][2]int {
 		spans[len(spans)-1][1] = len(paras)
 	}
 	return spans
+}
+
+// structuralSceneSpans is the last-resort scene mapper used when neither the
+// recorded spans nor the budget walk can be trusted — typically chapters whose
+// plan has no usable word budgets AND whose prose was edited outside the
+// sequential writer (stale ParaStart/ParaEnd). Without it such chapters fall
+// back to the paragraph path where pseudo-scenes come ONLY from hard-break
+// markers, which is exactly why the UI showed a single "Scene 1" chip and hid
+// every other scene chip whenever the prose separated scenes with blank lines
+// instead of "---". Strategy: honour the break-marker tiling when its group
+// count matches the plan's scene count exactly; otherwise cut the prose at the
+// most STRUCTURALLY salient boundaries — paragraphs that flip dialogue↔prose
+// mode or open with a narrative-turn pivot cue ("pero", "suddenly", …), the
+// same cues splitTropesFromParas uses for beats — picking the N-1 strongest
+// cuts spread across the chapter so every scene gets at least one paragraph.
+// The derived spans are written back onto the plan (with fresh trope-unit
+// tilings) so recordedSceneParaSpans accepts them on every later sync and the
+// chips stay stable until the prose changes again.
+func structuralSceneSpans(ch *ChapterState, plan *ScenePlan, paras []string) [][2]int {
+	n := len(plan.Scenes)
+	if n < 2 || len(paras) < n {
+		return nil
+	}
+	// Preferred: hard-break groups matching the plan's scene count exactly.
+	if bs := breakSceneSpansNoMarker(paras); len(bs) == n {
+		applyDerivedSceneSpans(ch, bs)
+		return bs
+	}
+	// Score every interior paragraph as a candidate scene cut.
+	type cand struct {
+		idx   int
+		score int
+	}
+	var cands []cand
+	prevMode := paraIsDialogue(paras[0])
+	for i := 1; i < len(paras); i++ {
+		if paraIsBreak(paras[i]) {
+			continue
+		}
+		m := paraIsDialogue(paras[i])
+		score := 0
+		if m != prevMode {
+			score += 3 // dialogue↔prose flip: strong structural seam
+		}
+		if paraHasPivot(paras[i]) {
+			score += 2 // explicit narrative-turn cue
+		}
+		if score > 0 {
+			cands = append(cands, cand{i, score})
+		}
+		prevMode = m
+	}
+	// If structural evidence is thin we still proceed: the greedy pass below
+	// may place fewer cuts and the even-tiling fallback guarantees every planned
+	// scene gets a chip instead of collapsing to a single "Scene 1".
+	// Greedy best-score selection with spacing guarantees: every chosen cut
+	// must leave ≥1 paragraph for each still-unplaced scene boundary ahead and
+	// behind it, so no scene ends up empty.
+	chosen := make([]int, 0, n-1)
+	used := make(map[int]bool)
+	for len(chosen) < n-1 {
+		best, bestScore := -1, 0
+		for _, c := range cands {
+			if used[c.idx] {
+				continue
+			}
+			okPos := true
+			for _, x := range chosen {
+				if absInt(x-c.idx) < 1 {
+					okPos = false
+					break
+				}
+			}
+			if !okPos {
+				continue
+			}
+			sorted := append([]int{}, chosen...)
+			sort.Ints(sorted)
+			sorted = append(sorted, c.idx)
+			sort.Ints(sorted)
+			// feasibility: gaps between consecutive cuts (and the edges) must
+			// fit one paragraph per scene they delimit.
+			prev := 0
+			for _, x := range sorted {
+				if x-prev < 1 {
+					okPos = false
+					break
+				}
+				prev = x
+			}
+			if okPos && len(paras)-prev < 1 {
+				okPos = false
+			}
+			if !okPos {
+				continue
+			}
+			if c.score > bestScore {
+				best, bestScore = c.idx, c.score
+			}
+		}
+		if best < 0 {
+			break // cannot place all cuts without emptying a scene
+		}
+		used[best] = true
+		chosen = append(chosen, best)
+	}
+	if len(chosen) != n-1 {
+		// Not enough structural evidence for every cut: fall back to an even
+		// tiling (≥1 paragraph per scene). Without this the chapter dropped to
+		// the paragraph path where pseudo-scenes come ONLY from hard-break
+		// markers — exactly why the UI showed a single "Scene 1" chip and hid
+		// every other scene chip. An approximate map is far better than none:
+		// all planned scenes get real chips with their titles/descriptions.
+		even := make([][2]int, 0, n)
+		start := 0
+		for pos := 0; pos < n-1; pos++ {
+			end := start + 1 + (len(paras)-pos-1)/(n-pos-1)
+			if end > len(paras)-(n-1-pos) {
+				end = len(paras) - (n - 1 - pos)
+			}
+			if end <= start {
+				end = start + 1
+			}
+			even = append(even, [2]int{start, end})
+			start = end
+		}
+		even = append(even, [2]int{start, len(paras)})
+		applyDerivedSceneSpans(ch, even)
+		return even
+	}
+	sort.Ints(chosen)
+	spans := make([][2]int, 0, n)
+	start := 0
+	for _, c := range chosen {
+		spans = append(spans, [2]int{start, c})
+		start = c
+	}
+	spans = append(spans, [2]int{start, len(paras)})
+	applyDerivedSceneSpans(ch, spans)
+	return spans
+}
+
+// applyDerivedSceneSpans writes freshly derived paragraph spans onto the
+// chapter's scene plan and re-tiles each scene's trope units over them, so the
+// next recordedSceneParaSpans call trusts the exact tiling and the reader
+// renders real scene/subscene chips instead of collapsing to pseudo-scenes.
+func applyDerivedSceneSpans(ch *ChapterState, spans [][2]int) {
+	if ch.ScenePlan == nil {
+		return
+	}
+	paras, sep := splitBlockParagraphs(ch.Content)
+	for pos := range ch.ScenePlan.Scenes {
+		if pos >= len(spans) {
+			break
+		}
+		sc := &ch.ScenePlan.Scenes[pos]
+		sc.ParaStart, sc.ParaEnd = spans[pos][0], spans[pos][1]
+		retileSceneTropeUnits(sc, paras, sep)
+	}
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // recordedSceneParaSpans rebuilds the exact scene spans the sequential writer

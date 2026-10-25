@@ -104,11 +104,19 @@ func scenePlanChecklistBlock(plan *ScenePlan, lang string, chapterTargetTotal in
 		if denominator > 0 {
 			pct = cum * 100 / denominator
 		}
+		var meta string
 		if en {
-			fmt.Fprintf(&sb, "%d. [%d words · ends ≈%d%%] %s: %s\n", s.ID, s.WordsBudget, pct, s.Title, s.Description)
+			meta = fmt.Sprintf("%d. [%d words · ends ≈%d%%] %s: %s", s.ID, s.WordsBudget, pct, s.Title, s.Description)
+			if v := strings.TrimSpace(s.Variation); v != "" {
+				meta += fmt.Sprintf(" [what changes: %s]", v)
+			}
 		} else {
-			fmt.Fprintf(&sb, "%d. [%d palabras · termina ≈%d%%] %s: %s\n", s.ID, s.WordsBudget, pct, s.Title, s.Description)
+			meta = fmt.Sprintf("%d. [%d palabras · termina ≈%d%%] %s: %s", s.ID, s.WordsBudget, pct, s.Title, s.Description)
+			if v := strings.TrimSpace(s.Variation); v != "" {
+				meta += fmt.Sprintf(" [qué cambia: %s]", v)
+			}
 		}
+		sb.WriteString(meta + "\n")
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
@@ -155,14 +163,20 @@ func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, setti
 		}
 		sb.WriteString(", in prose.\n\n")
 		fmt.Fprintf(&sb, "Outline for this scene — %s:\n%s\n\n", title, strings.TrimSpace(sc.Description))
+		if v := strings.TrimSpace(sc.Variation); v != "" {
+			fmt.Fprintf(&sb, "What must change because of this scene (make it land on the page — an emotional shift, a plot advance or a tactical-situation delta): %s\n\n", v)
+		}
 		if sc.PoV != "" {
 			fmt.Fprintf(&sb, "Point of view: %s\n\n", sc.PoV)
 		}
 		if firstScene && strings.TrimSpace(buildPreviousChapterTailForLang(state, idx, lang)) != "" {
 			sb.WriteString("Open the chapter flowing naturally from the end of the previous chapter shown above.\n\n")
 		}
+		if pos == 0 {
+			sb.WriteString("This is the FIRST scene of the chapter: it must carry a strong opening hook — grab the reader from the very first line with an unanswered question, in-medias-res tension or a striking image/threat, as stated in its outline.\n\n")
+		}
 		if lastScene {
-			sb.WriteString("This is the last scene: close the chapter on the hook the outline implies.\n\n")
+			sb.WriteString("This is the last scene: close the chapter on the cliffhanger the plan states (unresolved danger, revelation, reversal or burning question left hanging).\n\n")
 		}
 		if writtenWords > 0 {
 			sb.WriteString("Here are the scenes already written in this chapter. Continue seamlessly from the very end of this text — match its voice and tense, and never repeat or rewrite it:\n\n")
@@ -185,14 +199,20 @@ func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, setti
 		}
 		sb.WriteString(", en prosa.\n\n")
 		fmt.Fprintf(&sb, "Argumento de esta escena — %s:\n%s\n\n", title, strings.TrimSpace(sc.Description))
+		if v := strings.TrimSpace(sc.Variation); v != "" {
+			fmt.Fprintf(&sb, "Lo que DEBE cambiar por culpa de esta escena (que se note en la página: un giro emocional, un avance de trama o un delta de situación táctica): %s\n\n", v)
+		}
 		if sc.PoV != "" {
 			fmt.Fprintf(&sb, "Punto de vista: %s\n\n", sc.PoV)
 		}
 		if firstScene && strings.TrimSpace(buildPreviousChapterTailForLang(state, idx, lang)) != "" {
 			sb.WriteString("Abre el capítulo fluyendo con naturalidad desde el final del capítulo anterior mostrado arriba.\n\n")
 		}
+		if pos == 0 {
+			sb.WriteString("Esta es la PRIMERA escena del capítulo: debe traer un gancho de apertura fuerte — atrapa al lector desde la primera línea con una pregunta sin respuesta, tensión in medias res o una imagen/amenaza impactante, tal como indica su argumento.\n\n")
+		}
 		if lastScene {
-			sb.WriteString("Esta es la última escena: cierra el capítulo con el gancho que sugiere el argumento.\n\n")
+			sb.WriteString("Esta es la última escena: cierra el capítulo con el cliffhanger que indica el plan (peligro sin resolver, revelación, giro o pregunta ardente que queda en el aire).\n\n")
 		}
 		if writtenWords > 0 {
 			sb.WriteString("Estas son las escenas ya escritas de este capítulo. Continúa sin costuras justo desde el final de este texto — iguala su voz y su tiempo verbal, y nunca lo repitas ni lo reescribas:\n\n")

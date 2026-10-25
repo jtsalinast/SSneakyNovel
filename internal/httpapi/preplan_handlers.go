@@ -56,12 +56,61 @@ func (h *Handlers) PostPrePlanGenerate(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// GetPrePlan returns the stored pre-planning (null when never generated).
+// GetPrePlan returns the stored pre-planning (null when never generated),
+// enriched with `act_analyses` so consumers (e.g. the Writing tab's act-critic
+// steps inside ChapterSidebarList) can render per-act critique state directly
+// from this endpoint — previously that state only lived in /api/progress and
+// was lost on a plain page refresh if the progress snapshot lagged behind.
 func (h *Handlers) GetPrePlan(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
 	}
-	h.writeJSON(w, http.StatusOK, h.state.PrePlanning)
+	pp := h.state.PrePlanning
+	if pp == nil {
+		h.writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	// Fill start_ch/end_ch on the served acts from their persisted
+	// suggested_chapters (cumulative walk over the chapter list). Older saves
+	// predate these fields and left them empty, which silently hid the
+	// act-critique steps inside ChapterSidebarList after a plain F5 — the
+	// buttons only appeared once "Refresh UI" re-saved the pre-plan with the
+	// ranges computed. Computing here makes GET idempotent-safe: values that
+	// are already set are preserved untouched.
+	acts := make([]story.PrePlanningAct, len(pp.Acts))
+	copy(acts, pp.Acts)
+	{
+		cursor := 1
+		for i := range acts {
+			if acts[i].StartCh <= 0 {
+				acts[i].StartCh = cursor
+			} else {
+				cursor = acts[i].StartCh
+			}
+			n := acts[i].SuggestedChapters
+			if n <= 0 {
+				n = 1
+			}
+			end := cursor + n - 1
+			if acts[i].EndCh <= 0 || acts[i].EndCh < acts[i].StartCh {
+				acts[i].EndCh = end
+			}
+			cursor = acts[i].EndCh + 1
+		}
+	}
+	resp := map[string]any{
+		"generated_at":               pp.GeneratedAt,
+		"based_on_structure":         pp.BasedOnStructure,
+		"total_chapters":             pp.TotalChapters,
+		"recommended_total_chapters": pp.TotalChapters, // legacy alias
+		"long_term_direction":        pp.LongTermDirection,
+		"acts":                       acts,
+		// Act-critique state (keyed by 1-based act number). The Writing tab reads
+		// this so the per-act steps in ChapterSidebarList survive a plain F5 even
+		// when the progress snapshot has not been re-pulled yet.
+		"act_analyses": h.state.ActAnalyses,
+	}
+	h.writeJSON(w, http.StatusOK, resp)
 }
 
 // DeletePrePlan clears the stored pre-planning card.

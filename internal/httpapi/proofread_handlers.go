@@ -276,14 +276,29 @@ func (h *Handlers) DeleteProofreadBlock(w http.ResponseWriter, r *http.Request) 
 }
 func (h *Handlers) PostProofreadBlock(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AfterID int    `json:"after_id"`
-		Text    string `json:"text"`
+		AfterID  int    `json:"after_id"`
+		BeforeID int    `json:"before_id"`
+		Text     string `json:"text"`
 	}
 	if json.NewDecoder(r.Body).Decode(&body) != nil || strings.TrimSpace(body.Text) == "" {
 		h.writeErrorReq(w, r, 400, "block_text_required")
 		return
 	}
 	h.proofreadBlockEdit(w, r, func(ch *story.ChapterState) error {
+		// before_id anchors the new block right BEFORE that block (mirrors
+		// PostChapterBlockInsert / the "Add subscene before" chip action).
+		if body.BeforeID != 0 {
+			i := story.FindBlockIdx(ch, body.BeforeID)
+			if i < 0 {
+				return story.ErrBlockNotFound
+			}
+			anchor := 0 // i==0 -> insert at the very beginning
+			if i > 0 {
+				anchor = ch.Blocks[i-1].ID
+			}
+			_, err := story.InsertBlockAfter(ch, anchor, body.Text)
+			return err
+		}
 		_, err := story.InsertBlockAfter(ch, body.AfterID, body.Text)
 		return err
 	})
