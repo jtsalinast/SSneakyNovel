@@ -102,14 +102,18 @@
       const sk = await api('GET', '/api/skills');
       hasPolishSkills = (sk || []).some(s => s.enabled && s.skill?.category === 'polish');
     } catch (e) {}
-    try {
-      // Pre-planning act cards live in their own endpoint; the act-critic row
-      // needs them to offer per-act manual analysis.
-      const pp = await api('GET', '/api/outline/preplan');
-      preplanActs = (pp?.acts || []).map((a, i) => ({
-        no: i + 1, name: a.name || '', start_ch: a.start_ch || 0, end_ch: a.end_ch || 0,
-      }));
-    } catch (e) {}
+    // Pre-planning acts are derived reactively from $progress (see below);
+    // this fetch only backfills them when progress.json predates the current
+    // pre-plan serialization (older projects), so an F5 reload can never lose
+    // the act-critique "steps" due to a race with this request.
+    if (!($progress?.pre_planning?.acts || []).length) {
+      try {
+        const pp = await api('GET', '/api/outline/preplan');
+        preplanActsFallback = (pp?.acts || []).map((a, i) => ({
+          no: i + 1, name: a.name || '', start_ch: a.start_ch || 0, end_ch: a.end_ch || 0,
+        }));
+      } catch (e) {}
+    }
   });
 
   async function toggleAutoConfirm(e) {
@@ -133,9 +137,12 @@
   $: pct = total > 0 ? Math.round(accepted / total * 100) : 0;
   $: currentIdx = p?.current_chapter_index ?? 0;
 
-  // Select current chapter by default
-  $: if (inWriting && ($selectedChapter < 0 || $selectedChapter >= chapters.length)) {
-    selectedChapter.set(Math.min(currentIdx, chapters.length - 1));
+  // Select current chapter by default — ONLY while a generation is actually
+  // running (so the user follows the streamed chapter). When entering the tab
+  // with nothing selected we keep $selectedChapter = -1: the page then shows
+  // just "Pick a chapter to view" with no stepper and no panes below.
+  $: if (inWriting && $streamingChapterIdx >= 0 && ($selectedChapter < 0 || $selectedChapter >= chapters.length)) {
+    selectedChapter.set(Math.min($streamingChapterIdx, chapters.length - 1));
   }
 
   // In auto-confirm mode, follow the chapter being generated
@@ -1210,8 +1217,26 @@
   $: orphanWriting = !!(ch && isCurrent && ch.status === 'writing' && !writingConflict && !$taskRunning);
 
   // --- Bestseller-editor critique passes (siblings of the outline one) ---
-  // Scene-plan pass: one report over all PENDING beat sheets.
+  // Scene-plan pass: ONE report over all PENDING beat sheets, but each
+  // chapter only shows the suggestions that apply to it (AppliesToChapters /
+  // per-scene recommendations carry the chapter number), so switching from
+  // chapter 6 back to 5 never leaves the other chapter's card behind.
   $: scenePlanAnalysis = p?.scene_plan_analysis || null;
+  $: scenePlanForChapter = (() => {
+    const rep = scenePlanAnalysis;
+    if (!rep || !ch) return null;
+    const num = ch.num;
+    const all = rep.suggestions || [];
+    const own = all.filter(s => (s.applies_to_chapters || []).includes(num)
+      || (s.recommendations || []).some(r => r.chapter_num === num));
+    // If this chapter has explicitly-attributed points, show ONLY those.
+    // Unattributed advice is inherited solely when the chapter has none of
+    // its own — otherwise every chapter would display the same generic card
+    // and switching 6→5 would look like "chapter 6's report".
+    if (own.length > 0) return { ...rep, suggestions: own };
+    const generic = all.filter(s => !(s.applies_to_chapters || []).length && !(s.recommendations || []).length);
+    return { ...rep, suggestions: generic };
+  })();
   $: scenePlanPendingCount = chapters.filter(c => c.status !== 'accepted' && c.scene_plan?.scenes?.length).length;
   // Act pass: reports keyed by pre-planning act number, rendered newest first.
   $: actAnalyses = Object.entries(p?.act_analyses || {})
@@ -1220,15 +1245,56 @@
     .sort((a, b) => b.no - a.no);
   // Chapter pass: report lives on the selected chapter itself.
   $: chapterAnalysis = ch?.analysis || null;
-  // Pre-planning acts (loaded once in onMount) drive the manual act-critic
-  // buttons; only acts whose last chapter is already accepted can be judged,
-  // since the critic reviews drafted prose.
-  let preplanActs = [];
+  // Pre-planning acts drive the act-critique "steps" in the chapter index.
+  // Derived reactively from $progress (persisted in progress.json) so an F5
+  // reload always restores them; the onMount fetch is only a fallback for
+  // older projects whose progress payload lacks pre_planning.
+  let preplanActsFallback = [];
+  $: preplanActs = (p?.pre_planning?.acts || preplanActsFallback || []).map((a, i) => ({
+    no: i + 1, name: a.name || '', start_ch: a.start_ch || 0, end_ch: a.end_ch || 0,
+    suggested_chapters: a.suggested_chapters || 0,
+  }));
+  // —— Act-critic REVIEW section ————————————————————————————————
+  // The act critique is a full section, not a plain button: selecting one of
+  // the act steps clears everything below WritingMetaRow (chapter selection
+  // included) and shows that act's dedicated report + reconfirm actions.
+  let actReviewNo = null;
+  function openActReview(no) {
+    actReviewNo = no;
+    selectedChapter.set(-1);
+    actReconfirming = false;
+  }
+  function closeActReview() {
+    actReviewNo = null;
+  }
   function critiqueAct(no) {
     api('POST', '/api/acts/analyze', { act_no: no })
       .then(() => addToast($t('act.analysis.toasts.started'), 'info'))
       .catch((e) => addToast(e.message, 'error'));
   }
+  // Re-run the quality pipeline over this act's chapters after applying the
+  // critic's surgical interventions: fact-check + per-chapter bestseller pass
+  // on every touched drafted chapter (outline_only=true instead invalidates
+  // the upcoming chapters' beat sheets so their outlines get regenerated).
+  let actReconfirming = false;
+  function reconfirmAct(actNo, outlineOnly) {
+    actReconfirming = true;
+    api('POST', '/api/acts/reconfirm', { act_no: actNo, outline_only: !!outlineOnly })
+      .then(() => addToast(outlineOnly ? $t('act.analysis.toasts.reconfirmOutline') : $t('act.analysis.toasts.reconfirmStarted'), 'info'))
+      .catch((e) => addToast(e.message, 'error'))
+      .finally(() => { actReconfirming = false; });
+  }
+  // Chapters of the reviewed act that exist in the project (for per-chapter
+  // reconfirm chips in the header strip).
+  $: actReviewChapters = (() => {
+    if (actReviewNo == null) return [];
+    const act = preplanActs.find(a => a.no === actReviewNo);
+    if (!act) return [];
+    const start = act.start_ch || 1;
+    const end = act.end_ch || Math.max(start, start + (act.suggested_chapters || 1) - 1);
+    return chapters.filter(c => c.num >= start && c.num <= end);
+  })();
+  $: actReviewRep = actReviewNo != null ? (p?.act_analyses?.[actReviewNo] || null) : null;
   // Pre-plan acts that END right after chapter `num` — used to interleave the
   // manual act-critique "steps" inside ChapterSidebarList at every point where
   // one act hands over to the next (and after the last chapter for the final
@@ -1237,6 +1303,15 @@
     if (!num) return [];
     return preplanActs.filter(a => a.end_ch === num || (a.no === preplanActs.length && num >= a.end_ch && a.end_ch > 0));
   }
+  // Flat sidebar rows: chapters interleaved with the act-critique steps that
+  // end after each one. Computed as ONE flat keyed list so that when
+  // preplanActs resolves (late onMount / restored progress after F5) the step
+  // rows appear immediately — nested keyed each-blocks used to miss that
+  // update, which is why the act steps only showed up after "Refresh UI".
+  $: sidebarRows = chapters.flatMap((c, i) => [
+    { key: 'c:' + c.num, type: 'chapter', i, c },
+    ...actsEndingAfter(c.num).map(a => ({ key: 'a:' + a.no, type: 'act', act: a })),
+  ]);
 
   async function resolveWritingConflict(action) {
     if ($taskRunning) return;
@@ -1373,6 +1448,7 @@
 
   function selectChapter(i) {
     if (savingKnowledge) return;
+    actReviewNo = null; // leaving the act-critic section when a chapter is picked
     selectedSettings = [];
     showKnowledge = false;
     selectedChapter.set(i);
@@ -1718,30 +1794,33 @@
     <div id="WritingMetaRow" class="grid grid-cols-[minmax(0,1fr)_345px] gap-3 items-start">
       <div id="ChapterSidebarList" class="card bg-base-200 overflow-y-auto max-h-[calc(100vh-280px)] min-w-0">
         <ul class="menu menu-sm p-0 w-full">
-          {#each chapters as c, i}
-            <li>
-              <button class="flex gap-2 items-center {$selectedChapter === i ? 'active' : ''}" on:click={() => selectChapter(i)}>
-                <span class="w-2 h-2 rounded-full shrink-0 {statusMeta[c.status]?.dot || ''}"></span>
-                <span class="text-base-content/65 w-6 shrink-0 text-right">{c.num}</span>
-                <span class="flex-1 text-left truncate text-sm">{c.title}</span>
-                {#if c.draft_saved_at && c.status !== 'accepted'}
-                  <span class="badge badge-warning badge-outline badge-xs shrink-0" title={$t('writing.chapter.draftBadgeTip')}>{$t('writing.chapter.draftBadge')}</span>
-                {/if}
-                {#if i === currentIdx && c.status !== 'accepted'}
-                  <span class="badge badge-primary badge-xs shrink-0">{$t('writing.tag.current')}</span>
-                {/if}
-              </button>
-            </li>
-            <!-- Act-critique "steps": when the pre-plan switches from one act
-                 to the next right after this chapter (or, for the last act,
-                 after the final chapter), offer its manual critique inline —
-                 these used to be an isolated button row below the tabs. -->
-            {#each actsEndingAfter(c.num) as act (act.no)}
+          {#each sidebarRows as row (row.key)}
+            {#if row.type === 'chapter'}
+              {@const c = row.c}
+              {@const i = row.i}
               <li>
-                <button class="flex gap-2 items-center border-t border-base-content/10"
-                        disabled={$taskRunning || !!p?.act_analyses?.[act.no]}
+                <button class="flex gap-2 items-center {$selectedChapter === i && actReviewNo == null ? 'active' : ''}" on:click={() => selectChapter(i)}>
+                  <span class="w-2 h-2 rounded-full shrink-0 {statusMeta[c.status]?.dot || ''}"></span>
+                  <span class="text-base-content/65 w-6 shrink-0 text-right">{c.num}</span>
+                  <span class="flex-1 text-left truncate text-sm">{c.title}</span>
+                  {#if c.draft_saved_at && c.status !== 'accepted'}
+                    <span class="badge badge-warning badge-outline badge-xs shrink-0" title={$t('writing.chapter.draftBadgeTip')}>{$t('writing.chapter.draftBadge')}</span>
+                  {/if}
+                  {#if i === currentIdx && c.status !== 'accepted'}
+                    <span class="badge badge-primary badge-xs shrink-0">{$t('writing.tag.current')}</span>
+                  {/if}
+                </button>
+              </li>
+            {:else}
+              {@const act = row.act}
+              <!-- Act-critique "step": opens the dedicated act-review SECTION
+                   below WritingMetaRow (surgical beat changes on previous
+                   chapters + outline changes for upcoming ones). Rows come
+                   from the flat `sidebarRows` list so they survive an F5. -->
+              <li>
+                <button class="flex gap-2 items-center border-t border-base-content/10 {actReviewNo === act.no ? 'active' : ''}"
                         title={$t('act.analysis.manualBtnTip', { start: act.start_ch, end: act.end_ch })}
-                        on:click={() => critiqueAct(act.no)}>
+                        on:click={() => openActReview(act.no)}>
                   <span class="shrink-0 text-warning text-xs">✦</span>
                   <span class="flex-1 text-left text-xs opacity-80">{$t('act.analysis.manualBtn', { no: act.no, name: act.name || '' })}</span>
                   {#if p?.act_analyses?.[act.no]}
@@ -1749,7 +1828,7 @@
                   {/if}
                 </button>
               </li>
-            {/each}
+            {/if}
           {/each}
         </ul>
       </div>
@@ -1787,23 +1866,87 @@
     </div><!-- /WritingMetaRow -->
 
     <!-- CHAPTER TITLE: big heading above the stepper tabs so the user always
-         knows which chapter the three steps refer to. -->
+         knows which chapter (or act review) the section below refers to. -->
     <div id="ChapterTitleHeader" class="pt-12 pb-3 flex items-center gap-3 flex-wrap">
-      <h1 class="text-3xl font-bold leading-tight truncate max-w-full">
-        {#if ch}{ch.title}{:else}{$t('writing.emptySelection')}{/if}
-      </h1>
-      {#if ch}
-        <span class="badge badge-sm shrink-0 {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
+      {#if actReviewNo != null}
+        {@const act = preplanActs.find(a => a.no === actReviewNo)}
+        {@const actSuffix = act?.name ? ' · ' + act.name : ''}
+        <h1 class="text-3xl font-bold leading-tight truncate max-w-full">
+          {$t('act.analysis.sectionTitle', { no: actReviewNo, suffix: actSuffix })}
+        </h1>
+        <span class="badge badge-warning badge-outline badge-sm shrink-0">{$t('act.analysis.sectionBadge')}</span>
+        <button class="btn btn-ghost btn-sm shrink-0" on:click={closeActReview}>✕ {$t('act.analysis.close')}</button>
+      {:else}
+        <h1 class="text-3xl font-bold leading-tight truncate max-w-full">
+          {#if ch}{ch.title}{:else}{$t('writing.emptySelection')}{/if}
+        </h1>
+        {#if ch}
+          <span class="badge badge-sm shrink-0 {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
+        {/if}
       {/if}
     </div>
 
+    {#if actReviewNo != null}
+      <!-- ═════════ ACT-CRITIC REVIEW SECTION ═════════
+           Full section (not a plain button): everything chapter-related below
+           WritingMetaRow is cleared while it is open. Shows THIS act's report —
+           surgical beat changes over its already-drafted chapters plus outline
+           changes for the upcoming ones — and the reconfirm actions that re-run
+           the quality pipeline after those interventions are applied. -->
+      <div id="ActReviewSection_{actReviewNo}" class="space-y-3 min-w-0">
+        {#key actReviewNo}
+          <BestsellerCritiqueCard
+            kind="act"
+            report={actReviewRep}
+            actNo={actReviewNo}
+            disabled={$taskRunning}
+            hasTargets={true}
+            scrollId="ActReviewSection_" + actReviewNo />
+        {/key}
+
+        <!-- Reconfirm: after applying the critic's surgical interventions the
+             touched chapters must pass fact-check + bestseller critique again
+             before their successors keep building on them; outline_only
+             invalidates the upcoming chapters' beat sheets so their outlines
+             are regenerated from the corrected act context. -->
+        <div id="ActReviewReconfirm_{actReviewNo}" class="card bg-base-200">
+          <div class="card-body p-4 gap-3">
+            <h3 class="font-medium text-sm">{$t('act.analysis.reconfirm.title')}</h3>
+            <p class="text-xs text-base-content/65">{$t('act.analysis.reconfirm.hint')}</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <button class="btn btn-primary btn-sm" disabled={$taskRunning || actReconfirming}
+                      on:click={() => reconfirmAct(actReviewNo, false)}>
+                {#if $taskRunning}<span class="loading loading-spinner loading-xs"></span>{/if}
+                {$t('act.analysis.reconfirm.chapters')}
+              </button>
+              <button class="btn btn-outline btn-sm" disabled={$taskRunning || actReconfirming}
+                      title={$t('act.analysis.reconfirm.outlineTip')}
+                      on:click={() => reconfirmAct(actReviewNo, true)}>
+                {$t('act.analysis.reconfirm.outline')}
+              </button>
+              {#if actReviewChapters.length > 0}
+                <span class="divider divider-horizontal mx-1"></span>
+                {#each actReviewChapters as c (c.num)}
+                  <button class="btn btn-outline btn-xs" disabled={$taskRunning || actReconfirming}
+                          title={$t('act.analysis.reconfirm.chapterTip', { num: c.num })}
+                          on:click={() => api('POST', `/api/chapters/${c.num}/analyze`, {}).then(() => addToast($t('chapter.analysis.toasts.started'), 'info')).catch(e => addToast(e.message, 'error'))}>
+                    {$t('act.analysis.reconfirm.chapterBtn', { num: c.num })}
+                  </button>
+                {/each}
+              {/if}
+            </div>
+          </div>
+        </div>
+      </div>
+    {:else if ch}
     <!-- STEP TABS: three horizontal step tabs below WritingMetaRow. The
          active one gets a white card + dark numbered badge; earlier steps
          show a check and fade slightly; future steps are dimmed until
          hover. A progress bar attached at the bottom reflects the current
          step (1/3 → 3/3). Panes: 1 = Scene plan (+ scene-plan critic),
          2 = WritingWorkspace (+ chapter critic), 3 = consistency facts +
-         accept-chapter button. -->
+         accept-chapter button. Only rendered when a chapter is selected:
+         with nothing picked the page shows just "Pick a chapter to view". -->
     <div id="WritingStepTabs" class="pt-1">
       <div class="grid grid-cols-3 gap-2 py-1">
         {#each writingTabDefs as def (def.num)}
@@ -1857,40 +2000,21 @@
       <!-- Bestseller critic over the PENDING scene plans (beat sheets): same
            card as the outline analysis, but the editor knows it is reviewing
            scene plans, not prose. Scene-level replacements are proposed per
-           chapter and applied back to each plan (re-opening its review gate). -->
-      <div id="CardSection_ScenePlanAnalysis" class="mt-3 space-y-1">
-        <BestsellerCritiqueCard
-          kind="sceneplan"
-          report={scenePlanAnalysis}
-          disabled={$taskRunning}
-          hasTargets={scenePlanPendingCount > 0}
-          scrollId="CardSection_ScenePlanAnalysis" />
-      </div>
-    {/if}
-
-    <!-- ═════════ SHARED BELOW-TABS AREA (tabs 2 & 3) ═════════
-         Act critic reports stay visible on both the writing and the review
-         tabs. The manual act-critique buttons now live INSIDE the chapter
-         index (ChapterSidebarList) as extra "steps" placed where each act
-         ends; the foreshadow tracker card moved next to the chapter index. -->
-    {#if writingTab === 2 || writingTab === 3}
-    <!-- Bestseller critic over FINISHED ACTS of the pre-planning: one report
-         per act, generated automatically right after the pipeline confirms
-         the act's last chapter (and manually from the chapter-index rows).
-         Suggestions carry small trope-unit interventions that
-         rewriteSceneTrope repairs surgically. -->
-    {#each actAnalyses as a (a.no)}
-      <div id="CardSection_ActAnalysis_{a.no}" class="mt-3 space-y-1">
-        <BestsellerCritiqueCard
-          kind="act"
-          report={a.rep}
-          actNo={a.no}
-          disabled={$taskRunning}
-          hasTargets={true}
-          scrollId="CardSection_ActAnalysis_" + a.no />
-      </div>
-    {/each}
-
+           chapter and applied back to each plan (re-opening its review gate).
+           The card is keyed by chapter: every chapter gets ITS OWN scene-plan
+           critic view — going back from chapter 6 to 5 remounts a clean card
+           with only chapter 5's report. -->
+      {#key ch?.num}
+        <div id="CardSection_ScenePlanAnalysis_{ch?.num}" class="mt-3 space-y-1">
+          <BestsellerCritiqueCard
+            kind="sceneplan"
+            report={scenePlanForChapter}
+            chapterNum={ch?.num || 0}
+            disabled={$taskRunning}
+            hasTargets={scenePlanPendingCount > 0}
+            scrollId="CardSection_ScenePlanAnalysis_" + ch?.num />
+        </div>
+      {/key}
     {/if}
 
     <!-- ═════════ TAB 2 · CHAPTER WRITING ═════════
@@ -2294,15 +2418,21 @@
                    outline analysis, but the editor knows it is reviewing one
                    chapter and its suggestions carry trope-unit interventions. -->
               {#if hasContent && ch.status !== 'writing'}
-                <div id="CardSection_ChapterAnalysis_{ch.num}" class="pt-1">
-                  <BestsellerCritiqueCard
-                    kind="chapter"
-                    report={chapterAnalysis}
-                    chapterNum={ch.num}
-                    disabled={$taskRunning}
-                    hasTargets={true}
-                    scrollId="CardSection_ChapterAnalysis_" + ch.num />
-                </div>
+                <!-- Keyed by chapter number: switching 6→5 remounts a clean
+                     card (internal accordion/proposal state is discarded) so
+                     you always see THIS chapter's report, never the previous
+                     chapter's. -->
+                {#key ch.num}
+                  <div id="CardSection_ChapterAnalysis_{ch.num}" class="pt-1">
+                    <BestsellerCritiqueCard
+                      kind="chapter"
+                      report={chapterAnalysis}
+                      chapterNum={ch.num}
+                      disabled={$taskRunning}
+                      hasTargets={true}
+                      scrollId={"CardSection_ChapterAnalysis_" + ch.num} />
+                  </div>
+                {/key}
               {/if}
 
               {#if showRevise}
@@ -2433,6 +2563,8 @@
         {/if}
       </div>
     {/if}
+    {/if}<!-- /{:else if ch}: stepper + tabs only when a chapter is selected -->
+
   </div><!-- /WritingPageContainer -->
 {/if}
 

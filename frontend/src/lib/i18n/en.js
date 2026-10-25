@@ -960,6 +960,19 @@ export default {
   'act.analysis.toasts.proposed': 'The editor drafted surgical subscene interventions — review and apply them.',
   'act.analysis.toasts.applied': '{n} subscene intervention(s) applied.',
   'act.analysis.toasts.cleared': 'Act analysis cleared.',
+  // Act-critic full review section (Writing tab) + reconfirm actions
+  'act.analysis.sectionTitle': 'Act {no} — bestseller act critique{suffix}',
+  'act.analysis.sectionBadge': 'Act review',
+  'act.analysis.close': 'Close',
+  'act.analysis.reconfirm.title': 'Reconfirm chapters after applying interventions',
+  'act.analysis.reconfirm.hint': 'Once the surgical changes are applied, re-run fact-check and the bestseller chapter critic over the affected chapters so the upcoming ones build on validated prose.',
+  'act.analysis.reconfirm.chapters': 'Reconfirm act chapters',
+  'act.analysis.reconfirm.outline': 'Reconfirm upcoming outlines',
+  'act.analysis.reconfirm.outlineTip': 'Invalidate the beat sheets/outlines of the chapters AFTER this act so they are regenerated from the corrected act context.',
+  'act.analysis.reconfirm.chapterBtn': 'Ch. {num}',
+  'act.analysis.reconfirm.chapterTip': 'Re-run the bestseller critic over chapter {num}.',
+  'act.analysis.reconfirm.started': 'Reconfirmation started for act {no} — watch the progress log.',
+  'act.analysis.reconfirm.done': 'Act {no} chapters reconfirmed.',
 
   // --- Bestseller critic: CHAPTER pass (one drafted chapter) ---
   'chapter.analysis.title': 'Bestseller editor: chapter critique',

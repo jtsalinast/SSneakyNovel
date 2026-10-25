@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -54,6 +55,12 @@ type TropeIntervention struct {
 	ScenePos   int    `json:"scene_pos"`   // index into ScenePlan.Scenes
 	TropeIndex int    `json:"trope_index"` // index into Scene.TropeUnits
 	TropeLabel string `json:"trope_label,omitempty"`
+	// TargetKind distinguishes prose repairs on drafted chapters ("", the
+	// default) from surgical OUTLINE edits demanded by an act critic for the
+	// VENUE (not-yet-drafted) chapters: target_kind="outline" interventions
+	// rewrite chapter N's outline text instead of trope prose. They are only
+	// ever produced by act reports and applied through ApplyActOutlineEdits.
+	TargetKind string `json:"target_kind,omitempty"`
 	Feedback   string `json:"feedback"`
 	Status     string `json:"status"` // pending | applied | failed
 	// CurrentText is the exact prose of the targeted trope unit AT PROPOSAL
@@ -2032,6 +2039,25 @@ func CompletedActForChapter(state *Progress, num int) (int, bool) {
 	return actNo, true
 }
 
+// ActChapterRange returns the inclusive [start,end] chapter span of the
+// 1-based pre-planning act number, applying the same defaults the analysis
+// pipeline uses (missing StartCh → 1; missing EndCh → StartCh + max(1,
+// SuggestedChapters) - 1). ok=false when the act does not exist.
+func ActChapterRange(state *Progress, actNo int) (start, end int, ok bool) {
+	if state == nil || state.PrePlanning == nil || actNo < 1 || actNo > len(state.PrePlanning.Acts) {
+		return 0, 0, false
+	}
+	act := state.PrePlanning.Acts[actNo-1]
+	start, end = act.StartCh, act.EndCh
+	if start == 0 {
+		start = 1
+	}
+	if end == 0 {
+		end = start + max(1, act.SuggestedChapters) - 1
+	}
+	return start, end, true
+}
+
 func actDraftedFingerprint(state *Progress, start, end int) string {
 	var b strings.Builder
 	for _, ch := range state.Chapters {
@@ -2751,6 +2777,139 @@ func DismissChapterIntervention(state *Progress, chapterNum int, suggestionID st
 
 // ApplyActInterventions runs every pending intervention of one act suggestion
 // through the surgical trope-rewrite channel. Returns how many were applied.
+//
+// ReconfirmActChapters re-runs the full quality pipeline over the chapters of
+// one pre-planning act AFTER its bestseller critique applied surgical trope
+// interventions: fact-check + critic repair on every touched drafted chapter
+// (accepted ones are reopened to "review" so the author re-confirms them),
+// then a fresh act report. Returns the chapter numbers processed.
+//
+// When onlyOutline is true the scope widens to the VENUE chapters after the
+// act: their scene plans and outlines get marked stale (ScenePlan=nil +
+// review gate) so the next writing steps regenerate them from the corrected
+// act context — no prose is rewritten there.
+func ReconfirmActChapters(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, skills []Skill, actNo int, onlyOutline bool, progressPath string, logger *sse.LogBroadcaster) ([]int, error) {
+	if state.PrePlanning == nil || actNo < 1 || actNo > len(state.PrePlanning.Acts) {
+		return nil, fmt.Errorf("act_not_found")
+	}
+	start, end, ok := ActChapterRange(state, actNo)
+	if !ok {
+		return nil, fmt.Errorf("act_not_found")
+	}
+	loadDraftedChapterFilesInto(progressPath, state)
+
+	// Chapters to re-verify: every drafted chapter inside the act range that
+	// carries at least one APPLIED trope intervention coming from this act's
+	// report (surgical repairs changed its prose). When no intervention was
+	// applied, fall back to every non-accepted drafted chapter of the act so a
+	// bare "reconfirm" still closes open quality loops. With onlyOutline we
+	// skip the prose pass entirely.
+	targets := []int{}
+	if !onlyOutline {
+		appliedCh := map[int]bool{}
+		if rep := state.ActAnalyses[actNo]; rep != nil {
+			for _, s := range rep.Suggestions {
+				for _, iv := range s.Interventions {
+					if iv.Status == "applied" {
+						appliedCh[iv.ChapterNum] = true
+					}
+				}
+			}
+		}
+		for i := range state.Chapters {
+			ch := &state.Chapters[i]
+			if ch.Num < start || ch.Num > end {
+				continue
+			}
+			if len(appliedCh) > 0 {
+				if !appliedCh[ch.Num] {
+					continue
+				}
+			} else if ch.Status == StatusAccepted {
+				continue
+			}
+			if strings.TrimSpace(ch.Content) == "" && ch.WordCount == 0 {
+				continue
+			}
+			targets = append(targets, ch.Num)
+		}
+	}
+
+	for _, num := range targets {
+		if ctx.Err() != nil {
+			SaveProgress(progressPath, state)
+			return targets, ctx.Err()
+		}
+		idx := -1
+		for i := range state.Chapters {
+			if state.Chapters[i].Num == num {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			continue
+		}
+		// An accepted chapter whose prose was surgically repaired must be
+		// re-approved by the author: reopen it before the verification pass
+		// (FactCheckChapterAction refuses accepted chapters).
+		if state.Chapters[idx].Status == StatusAccepted {
+			state.Chapters[idx].Status = StatusReview
+		}
+		err := FactCheckChapterAction(ctx, apiCfg, cfg, state, progressPath, settings, skills, num, logger)
+		var wcErr *WritingConflictError
+		if err != nil && !errors.As(err, &wcErr) {
+			logger.WarnKey("log.act_reconfirm_chapter_failed", num, err)
+			continue
+		}
+		// Refresh the per-chapter bestseller report against the new prose.
+		if aerr := AnalyzeChapterPlan(ctx, apiCfg, cfg, state, settings, num, progressPath, logger); aerr != nil {
+			logger.WarnKey("log.chapter_analyze_failed", aerr)
+		}
+		if serr := SaveProgress(progressPath, state); serr != nil {
+			return targets, serr
+		}
+	}
+
+	if onlyOutline {
+		// Surgical outline changes for the VENUE chapters: invalidate their
+		// beat sheets so the scene-plan gate forces a regeneration aligned
+		// with the corrections the act critic demanded.
+		widened := []int{}
+		for i := range state.Chapters {
+			ch := &state.Chapters[i]
+			if ch.Num <= end || ch.Status == StatusAccepted {
+				continue
+			}
+			if ch.ScenePlan != nil {
+				ch.ScenePlan = nil
+			}
+			widened = append(widened, ch.Num)
+		}
+		if len(widened) > 0 {
+			targets = widened
+			clearScenePlanCacheOnEdit(state)
+			if state.ScenePlanAnalysis != nil {
+				state.ScenePlanAnalysis = nil
+			}
+			if serr := SaveProgress(progressPath, state); serr != nil {
+				return targets, serr
+			}
+		}
+		return targets, nil
+	}
+
+	// Re-sign the act report over the repaired prose (fingerprint-aware:
+	// unchanged drafts reuse the cached report without an LLM call).
+	if err := AnalyzeFinishedAct(ctx, apiCfg, cfg, state, settings, actNo, progressPath, logger); err != nil {
+		logger.WarnKey("log.act_analyze_failed", err)
+	}
+	if serr := SaveProgress(progressPath, state); serr != nil {
+		return targets, serr
+	}
+	return targets, nil
+}
+
 func ApplyActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, actNo int, suggestionID string, progressPath string, logger *sse.LogBroadcaster) (int, error) {
 	if state.ActAnalyses == nil || state.ActAnalyses[actNo] == nil {
 		return 0, fmt.Errorf("no_act_analysis")

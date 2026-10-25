@@ -24,7 +24,9 @@
   // the route needs it); responses use {progress} like the outline ones.
   const ENDPOINTS = {
     sceneplan: {
-      analyze: () => ['POST', '/api/scene-plan/analyze', {}],
+      analyze: () => chapterNum
+        ? ['POST', `/api/chapters/${chapterNum}/scene-plan/analyze`, {}]
+        : ['POST', '/api/scene-plan/analyze', {}],
       propose: (id) => ['POST', '/api/scene-plan/analysis/propose', { id }],
       apply: (id) => ['POST', '/api/scene-plan/analysis/apply', { id }],
       edit: (id, payload) => ['POST', '/api/scene-plan/analysis/edit-recommendation', { id, ...payload }],

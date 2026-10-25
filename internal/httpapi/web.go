@@ -80,6 +80,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/acts/analyze", h.PostActAnalyze)
 	mux.HandleFunc("POST /api/acts/analysis/propose-interventions", h.PostActInterventionsPropose)
 	mux.HandleFunc("POST /api/acts/analysis/apply-interventions", h.PostActInterventionsApply)
+	mux.HandleFunc("POST /api/acts/reconfirm", h.PostActReconfirm)
 	mux.HandleFunc("DELETE /api/acts/analysis", h.DeleteActAnalysis)
 
 	// Bestseller critic: individual drafted chapters.
@@ -117,6 +118,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("GET /api/chapters/{num}/scene-plan", h.GetScenePlan)
 	mux.HandleFunc("PUT /api/chapters/{num}/scene-plan", h.PutScenePlan)
 	mux.HandleFunc("POST /api/chapters/{num}/scene-plan/approve", h.PostScenePlanApprove)
+	mux.HandleFunc("POST /api/chapters/{num}/scene-plan/analyze", h.PostChapterScenePlanAnalyze)
 	mux.HandleFunc("POST /api/chapters/{num}/scene-plan/regenerate", h.PostScenePlanRegenerate)
 	mux.HandleFunc("POST /api/chapters/{num}/register-unplanned-cast", h.PostUnplannedCastRegister)
 	mux.HandleFunc("PUT /api/scene-plan/auto", h.PutAutoScenePlan)

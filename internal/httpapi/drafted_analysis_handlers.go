@@ -64,6 +64,52 @@ func (h *Handlers) PostScenePlanAnalyze(w http.ResponseWriter, r *http.Request) 
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
+// PostChapterScenePlanAnalyze runs the bestseller-editor pass restricted to a
+// single chapter's beat sheet. The resulting suggestions are merged into
+// state.ScenePlanAnalysis replacing any previous ones attributed to that
+// chapter, so each chapter gets its own scene-plan critique card.
+func (h *Handlers) PostChapterScenePlanAnalyze(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	num, ok := h.resolveScenePlanChapter(w, r)
+	if !ok {
+		return
+	}
+	idx := story.FindChapterIdx(h.state, num)
+	ch := h.state.Chapters[idx]
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "scene_plan_empty_chapter", num)
+		return
+	}
+	if !h.tryStartTask() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	go func() {
+		defer h.endTask()
+		ctx := h.ensureTaskTokens(h.taskCtx)
+		h.logger.TaskStart("sceneplan_analyze_ch")
+		err := story.AnalyzeChapterScenePlan(ctx, h.apiCfg, h.cfg, h.state, h.settings, num, h.logger)
+		if err == nil {
+			err = story.SaveProgress(h.progressPath, h.state)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				h.logger.WarnKey("log.sceneplan_analyze_cancelled")
+			} else {
+				h.logger.ErrorKey("log.sceneplan_analyze_failed", err)
+			}
+			h.logger.TaskEnd("sceneplan_analyze_ch", false)
+			return
+		}
+		h.logger.SuccessKey("log.sceneplan_analyze_done", num)
+		h.logger.TaskEnd("sceneplan_analyze_ch", true)
+		h.broadcastProgress()
+	}()
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
 // PostScenePlanAnalysisPropose asks the editor to draft concrete per-scene
 // replacements for one advice-only point. Body: {"id":"spa_..."}.
 func (h *Handlers) PostScenePlanAnalysisPropose(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +439,57 @@ func (h *Handlers) PostActInterventionsApply(w http.ResponseWriter, r *http.Requ
 		"interventions": applied,
 		"progress":      story.ProgressView(h.state),
 	})
+}
+
+// PostActReconfirm re-runs the quality pipeline over one act's chapters after
+// its bestseller critique applied surgical interventions: fact-check + critic
+// repair on every touched drafted chapter, then a fresh act report. With
+// {"outline_only":true} it instead invalidates the beat sheets of the upcoming
+// chapters so their outlines get regenerated from the corrected act context.
+// Body: {"act_no":2,"outline_only":false}.
+func (h *Handlers) PostActReconfirm(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	var body struct {
+		ActNo       int  `json:"act_no"`
+		OutlineOnly bool `json:"outline_only"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_body", err)
+		return
+	}
+	actNo, ok := h.actAnalyzeTarget(w, r, body.ActNo)
+	if !ok {
+		return
+	}
+	if !h.tryStartTask() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	go func() {
+		defer h.endTask()
+		ctx := h.ensureTaskTokens(h.taskCtx)
+		h.logger.TaskStart("act_reconfirm")
+		targets, err := story.ReconfirmActChapters(ctx, h.apiCfg, h.cfg, h.state, h.settings, h.skills, actNo, body.OutlineOnly, h.progressPath, h.logger)
+		if err == nil {
+			err = story.SaveProgress(h.progressPath, h.state)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				h.logger.WarnKey("log.act_reconfirm_cancelled")
+			} else {
+				h.logger.ErrorKey("log.act_reconfirm_failed", err)
+			}
+			h.logger.TaskEnd("act_reconfirm", false)
+			h.broadcastProgress()
+			return
+		}
+		h.logger.SuccessKey("log.act_reconfirm_done", len(targets))
+		h.logger.TaskEnd("act_reconfirm", true)
+		h.broadcastProgress()
+	}()
+	h.writeJSON(w, http.StatusAccepted, map[string]any{"status": "started", "act_no": actNo})
 }
 
 // DeleteActAnalysis clears one stored act report (?act=N) or all of them.

@@ -106,10 +106,19 @@ type ScenePlanAnalysisReport struct {
 // plan: chapter number plus each scene's title/description/POV/budget.
 // Accepted chapters are excluded on purpose — they are locked and out of
 // scope, so drafting or accepting prose must not invalidate cached scores.
-func scenePlanFingerprint(state *Progress) string {
+func scenePlanFingerprint(state *Progress) string { return scenePlanFingerprintFor(state, 0) }
+
+// scenePlanFingerprintFor hashes the pending beat sheets; when onlyCh > 0 it
+// restricts the hash (and therefore the cache key) to that single chapter, so
+// a per-chapter re-analysis is only considered "unchanged" while THAT plan is
+// untouched — other chapters' edits must not invalidate its cached report.
+func scenePlanFingerprintFor(state *Progress, onlyCh int) string {
 	var b strings.Builder
 	for _, ch := range state.Chapters {
 		if ch.Status == StatusAccepted || ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+			continue
+		}
+		if onlyCh > 0 && ch.Num != onlyCh {
 			continue
 		}
 		fmt.Fprintf(&b, "%d\x01%d\x01", ch.Num, ch.ScenePlan.TargetWords)
@@ -129,6 +138,13 @@ func scenePlanFingerprint(state *Progress) string {
 // the artifact under review as a SCENE PLAN so the model never slips into
 // prose criticism.
 func buildScenePlanEditorPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string) string {
+	return buildScenePlanEditorPromptFor(cfg, state, settings, lang, 0)
+}
+
+// buildScenePlanEditorPromptFor restricts the plans under review to a single
+// chapter when onlyCh > 0 (per-chapter scene-plan critique).
+func buildScenePlanEditorPromptFor(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string, onlyCh int) string {
+	scopeNote := scenePlanScopeNote(onlyCh)
 	// prevChecklist embeds the previous pass's graded rubric (when any) so a
 	// re-analysis after corrections re-grades the SAME items and provably
 	// raises them — instead of drifting around randomized example anchors.
@@ -165,6 +181,9 @@ func buildScenePlanEditorPrompt(cfg *config.Config, state *Progress, settings *P
 	planned := 0
 	for _, ch := range state.Chapters {
 		if ch.Status == StatusAccepted || ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+			continue
+		}
+		if onlyCh > 0 && ch.Num != onlyCh {
 			continue
 		}
 		planned++
@@ -227,9 +246,20 @@ Rules:
 - applies_to_chapters may name the planned (non-accepted) chapters most affected by each point.
 - action must describe WHAT to change and HOW at the beat-sheet level (merge/split/reorder scenes, re-budget words, sharpen a beat, fix POV), framed as closing specific checklist items (e.g. "raise scene_economy by merging scenes 2–3 of chapter 5"), so the author sees exactly which area of which pillar moves toward 100%%.
 - Write summary, titles, details and actions in the SAME language as the plans above.
-- If the plans are genuinely strong, say so and return fewer, higher-value suggestions.`,
+- If the plans are genuinely strong, say so and return fewer, higher-value suggestions.%s`,
 		editorPersona(lang), meta.String(), structureName, planned, planBuf.String(), prevChecklist,
-		pillarContractPromptBlockEN(structureName), structureName, lang, lang)
+		pillarContractPromptBlockEN(structureName), structureName, lang, lang, scopeNote)
+}
+
+// scenePlanScopeNote is appended to the prompt rules when the pass is
+// restricted to a single chapter: it forbids naming other chapters and keeps
+// every point attributable to the one under review.
+func scenePlanScopeNote(onlyCh int) string {
+	if onlyCh <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(`
+SINGLE-CHAPTER PASS: you are reviewing ONLY the beat sheet of chapter %d shown above. Every suggestion must target that chapter's scenes; applies_to_chapters must be exactly [%d] (or omitted). Never mention or critique other chapters' plans — they are out of scope for this pass.`, onlyCh, onlyCh)
 }
 
 // AnalyzePendingScenePlans runs the bestseller-editor pass over all pending
@@ -237,7 +267,31 @@ Rules:
 // state. Callers persist progress. Scoring always recomputes against the
 // CURRENT plans: identical fingerprint → cached report, no LLM call.
 func AnalyzePendingScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, logger *sse.LogBroadcaster) error {
-	fingerprint := scenePlanFingerprint(state)
+	return analyzeScenePlans(ctx, apiCfg, cfg, state, settings, logger, 0)
+}
+
+// AnalyzeChapterScenePlan runs the same bestseller-editor pass restricted to a
+// SINGLE chapter's beat sheet: the prompt shows only that plan and every point
+// is force-attributed to it. The fresh suggestions replace (never merge) the
+// previously attributed ones for that chapter in the stored report, so each
+// chapter can carry its own scene-plan critique without re-grading the others.
+func AnalyzeChapterScenePlan(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, chapterNum int, logger *sse.LogBroadcaster) error {
+	if chapterNum <= 0 {
+		return fmt.Errorf("invalid chapter number")
+	}
+	for _, ch := range state.Chapters {
+		if ch.Num == chapterNum {
+			if ch.Status == StatusAccepted || ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+				return fmt.Errorf("no_scene_plans")
+			}
+			break
+		}
+	}
+	return analyzeScenePlans(ctx, apiCfg, cfg, state, settings, logger, chapterNum)
+}
+
+func analyzeScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, logger *sse.LogBroadcaster, onlyCh int) error {
+	fingerprint := scenePlanFingerprintFor(state, onlyCh)
 	if fingerprint == "" {
 		return fmt.Errorf("no_scene_plans")
 	}
@@ -252,7 +306,7 @@ func AnalyzePendingScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg
 			settingsForPrompt = selected
 		}
 	}
-	prompt := buildScenePlanEditorPrompt(cfg, state, settingsForPrompt, lang)
+	prompt := buildScenePlanEditorPromptFor(cfg, state, settingsForPrompt, lang, onlyCh)
 	system := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing SCENE PLANS (per-chapter beat sheets with word budgets), NOT drafted prose — never critique sentences, dialogue or writing style. Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.sceneplan_analyze_running")
@@ -307,6 +361,10 @@ func AnalyzePendingScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg
 				cleanApps = append(cleanApps, n)
 			}
 		}
+		if onlyCh > 0 {
+			// Single-chapter pass: every point belongs to that chapter.
+			cleanApps = []int{onlyCh}
+		}
 		sort.Ints(cleanApps)
 		s.AppliesToChapters = cleanApps
 		s.ID = fmt.Sprintf("spa_%d_%d", time.Now().Unix(), i)
@@ -335,6 +393,29 @@ func AnalyzePendingScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg
 	result.GeneratedAt = time.Now().Format(time.RFC3339)
 	result.BasedOnStructure = structureLabel(cfg.Story.Structure, lang)
 	result.ScenePlanFingerprint = fingerprint
+	if onlyCh > 0 {
+		// Per-chapter pass: replace ONLY this chapter's points inside the stored
+		// report (other chapters keep theirs untouched), then rebuild the global
+		// fingerprint so the merged view stays coherent.
+		merged := make([]SceneSuggestion, 0)
+		if prev := state.ScenePlanAnalysis; prev != nil {
+			for _, ps := range prev.Suggestions {
+				apps := ps.AppliesToChapters
+				touches := len(apps) == 0
+				for _, n := range apps {
+					if n == onlyCh {
+						touches = true
+					}
+				}
+				if !touches {
+					merged = append(merged, ps)
+				}
+			}
+		}
+		merged = append(merged, kept...)
+		result.Suggestions = merged
+		result.ScenePlanFingerprint = scenePlanFingerprint(state)
+	}
 	state.ScenePlanAnalysis = &result
 	return nil
 }
