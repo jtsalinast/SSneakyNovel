@@ -31,8 +31,29 @@
   }
   let facts = [];
   let activeFact = null;
-  let knowledgeExpanded = false;
+  let reviewFacts = []; // facts copy shown in the Review & accept tab
+  let knowledgeExpanded = true;
   let returnRef = null;
+
+  // —— Writing section tabs (below WritingMetaRow) ——————————————————
+  // Three-step horizontal tab bar: Scene matrix / Chapter writing /
+  // Review & accept. Each step owns one pane of the chapter workflow.
+  let writingTab = 1;
+  const writingTabDefs = [
+    { num: 1, titleKey: 'writing.tab.sceneMatrix' },
+    { num: 2, titleKey: 'writing.tab.chapterWriting' },
+    { num: 3, titleKey: 'writing.tab.reviewAccept' },
+  ];
+  function setWritingTab(n) {
+    if (n < 1 || n > 3) return;
+    writingTab = n;
+    // Entering Review & accept: keep the facts copy in sync with the panel
+    // the user may have just interacted with, and refresh it from the API.
+    if (n === 3) {
+      reviewFacts = facts;
+      if (ch?.num) loadReviewFacts(ch.num);
+    }
+  }
   let highlightedBlock = null;
   let selectedBlockId = null;
   $: factsByBlock = new Map(chapterBlocks.map(b => [b.id, facts.filter(f => (f.references || []).some(r => r.chapter === ch?.num && r.block_id === b.id))]));
@@ -137,6 +158,17 @@
     chapterContent = full.content || '';
     chapterBlocks = full.blocks || [];
     loadedRev = full.content_rev || '';
+  }
+  // The Review & accept tab renders KnowledgePanel with its OWN facts
+  // binding (so the prose chips in tab 2 never see it); refresh that copy
+  // whenever the selection changes or the chapter content settles.
+  $: reviewFactsKey = (ch?.num ?? 0) + ':' + (ch?.content_rev || '');
+  $: if (ch) loadReviewFacts(ch.num);
+  async function loadReviewFacts(num) {
+    try {
+      const data = await api('GET', '/api/knowledge?chapter=' + num);
+      if (ch?.num === num) reviewFacts = data.facts || [];
+    } catch (e) {}
   }
   // Force a reload of the selected chapter's payload (blocks, scene/trope
   // meta, content_rev) even when the prose hash is unchanged — used by the
@@ -1121,6 +1153,9 @@
     scenePlanChapter = ch?.num ?? chapters[currentIdx]?.num ?? null;
     showScenePlan = true;
   }
+  // When the auto-opened scene-plan review gate fires, follow the editor to
+  // the Scene-matrix tab so the user lands on the right pane.
+  $: if (showScenePlan) writingTab = 1;
   $: orphanWriting = !!(ch && isCurrent && ch.status === 'writing' && !writingConflict && !$taskRunning);
 
   // --- Bestseller-editor critique passes (siblings of the outline one) ---
@@ -1650,19 +1685,81 @@
       </div>
     </div><!-- /WritingMetaRow -->
 
-    <!-- Bestseller critic over the PENDING scene plans (beat sheets): same
-         card as the outline analysis, but the editor knows it is reviewing
-         scene plans, not prose. Scene-level replacements are proposed per
-         chapter and applied back to each plan (re-opening its review gate). -->
-    <div id="CardSection_ScenePlanAnalysis" class="mt-3 space-y-1">
-      <BestsellerCritiqueCard
-        kind="sceneplan"
-        report={scenePlanAnalysis}
-        disabled={$taskRunning}
-        hasTargets={scenePlanPendingCount > 0}
-        scrollId="CardSection_ScenePlanAnalysis" />
-    </div>
+    <!-- STEP TABS: three horizontal step tabs below WritingMetaRow. The
+         active one gets a white card + dark numbered badge; earlier steps
+         show a check and fade slightly; future steps are dimmed until
+         hover. A progress bar attached at the bottom reflects the current
+         step (1/3 → 3/3). Panes: 1 = Scene plan (+ scene-plan critic),
+         2 = WritingWorkspace (+ chapter critic), 3 = consistency facts +
+         accept-chapter button. -->
+    <div id="WritingStepTabs" class="pt-1">
+      <div class="grid grid-cols-3 gap-2 py-1">
+        {#each writingTabDefs as def (def.num)}
+          {@const isCurrent = writingTab === def.num}
+          {@const isPast = writingTab > def.num}
+          {@const stepDoneIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'}
+          <button
+            type="button"
+            id={'step-tab-' + def.num}
+            on:click={() => setWritingTab(def.num)}
+            class="flex flex-col p-2.5 rounded-lg text-left group focus:outline-none step-transition relative z-10
+              {isCurrent ? 'bg-white border border-neutral-200 shadow-subtle' : isPast ? 'bg-white/40 border border-transparent opacity-70 hover:opacity-100' : 'bg-transparent border border-transparent opacity-40 hover:opacity-100'}"
+          >
+            <div class="flex items-center justify-between mb-1.5">
+              <span
+                id={'step-icon-' + def.num}
+                class="w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold step-transition
+                  {isCurrent || isPast ? 'bg-neutral-900 text-white' : 'bg-neutral-200 text-neutral-500'}"
+              >{#if isPast}{@html stepDoneIcon}{:else}{def.num}{/if}</span>
+              <span id={'step-sub-' + def.num} class="text-[9px] font-mono text-neutral-400">0{def.num}</span>
+            </div>
+            <span
+              id={'step-title-' + def.num}
+              class="text-xs truncate {isCurrent ? 'font-semibold text-neutral-900' : isPast ? 'font-medium text-neutral-600' : 'font-medium text-neutral-500'}"
+            >{$t(def.titleKey)}</span>
+          </button>
+        {/each}
+      </div>
+      <!-- PROGRESS BAR ATTACHED AT THE BOTTOM -->
+      <div class="relative w-full h-1 bg-neutral-100 rounded-full overflow-hidden mt-1">
+        <div
+          id="writing-step-progress-bar"
+          class="absolute top-0 left-0 h-full bg-neutral-900 step-transition"
+          style="width: {writingTab * 33.33}%;"
+        ></div>
+      </div>
+    </div><!-- /WritingStepTabs -->
 
+    <!-- ═════════ TAB 1 · SCENE MATRIX ═════════
+         Scene-plan access card + the bestseller critic over the PENDING
+         scene plans (beat sheets). -->
+    {#if writingTab === 1}
+      <div id="CardSection_ScenePlanAccess" class="card bg-base-200 mt-3 min-w-0">
+        <div class="card-body p-4 gap-2">
+          <h3 class="font-medium text-sm">{$t('writing.scenePlan.accessTitle')}</h3>
+          <p class="text-xs text-base-content/65">{$t('writing.scenePlan.accessHint', { num: ch?.num ?? '-' })}</p>
+          <button class="btn btn-outline btn-xs self-start" on:click={openScenePlanEditor} disabled={$taskRunning || !ch} title={$t('writing.scenePlan.btnTip')}>{$t('writing.scenePlan.btn')}</button>
+        </div>
+      </div>
+
+      <!-- Bestseller critic over the PENDING scene plans (beat sheets): same
+           card as the outline analysis, but the editor knows it is reviewing
+           scene plans, not prose. Scene-level replacements are proposed per
+           chapter and applied back to each plan (re-opening its review gate). -->
+      <div id="CardSection_ScenePlanAnalysis" class="mt-3 space-y-1">
+        <BestsellerCritiqueCard
+          kind="sceneplan"
+          report={scenePlanAnalysis}
+          disabled={$taskRunning}
+          hasTargets={scenePlanPendingCount > 0}
+          scrollId="CardSection_ScenePlanAnalysis" />
+      </div>
+    {/if}
+
+    <!-- ═════════ SHARED BELOW-TABS AREA (tabs 2 & 3) ═════════
+         Act critic + foreshadow tracker stay visible on both the writing
+         and the review tabs. -->
+    {#if writingTab === 2 || writingTab === 3}
     <!-- Bestseller critic over FINISHED ACTS of the pre-planning: one report
          per act, generated automatically right after the pipeline confirms
          the act's last chapter (and manually here). Suggestions carry small
@@ -1724,6 +1821,13 @@
       </div>
     {/if}
 
+    {/if}
+
+    <!-- ═════════ TAB 2 · CHAPTER WRITING ═════════
+         The whole WritingWorkspace (reader card + sticky save bar) lives in
+         this pane; the bestseller critic over the drafted chapter sits at
+         the bottom of it. -->
+    {#if writingTab === 2}
     <!-- Chapter area -->
     <div id="WritingWorkspace" style="min-height:400px">
       <!-- Content area -->
@@ -1740,9 +1844,6 @@
                   <span class="text-xs text-base-content/65">{$t('writing.chapter.words', { n: chapterWordCount.toLocaleString() })}</span>
                 {/if}
               </div>
-
-              <KnowledgePanel chapterNum={ch.num} bind:facts bind:activeFact bind:expanded={knowledgeExpanded} on:jump={e => jumpToFact(e.detail)} />
-              {#if returnRef}<button class="btn btn-outline btn-xs self-start" on:click={() => jumpToFact(returnRef, true)}>{$t('facts.return')}</button>{/if}
 
               {#if ch.outline}
                 <details class="bg-base-100 rounded">
@@ -2148,8 +2249,48 @@
           <div class="text-center py-16 text-base-content/65 text-base">{$t('writing.emptySelection')}</div>
         {/if}
       </div>
-    </div>
-  </div>
+    </div><!-- /WritingWorkspace (Tab 2) -->
+    {/if}
+
+    <!-- ═════════ TAB 3 · REVIEW & ACCEPT ═════════
+         All consistency-facts information (KnowledgePanel with its own
+         facts binding — reviewFacts — so the prose chips of tab 2 never
+         see it) plus the button that accepts the chapter. -->
+    {#if writingTab === 3}
+      <div id="CardSection_ReviewAccept" class="card bg-base-200 mt-3 min-w-0">
+        <div class="card-body p-4 gap-3">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch?.num ?? '-', title: ch?.title ?? '' })}</h2>
+            {#if ch}
+              <span class="badge badge-sm {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
+            {/if}
+          </div>
+
+          {#if ch}
+            <h3 class="font-medium text-sm flex items-center gap-2">
+              {$t('writing.tab.factsTitle')}
+              <span class="badge badge-ghost badge-sm">{$t('facts.count', { count: reviewFacts.length })}</span>
+            </h3>
+            <KnowledgePanel chapterNum={ch.num} bind:facts={reviewFacts} bind:activeFact bind:expanded={knowledgeExpanded} on:jump={e => jumpToFact(e.detail)} />
+            {#if returnRef}<button class="btn btn-outline btn-xs self-start" on:click={() => jumpToFact(returnRef, true)}>{$t('facts.return')}</button>{/if}
+
+            <!-- Accept-chapter action: same handler as the workspace button,
+                 promoted here as the final step of the writing flow. -->
+            <div class="card-actions justify-end items-center gap-2 pt-2 border-t border-base-content/10">
+              {#if ch.status === 'accepted'}
+                <span class="badge badge-success gap-1.5 text-sm px-3 py-2 h-auto">✓ {$t('writing.tab.accepted')}</span>
+              {/if}
+              {#if ch.status === 'review' && isCurrent}
+                <button class="btn btn-success btn-sm" on:click={doConfirm} disabled={$taskRunning}>{$t('writing.btn.confirm')}</button>
+              {/if}
+            </div>
+          {:else}
+            <div class="text-center py-10 text-base-content/65 text-sm">{$t('writing.emptySelection')}</div>
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </div><!-- /WritingPageContainer -->
 
   <ScenePlanEditor bind:open={showScenePlan} chapterNum={scenePlanChapter ?? ch?.num ?? scenePlanPendingNum} />
 {/if}
@@ -2257,5 +2398,17 @@
   #ChapterSheetEditor [data-bid]:focus-visible {
     outline: none !important;
     box-shadow: none !important;
+  }
+
+  /* —— Writing step tabs (Scene matrix / Chapter writing / Review & accept) —
+     Ultra-minimalist Notion x Revolut stepper: cubic-bezier transitions on
+     the tab cards + progress bar, and a hairline shadow for the active card
+     (the project uses Tailwind v4 without a config file, so the sample's
+     `shadow-subtle` utility is defined here instead). */
+  .step-transition {
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .shadow-subtle {
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
   }
 </style>
