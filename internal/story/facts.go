@@ -151,7 +151,15 @@ func SyncChapterMemory(ctx context.Context, api *config.APIConfig, cfg *config.C
 	})
 	prompt += memoryLinkPrompt(cfg.Language) + "\n" + string(blocks)
 	var syncErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	// Two correction rounds (three calls max). Models occasionally answer with
+	// prose around the JSON, a truncated payload ("invalid character 'i'
+	// looking for beginning of value") or an out-of-range block id; a single
+	// retry used to give up too early and surface
+	// "Fact or setting sync incomplete; retry from Writing" even though the
+	// feedback prompt usually gets a valid answer on the next try. Each failed
+	// attempt feeds its exact validation error back into the prompt; live
+	// state is only touched once a full batch validates.
+	for attempt := 0; attempt < 3; attempt++ {
 		raw := llm.CallAPIWithRetryLog(ctx, api, i18n.SystemPromptFor(cfg.Language, "memory_manager"), prompt, logger)
 		if err := ctx.Err(); err != nil {
 			return err
@@ -198,6 +206,21 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 	if result.NewMemories == nil {
 		return fmt.Errorf("missing new_memories array")
 	}
+	// Work on a private copy: repair steps (ledger self-heal, row merging) may
+	// mutate entries, but nothing reaches live state unless the whole batch
+	// validates. The caller commits this copy only on success.
+	entries := make([]MemoryEntry, len(next.MemoryEntries))
+	for i, m := range next.MemoryEntries {
+		entries[i] = m
+		entries[i].References = append([]MemoryReference(nil), m.References...)
+	}
+	next.MemoryEntries = entries
+	// Self-heal any pre-existing duplicate ids in the ledger BEFORE validating
+	// rows. Corrupt state (hand-edited JSON, legacy imports) used to make every
+	// sync die with "duplicate fact identity" forever, because the apply pass
+	// visited both entries sharing an id. Re-keying the clones preserves each
+	// fact's content and evidence — only the numeric handle is re-assigned.
+	dedupeMemoryIDs(next)
 	// Pass 1: validate every entry before mutating anything, so one bad row
 	// cannot leave the batch half-applied and trip "duplicate fact identity"
 	// on the retry.
@@ -239,15 +262,33 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 		if nm.ID < 0 || strings.TrimSpace(nm.Content) == "" || len(nm.BlockIDs) == 0 {
 			return fmt.Errorf("invalid fact evidence")
 		}
+		// Evidence must anchor to REAL blocks of this chapter. Models sometimes
+		// emit paragraph ordinals or invented numbers; accepting them used to
+		// commit unanchored "facts" (the ledger stopped being a source of
+		// truth), so rows whose block_ids match nothing are rejected here and
+		// corrected on the retry. Rows with at least one valid block keep only
+		// the valid anchors below (applyRow skips unknown ids).
+		anyValidBlock := false
+		for _, id := range nm.BlockIDs {
+			if FindBlockIdx(&ch, id) >= 0 {
+				anyValidBlock = true
+				break
+			}
+		}
+		if !anyValidBlock {
+			return fmt.Errorf("invalid fact evidence: none of the supplied block IDs exist in this chapter; use real Block IDs from the evidence list")
+		}
 		switch nm.Category {
 		case "character", "location", "item", "event", "promise", "other":
 		default:
 			return fmt.Errorf("invalid fact category")
 		}
 		target := -1
+		exactID := false
 		for j, m := range next.MemoryEntries {
 			if nm.ID > 0 && m.ID == nm.ID {
 				target = j
+				exactID = true
 				break
 			}
 		}
@@ -265,13 +306,18 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 				}
 			}
 		}
-		// A reworded update of a known fact is not a brand-new fact: if the model
-		// echoed a real stored id but rewrote the content past equivalence (or
-		// dropped the id while paraphrasing), match it fuzzily against any
-		// unclaimed entry. This prevents both spurious duplicates and the hard
-		// "must preserve the supplied content exactly" failure that made sync
-		// retry forever whenever a model legitimately condensed a fact's wording.
-		if target < 0 && strings.TrimSpace(nm.Content) != "" {
+		// A reworded update of a known fact is not a brand-new fact: when the
+		// model dropped the id while paraphrasing, match it fuzzily against any
+		// unclaimed entry. This prevents spurious duplicates and the hard "must
+		// preserve the supplied content exactly" failure that made sync retry
+		// forever whenever a model legitimately condensed a fact's wording.
+		// Rows that DID echo an exact stored id skip fuzzy matching entirely:
+		// their identity is the id itself. Rerouting a contradicting rewrite
+		// ("Alice has no scar") onto some other similar-looking fact would
+		// silently merge two distinct identities; instead such rows keep their
+		// id target and the sanitize step below preserves the stored wording,
+		// leaving the contradiction visible to the fact-checker.
+		if target < 0 && !exactID && strings.TrimSpace(nm.Content) != "" {
 			for j, m := range next.MemoryEntries {
 				if claimedTargets[j] {
 					continue
@@ -370,14 +416,28 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 		}
 	}
 	// Old references remain as historical evidence until their replacement is valid.
+	//
+	// Robustness rules for this pass (each used to abort the whole sync with
+	// "Fact or setting sync incomplete: duplicate fact identity", which then
+	// failed identically on every retry):
+	//   - Two rows targeting the same existing id are merged into that one
+	//     entry (union of evidence), not rejected.
+	//   - Two genuinely-new rows with equivalent content collapse into a single
+	//     new fact with merged evidence — content duplication must never create
+	//     two identities.
+	//   - A contradicting rewrite (negation flip / unrelated wording) already
+	//     keeps the stored text from Pass 1; here its evidence still anchors, so
+	//     the conflict stays visible to the fact-checker instead of killing sync.
+	//   - If an id collision somehow survives Pass 1 (e.g. corrupt ledger), the
+	//     second row is re-keyed to a fresh id rather than failing forever.
 	seenFacts := map[int]bool{}
-	for _, p := range parsed {
+	applyRow := func(target int, content string, blockIDs []int) {
 		refs := []MemoryReference{}
 		seen := map[int]bool{}
-		for _, id := range p.blockIDs {
+		for _, id := range blockIDs {
 			bi := FindBlockIdx(&ch, id)
 			if bi < 0 {
-				return fmt.Errorf("invalid fact block")
+				continue
 			}
 			if seen[id] {
 				continue
@@ -385,21 +445,12 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			seen[id] = true
 			refs = append(refs, MemoryReference{Chapter: ch.Num, BlockID: id, Quote: ch.Blocks[bi].Text, ContentRev: rev})
 		}
-		if p.target < 0 {
-			next.MemoryEntries = append(next.MemoryEntries, MemoryEntry{ID: next.NextMemoryID, Content: p.content, Category: p.category})
-			next.NextMemoryID++
-			p.target = len(next.MemoryEntries) - 1
-		}
-		m := next.MemoryEntries[p.target]
-		if seenFacts[m.ID] {
-			return fmt.Errorf("duplicate fact identity")
-		}
-		seenFacts[m.ID] = true
+		m := next.MemoryEntries[target]
 		// Apply the (possibly sanitized) content decided during validation. Rows
 		// whose rewrite was rejected keep the stored wording; genuine paraphrases
 		// and condensations update it in place.
-		if p.content != m.Content {
-			m.Content = p.content
+		if content != "" && content != m.Content {
+			m.Content = content
 		}
 		kept := []MemoryReference{}
 		for _, r := range m.References {
@@ -407,10 +458,102 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 				kept = append(kept, r)
 			}
 		}
-		m.References = append(kept, refs...)
-		next.MemoryEntries[p.target] = m
+		for _, r := range refs {
+			dup := false
+			for _, k := range kept {
+				if k.BlockID == r.BlockID {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				kept = append(kept, r)
+			}
+		}
+		m.References = kept
+		next.MemoryEntries[target] = m
+	}
+	for i, p := range parsed {
+		if p.target < 0 {
+			// Genuinely new fact. If an earlier new row in this same batch states
+			// an equivalent fact, merge into it instead of minting a duplicate
+			// identity (the model often emits the same fact twice with slightly
+			// different wording or evidence).
+			merged := false
+			for j := 0; j < i; j++ {
+				prev := parsed[j]
+				if prev.target < 0 || !factContentEquivalent(prev.content, p.content) {
+					continue
+				}
+				applyRow(prev.target, "", append(append([]int(nil), prev.blockIDs...), p.blockIDs...))
+				parsed[i].target = prev.target
+				merged = true
+				break
+			}
+			if merged {
+				continue
+			}
+			next.MemoryEntries = append(next.MemoryEntries, MemoryEntry{ID: next.NextMemoryID, Content: p.content, Category: p.category})
+			next.NextMemoryID++
+			p.target = len(next.MemoryEntries) - 1
+			parsed[i].target = p.target
+		}
+		m := next.MemoryEntries[p.target]
+		if seenFacts[m.ID] {
+			// Another row in this batch already touched this identity: merge the
+			// evidence into the same entry rather than failing the sync.
+			applyRow(p.target, "", p.blockIDs)
+			continue
+		}
+		seenFacts[m.ID] = true
+		applyRow(p.target, p.content, p.blockIDs)
 	}
 	return nil
+}
+
+// dedupeMemoryIDs repairs a memory ledger that contains two entries sharing
+// the same numeric id (corrupt/hand-edited state, legacy imports). The first
+// occurrence keeps the id; each clone is re-keyed to a fresh id, because the
+// *number* was duplicated, not necessarily the fact itself. Entries with truly
+// identical content+category are collapsed into one, unioning their evidence.
+func dedupeMemoryIDs(next *Progress) {
+	seenID := map[int]bool{}
+	seenContent := map[string]int{} // normalized content|category -> kept index
+	fresh := max(next.NextMemoryID, nextMemoryID(next.MemoryEntries))
+	out := make([]MemoryEntry, 0, len(next.MemoryEntries))
+	for _, m := range next.MemoryEntries {
+		key := normalizeFactText(m.Content) + "|" + m.Category
+		if idx, ok := seenContent[key]; ok {
+			// Verbatim duplicate of a kept entry: merge references, drop the clone.
+			kept := out[idx]
+			for _, r := range m.References {
+				dup := false
+				for _, k := range kept.References {
+					if k.Chapter == r.Chapter && k.BlockID == r.BlockID {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					kept.References = append(kept.References, r)
+				}
+			}
+			out[idx] = kept
+			continue
+		}
+		if seenID[m.ID] {
+			// Same number, different fact: re-assign the number, keep the fact.
+			m.ID = fresh
+			fresh++
+		}
+		seenID[m.ID] = true
+		seenContent[key] = len(out)
+		out = append(out, m)
+	}
+	if len(out) > 0 {
+		next.MemoryEntries = out
+	}
+	next.NextMemoryID = max(next.NextMemoryID, fresh)
 }
 
 // factContentEquivalent reports whether two memory texts express the same

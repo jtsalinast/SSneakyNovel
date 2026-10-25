@@ -44,6 +44,83 @@ type CriticIssue struct {
 	Fix     string `json:"fix"`     // concrete guidance for the repair pass
 }
 
+// FactLoc is where one OPEN fact-check issue lives inside the drafted prose:
+// a (scene position, trope-unit index) pair plus the verbatim quote that
+// anchors it. It mirrors the bestseller critic's TropeIntervention anchors so
+// the frontend can underline the offending passage inline (wavy red mark),
+// instead of only showing the issue in the conflict report / dots.
+type FactLoc struct {
+	ScenePos   int    `json:"scene_pos"`
+	TropeIndex int    `json:"trope_index"`
+	Quote      string `json:"quote,omitempty"`
+	Issue      string `json:"issue"`
+}
+
+// locateFactIssues maps every leftover chapter-scope fact-check issue back to
+// its concrete spot in the current draft. The quote embedded in each issue
+// wording ("…" excerpt) is fuzzy-located against the chapter's scene/beat
+// tiling (locateTropeUnitInContent); unlocatable issues are omitted — they
+// still appear in the conflict report, just without an inline mark. Pure and
+// idempotent; safe to call before blocks exist (tiling works on Content).
+func locateFactIssues(state *Progress, idx int, issues []string) []FactLoc {
+	if state == nil || idx < 0 || idx >= len(state.Chapters) || len(issues) == 0 {
+		return nil
+	}
+	ch := &state.Chapters[idx]
+	if ch.ScenePlan == nil || strings.TrimSpace(ch.Content) == "" {
+		return nil
+	}
+	var out []FactLoc
+	for _, it := range issues {
+		q := extractQuotedExcerpt(it)
+		if q == "" {
+			continue
+		}
+		pos, ti, ok := locateTropeUnitInContent(ch, ch.Content, q)
+		if !ok {
+			continue
+		}
+		out = append(out, FactLoc{ScenePos: pos, TropeIndex: ti, Quote: q, Issue: strings.TrimSpace(it)})
+	}
+	return out
+}
+
+// mergeCriticQuotesIntoIssues decorates plain issue wordings that lack a
+// verbatim excerpt with the critic's own quote for the same scene target, so
+// downstream locators (attachConflictSceneTargets → inline marks) can anchor
+// them to the exact paragraph. Matching is by (scene position, trope unit).
+func mergeCriticQuotesIntoIssues(verdict *CriticVerdict, targets [][2]int, issues []string) []string {
+	if verdict == nil || len(targets) != len(issues) {
+		return issues
+	}
+	byTarget := map[[2]int]string{}
+	for _, iss := range verdict.Issues {
+		if strings.TrimSpace(iss.Quote) == "" {
+			continue
+		}
+		for i, t := range targets {
+			if t[0] < 0 || i >= len(issues) {
+				continue
+			}
+			if normConflictIssue(issues[i]) == normConflictIssue(iss.Issue) {
+				byTarget[t] = iss.Quote
+				break
+			}
+		}
+	}
+	out := make([]string, len(issues))
+	for i, s := range issues {
+		if extractQuotedExcerpt(s) == "" {
+			if q := byTarget[targets[i]]; q != "" {
+				out[i] = s + " (“" + Truncate(q, 180) + "”)"
+				continue
+			}
+		}
+		out[i] = s
+	}
+	return out
+}
+
 // CriticVerdict is the parsed JSON answer of the chapter critic.
 type CriticVerdict struct {
 	Result  string        `json:"result"` // PASS | FAIL

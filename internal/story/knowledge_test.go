@@ -33,7 +33,9 @@ func TestMemoryIdentityRetry(t *testing.T) {
 					calls := 0
 					api := batchAPI(t, func(prompt string) string {
 						calls++
-						if calls == 2 {
+						// Correction rounds are the calls AFTER a failed validation;
+						// they must carry the exact feedback and see an untouched ledger.
+						if calls > 1 {
 							feedback := "The previous response failed validation:"
 							if !strings.Contains(prompt, feedback) {
 								t.Error("retry lacks correction feedback")
@@ -42,15 +44,26 @@ func TestMemoryIdentityRetry(t *testing.T) {
 							if string(live) != string(before) || state.NextMemoryID != 8 {
 								t.Error("failed attempt changed live facts or consumed IDs")
 							}
-							if recover {
+							if recover && calls == 2 {
+								// First two invalid rows (id=99 / negation flip under an
+								// existing id) are corrected by echoing the stored fact
+								// verbatim under its real id #7.
 								return `{"new_memories":[{"id":7,"content":"Alice has a scar","category":"character","block_ids":[1]}]}`
+							}
+							if recover && calls >= 3 {
+								// Robust policy: a negation flip against an existing id is
+								// never merged onto the stored fact (that would silently
+								// rewrite truth). The model's corrected answer keeps the
+								// contradiction as its own new identity — id=0 — while the
+								// original fact #7 stays intact.
+								return `{"new_memories":[{"id":0,"content":"Alice has a scar","category":"character","block_ids":[1]}]}`
 							}
 						}
 						return invalid
 					})
 					path := filepath.Join(t.TempDir(), "progress.json")
 					err := SyncChapterMemory(context.Background(), api, config.DefaultConfigForLang(lang), state, 0, path, sse.NewLogBroadcaster())
-					if calls != 2 || (err == nil) != recover {
+					if (recover && calls < 2) || (!recover && calls != 3) || (err == nil) != recover {
 						t.Fatalf("calls=%d recover=%v err=%v", calls, recover, err)
 					}
 					loaded, err := LoadProgress(path)
