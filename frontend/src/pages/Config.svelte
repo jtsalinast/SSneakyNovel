@@ -1325,37 +1325,39 @@ function randomizeStoryParams() {
   // (non-native) event throws a TypeError, which previously made every section
   // Generate button silently fail ("sections no longer load/generate").
   // —— Story appeal (differentiating idea) ——
-  // The differentiating-idea flow is fully independent from every other
-  // Generate button: "Sugerir" calls the synchronous suggest endpoint (no
-  // global task, no busy-flag coupling) and only writes this textarea; the
-  // card's Generate dispatches the background section with the slider level.
+  // The aurora "Suggest" bulb dispatches the differentiating_idea section
+  // through the chat assistant (generateSection), exactly like every other
+  // Generate button: same busy/undo/polling machinery and — critically — the
+  // same SSE token_usage pipeline, so the sent/received token chip shows up.
+  // The slider level travels inside the chat message ([creativity=N]).
   let appealCreativity = 3;      // 1 Pragmatic .. 5 Disruptive (default Balanced)
   let appealPanelOpen = false;   // "Sugerir" collapsible bar state
-  let appealSuggesting = false;  // in-flight synchronous suggestion
 
   $: appealLevelLabel = $t('config.appeal.level' + appealCreativity);
 
   function toggleAppealPanel() { appealPanelOpen = !appealPanelOpen; }
 
-  async function suggestDifferentiatingIdea() {
+  // The aurora bulb button now goes through the SAME chat path as every other
+  // section Generate button — generateSection('differentiating_idea'):
+  //   - the message carries the [generate-section:differentiating_idea] tag
+  //     plus the slider level ([creativity=N]); the agent's deterministic fast
+  //     path (internal/agent/agent.go parseGenerateSectionTag) forces the
+  //     generate_section tool with that creativity, so no extra LLM round-trip
+  //     is burned and the background generator still receives the level;
+  //   - because it runs as a chat task, the SSE token_usage events fire and
+  //     the sent/received token chip appears like for the other buttons (the
+  //     old synchronous POST /api/generate/differentiating_idea/suggest call
+  //     bypassed the chat/task pipeline entirely, which is why no chip showed);
+  //   - busy state, undo snapshot, toasts and result refresh all come from the
+  //     shared machinery (genBusy['differentiating_idea'] + startGenPolling).
+  function suggestDifferentiatingIdea() {
     if (appealSuggesting) return;
-    appealSuggesting = true;
-    addToast($t('config.appeal.generating'), 'info');
-    try {
-      const res = await api('POST', '/api/generate/differentiating_idea/suggest', {
-        story: storyPayload(),
-        creativity: appealCreativity,
-      });
-      const idea = String(res?.differentiating_idea || '').trim();
-      if (!idea) throw new Error($t('config.appeal.error'));
-      localStoryCfg = { ...localStoryCfg, differentiating_idea: idea, creativity_level: appealCreativity };
-      addToast($t('config.appeal.done'), 'success');
-    } catch (e) {
-      addToast(e?.message || $t('config.appeal.error'), 'error');
-    } finally {
-      appealSuggesting = false;
-    }
+    generateSection('differentiating_idea');
   }
+
+  // Reactive alias so the markup keeps a single source of truth for the
+  // in-flight state (spinner inside the bulb, width lock, disabled).
+  $: appealSuggesting = !!genBusy['differentiating_idea'];
 
   const genClick = (section) => () => { generateSection(section); };
 
@@ -2530,15 +2532,25 @@ function randomizeStoryParams() {
         <!-- Differentiating idea: label OUTSIDE the box, like every other
              textarea field in this page (user request). -->
         <span class="field-label">{$t('config.appeal.ideaTitle')}</span>
-        <div class="relative bg-[#FAFAFA] rounded-2xl border border-[#E5E5E5] focus-within:border-[#191919] transition-all duration-200 overflow-hidden shadow-sm dark:bg-base-100 dark:border-base-300">
-          <textarea class="w-full bg-transparent p-4 text-sm leading-relaxed font-mono focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
+        <!-- Focus chrome (user request): the wrapper must NOT paint a black
+             border on focus-within (`focus-within:border-[#191919]` removed) and
+             the textarea must not show any focus outline/ring. Both are handled
+             here: Tailwind utility removal + `.appeal-box` scoped rules in the
+             style block below (they also neutralize the global app.css
+             `:focus-visible` outline and daisyUI textarea focus styles). -->
+        <div class="appeal-box relative bg-[#FAFAFA] rounded-2xl border border-[#E5E5E5] transition-all duration-200 overflow-hidden shadow-sm dark:bg-base-100 dark:border-base-300">
+          <textarea class="appeal-textarea w-full bg-transparent p-4 text-sm leading-relaxed font-mono focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
             bind:value={localStoryCfg.differentiating_idea} placeholder={$t('config.appeal.placeholder')}></textarea>
           <div class="border-t border-[#EFEFEF] bg-white p-3 flex flex-col gap-1 dark:bg-base-100 dark:border-base-300">
             <!-- Collapsible creativity bar (grid 0fr->1fr + fade, per design) -->
             <div class="appeal-collapsible" class:appeal-open={appealPanelOpen}>
               <div class="appeal-collapsible-inner grid grid-cols-[auto_1fr_auto] items-center gap-3">
                 <div class="flex justify-start">
-                  <button type="button" onclick={toggleAppealPanel}
+                  <!-- Svelte 4: event directives MUST be `on:click`. A plain
+                       `onclick={handler}` attribute is treated as a static
+                       property on elements and is NEVER wired as a listener —
+                       that is why these buttons were dead no-ops. -->
+                  <button type="button" on:click={toggleAppealPanel}
                     class="w-7 h-7 rounded-lg border border-[#E5E5E5] text-[#777777] hover:text-[#191919] hover:border-[#CCCCCC] bg-[#FAFAFA] text-xs font-mono transition-all duration-150 flex items-center justify-center"
                     title={$t('config.appeal.close')}>✕</button>
                 </div>
@@ -2557,38 +2569,44 @@ function randomizeStoryParams() {
                   </div>
                 </div>
                 <div class="flex justify-end">
-                  <button type="button" class="appeal-suggest-btn shrink-0" class:appeal-loading={appealSuggesting}
-                    disabled={appealSuggesting} onclick={suggestDifferentiatingIdea} title={$t('config.appeal.suggest')}>
-                    <span class="relative z-[2] flex items-center h-full pl-2">
-                      <span class="w-5 h-5 flex items-center justify-center shrink-0">
-                        {#if appealSuggesting}
-                          <span class="loading loading-spinner loading-xs text-white"></span>
-                        {:else}
-                          <svg class="w-[18px] h-[18px] overflow-visible" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <defs>
-                              <linearGradient id="auroraGlowCfg" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-                                <stop offset="0%" class="appeal-stop1" />
-                                <stop offset="50%" class="appeal-stop2" />
-                                <stop offset="100%" class="appeal-stop3" />
-                              </linearGradient>
-                            </defs>
-                            <g class="appeal-analemma">
-                              <path d="M12 3C8.13401 3 5 6.13401 5 10C5 12.83 7.2 15.2 8.5 16.3C9.2 16.9 9.5 17.3 9.5 18V18.5C9.5 18.8866 9.8134 19.2 10.2 19.2H13.8C14.1866 19.2 14.5 18.8866 14.5 18.5V18C14.5 17.3 14.8 16.9 15.5 16.3C16.8 15.2 19 12.83 19 10C19 6.13401 15.866 3 12 3Z" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                              <path d="M13 5L8.5 11.5H12.5L11 16.5L16 10H12L13 5Z" fill="url(#auroraGlowCfg)" stroke="url(#auroraGlowCfg)" stroke-width="0.5" stroke-linejoin="round" />
-                              <path d="M10 20.8H14" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" />
-                            </g>
-                          </svg>
-                        {/if}
-                      </span>
-                      <span class="appeal-label font-mono font-semibold text-[13px] whitespace-nowrap select-none">{$t('config.appeal.suggest')}</span>
+                  <!-- Aurora "Suggest" bulb: mirrors AiGenerateButton.svelte's
+                       layout so the icon stays centered while collapsed (the
+                       old `pl-2` wrapper + absolute label pushed everything a
+                       few px to the right and let the expanded content spill
+                       out of the fixed-width button). The icon lives in a
+                       fixed 36px square; the label is absolutely positioned
+                       OUTSIDE that square and only becomes visible on hover,
+                       when the button grows to its open width. -->
+                  <button type="button" class="appeal-suggest-btn shrink-0" class:appeal-open={appealSuggesting}
+                    disabled={appealSuggesting} on:click={suggestDifferentiatingIdea} title={$t('config.appeal.suggest')}>
+                    <span class="appeal-icon relative z-[2] flex items-center justify-center shrink-0">
+                      {#if appealSuggesting}
+                        <span class="loading loading-spinner loading-xs text-white"></span>
+                      {:else}
+                        <svg class="w-[18px] h-[18px] overflow-visible" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <defs>
+                            <linearGradient id="auroraGlowCfg" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+                              <stop offset="0%" class="appeal-stop1" />
+                              <stop offset="50%" class="appeal-stop2" />
+                              <stop offset="100%" class="appeal-stop3" />
+                            </linearGradient>
+                          </defs>
+                          <g class="appeal-analemma">
+                            <path d="M12 3C8.13401 3 5 6.13401 5 10C5 12.83 7.2 15.2 8.5 16.3C9.2 16.9 9.5 17.3 9.5 18V18.5C9.5 18.8866 9.8134 19.2 10.2 19.2H13.8C14.1866 19.2 14.5 18.8866 14.5 18.5V18C14.5 17.3 14.8 16.9 15.5 16.3C16.8 15.2 19 12.83 19 10C19 6.13401 15.866 3 12 3Z" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                            <path d="M13 5L8.5 11.5H12.5L11 16.5L16 10H12L13 5Z" fill="url(#auroraGlowCfg)" stroke="url(#auroraGlowCfg)" stroke-width="0.5" stroke-linejoin="round" />
+                            <path d="M10 20.8H14" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" />
+                          </g>
+                        </svg>
+                      {/if}
                     </span>
+                    <span class="appeal-label font-mono font-semibold text-[13px] whitespace-nowrap select-none">{$t('config.appeal.suggest')}</span>
                   </button>
                 </div>
               </div>
             </div>
             <div class="flex items-center justify-end">
               {#if !appealPanelOpen}
-                <button type="button" onclick={toggleAppealPanel}
+                <button type="button" on:click={toggleAppealPanel}
                   class="px-3 py-1.5 rounded-lg border border-[#E5E5E5] text-[#555555] hover:text-[#191919] hover:border-[#CCCCCC] bg-[#FAFAFA] text-xs font-mono font-medium transition-all duration-150 flex items-center gap-1.5 dark:bg-base-100 dark:text-base-content/60">
                   <span>{$t('config.appeal.suggest')}</span>
                 </button>
@@ -3031,6 +3049,30 @@ function randomizeStoryParams() {
   /* —— Story appeal (differentiating idea) — component styles ported from the
      Notion x Revolut design: fluid grid 0fr->1fr collapsible, custom range
      thumb and the aurora-animated "Suggest" bulb button. Scoped to this page. */
+
+  /* Focus chrome (user request):
+     - The wrapper div must NOT show a black border on focus-within. The
+       `focus-within:border-[#191919]` utility was removed from the markup; the
+       rule below is a safety net so no global/utility focus style can repaint
+       the border while its contents are focused (border stays #E5E5E5).
+     - The textarea must not show ANY focus outline/ring. `focus:outline-none`
+       only covers Tailwind's own utility; the browser default outline, the
+       global app.css `:focus-visible { outline: ... }` rule and daisyUI's
+       `.textarea` focus treatment are all neutralized here. Declared outside
+       any layer with explicit selectors so it wins over those rules. */
+  .appeal-box:focus-within {
+    border-color: #E5E5E5;
+    outline: none;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); /* keep the resting shadow-sm */
+  }
+  .appeal-box .appeal-textarea,
+  .appeal-box .appeal-textarea:focus,
+  .appeal-box .appeal-textarea:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    border: none;
+  }
+
   .appeal-collapsible {
     display: grid;
     grid-template-rows: 0fr;
@@ -3101,6 +3143,10 @@ function randomizeStoryParams() {
     position: relative;
     display: inline-flex;
     align-items: center;
+    /* Collapsed: the ONLY in-flow child is the fixed 36px icon square, so
+       justify-content:center keeps the bulb perfectly centered inside the
+       36x36 button (no `pl-2` offset). Open (hover/busy): content is pinned
+       to the left edge, exactly like AiGenerateButton's `.btn-content`. */
     justify-content: center;
     height: 36px;
     width: 36px;
@@ -3113,6 +3159,7 @@ function randomizeStoryParams() {
     outline: none;
     overflow: hidden;
     transition: width 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+                justify-content 0s,
                 border-color 0.25s ease,
                 box-shadow 0.35s ease,
                 background-color 0.25s ease,
@@ -3121,8 +3168,17 @@ function randomizeStoryParams() {
                 0 8px 16px -4px rgba(0, 0, 0, 0.18),
                 inset 0 1px 0 rgba(255, 255, 255, 0.1);
   }
-  .appeal-suggest-btn:hover:not(:disabled) {
-    width: 116px;
+  /* The label is absolutely positioned (out of flow) so it never competes
+     with the icon for space — this is what previously spilled past the
+     right edge when the button expanded. */
+  .appeal-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .appeal-suggest-btn:hover:not(:disabled),
+  .appeal-suggest-btn.appeal-open {
+    width: 120px;
+    justify-content: flex-start;
     border-color: rgba(255, 255, 255, 0.22);
     background: #14171d;
     box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.25),
@@ -3133,14 +3189,18 @@ function randomizeStoryParams() {
   .appeal-label {
     position: absolute;
     left: 36px;
+    right: 8px;
+    top: 50%;
+    transform: translate(6px, -50%);
     letter-spacing: -0.1px;
     opacity: 0;
-    transform: translateX(6px);
     transition: opacity 0.2s ease 0.06s, transform 0.3s ease 0.06s;
+    pointer-events: none;
   }
-  .appeal-suggest-btn:hover:not(:disabled) .appeal-label {
+  .appeal-suggest-btn:hover:not(:disabled) .appeal-label,
+  .appeal-suggest-btn.appeal-open .appeal-label {
     opacity: 1;
-    transform: translateX(0);
+    transform: translate(0, -50%);
   }
   .appeal-analemma {
     animation: appealAnalemmaOrbit 5s ease-in-out infinite;
