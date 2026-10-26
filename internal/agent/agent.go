@@ -21,7 +21,7 @@ import (
 // paths have identical semantics. The agent package owns the type to avoid an
 // import cycle with httpapi; httpapi aliases it.
 type SectionGenRequest struct {
-	Section     string // style|characters|organizations|relations|locations|worldview|motif|story_idea|audience_profile|inspirational_pieces
+	Section     string // style|characters|organizations|relations|locations|worldview|motif|story_idea|audience_profile|inspirational_pieces|reader_expectation|differentiating_idea
 	StoryIdea   string
 	Story       *config.StoryConfig // live (possibly unsaved) form values; nil = use saved config
 	Name        string              // worldview entry name
@@ -31,6 +31,11 @@ type SectionGenRequest struct {
 	TargetID    string              // relations pair mode
 	CharacterID string              // single-character form mode
 	OrgID       string              // single-organization form mode
+	// CreativityLevel drives the "differentiating_idea" generator's sampling
+	// temperature and prompt ambition: 1 Pragmatic / 2 Conservative /
+	// 3 Balanced / 4 Bold / 5 Disruptive (0 = balanced default). Ignored by
+	// every other section.
+	CreativityLevel int
 	// WorldviewCategory optionally overrides the category derived from a
 	// per-category worldview section key (wv_geography, ...). The HTTP layer
 	// accepts it in the request body; empty means derive it from Section.
@@ -324,7 +329,44 @@ var generateSectionValid = map[string]bool{
 	"wv_geography": true, "wv_location": true, "wv_faction": true, "wv_rule": true,
 	"wv_knowledge": true, "wv_history": true, "wv_other": true,
 	"motif": true, "story_idea": true, "audience_profile": true, "inspirational_pieces": true,
+	"reader_expectation": true, "differentiating_idea": true,
 	"pre_planning": true,
+}
+
+// CreativityLevelLabel names the 1-5 creativity levels used by the
+// differentiating-idea generator (mirrors the UI slider: Pragmatic →
+// Disruptive). Out-of-range values fall back to Balanced.
+func CreativityLevelLabel(level int) string {
+	switch level {
+	case 1:
+		return "Pragmatic"
+	case 2:
+		return "Conservative"
+	case 4:
+		return "Bold"
+	case 5:
+		return "Disruptive"
+	default:
+		return "Balanced"
+	}
+}
+
+// CreativityTemperature maps a 1-5 creativity level to an OpenAI-compatible
+// sampling temperature for the differentiating-idea call: safer, shelf-tested
+// angles at level 1; wilder, category-breaking angles at level 5.
+func CreativityTemperature(level int) float64 {
+	switch level {
+	case 1:
+		return 0.3
+	case 2:
+		return 0.5
+	case 4:
+		return 0.9
+	case 5:
+		return 1.1
+	default:
+		return 0.7
+	}
 }
 
 // worldviewCategoryBySection maps the per-category worldview section keys
@@ -387,11 +429,41 @@ func parseGenerateSectionTag(userMessage string) *ToolCall {
 	if end < 0 {
 		return nil
 	}
-	section := strings.TrimSpace(rest[:end])
+	// The tag may carry parameters after the section key:
+	// [generate-section:differentiating_idea;creativity=4]. Only the first
+	// token is the section; the rest are parsed as k=v pairs below so new
+	// generators (creativity level) travel through the deterministic chat
+	// fast path without extra plumbing.
+	body := rest[:end]
+	parts := strings.Split(body, ";")
+	section := strings.TrimSpace(parts[0])
 	if !generateSectionValid[section] {
 		return nil
 	}
-	args, err := json.Marshal(map[string]string{"section": section})
+	argsMap := map[string]string{"section": section}
+	for _, kv := range parts[1:] {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		eq := strings.Index(kv, "=")
+		if eq < 0 {
+			continue
+		}
+		argsMap[strings.TrimSpace(kv[:eq])] = strings.TrimSpace(kv[eq+1:])
+	}
+	// The Story appeal card may also append the level OUTSIDE the tag (e.g.
+	// "... [generate-section:differentiating_idea] [creativity=4]") because the
+	// i18n message template ends with the tag itself; honour that form too.
+	if _, ok := argsMap["creativity"]; !ok {
+		if mi := strings.Index(userMessage, "[creativity="); mi >= 0 {
+			rest2 := userMessage[mi+len("[creativity="):]
+			if e2 := strings.Index(rest2, "]"); e2 >= 0 {
+				argsMap["creativity"] = strings.TrimSpace(rest2[:e2])
+			}
+		}
+	}
+	args, err := json.Marshal(argsMap)
 	if err != nil {
 		return nil
 	}
@@ -1460,8 +1532,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_section",
-			Description: "AI generation section blocks (style/characters/organizations/relations/locations/worldview/motif/story_idea/audience_profile/inspirational_pieces/pre_planning): generate the content of a given block type based on the current story parameters; pre_planning plans the book-level structure, chapter count, long-term direction and per-batch synopses before writing. First confirm the target book number, then fill in the novel parameters and write into the corresponding fields/body. Optional direct references: character_id/org_id/entry_id (only for entries that already exist with empty fields), source_id+target_id (only when these two characters have a relationship), name+category or entry_id (single worldview entry; without them, worldview batch-generates entries across all categories). Per-category worldview sections also exist: wv_geography/wv_location/wv_faction/wv_rule/wv_knowledge/wv_history/wv_other generate ONLY entries of that worldview category.",
-			Parameters:  `{"section":"characters","character_id":"","org_id":"","entry_id":"","source_id":"","target_id":"","name":"","category":""}`,
+			Description: "AI generation section blocks (style/characters/organizations/relations/locations/worldview/motif/story_idea/audience_profile/inspirational_pieces/reader_expectation/differentiating_idea/pre_planning): generate the content of a given block type based on the current story parameters; pre_planning plans the book-level structure, chapter count, long-term direction and per-batch synopses before writing. motif fills theme/literary motif/tone plus the philosophical dilemma and reader expectation; story_idea fills the abstract overview plus forces in tension, elevator pitch and lighthouse sentence; reader_expectation generates ONLY the target reader's expectation field; differentiating_idea generates ONLY the differentiating idea (Story appeal) and accepts an optional creativity level 1-5 (1 Pragmatic .. 5 Disruptive, default 3 Balanced) via the creativity parameter — it never touches other fields. First confirm the target book number, then fill in the novel parameters and write into the corresponding fields/body. Optional direct references: character_id/org_id/entry_id (only for entries that already exist with empty fields), source_id+target_id (only when these two characters have a relationship), name+category or entry_id (single worldview entry; without them, worldview batch-generates entries across all categories). Per-category worldview sections also exist: wv_geography/wv_location/wv_faction/wv_rule/wv_knowledge/wv_history/wv_other generate ONLY entries of that worldview category.",
+			Parameters:  `{"section":"characters","character_id":"","org_id":"","entry_id":"","source_id":"","target_id":"","name":"","category":"","creativity":0}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Section     string `json:"section"`
@@ -1472,12 +1544,13 @@ func getBuiltinTools() []Tool {
 					TargetID    string `json:"target_id"`
 					Name        string `json:"name"`
 					Category    string `json:"category"`
+					Creativity  int    `json:"creativity"`
 				}
 				if err := json.Unmarshal(args, &params); err != nil {
 					return "", agentErr(ctx, "invalid_json", err)
 				}
 				switch params.Section {
-				case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "pre_planning":
+				case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "pre_planning":
 				default:
 					if !IsWorldviewCategorySection(params.Section) {
 						return "", agentErr(ctx, "unknown_field", fmt.Errorf("unsupported section %q", params.Section))
@@ -1504,17 +1577,18 @@ func getBuiltinTools() []Tool {
 					return "", agentErr(ctx, "save_config_failed", err)
 				}
 				req := SectionGenRequest{
-					Section:     params.Section,
-					StoryIdea:   strings.TrimSpace(storyCfg.StoryIdea),
-					Story:       &storyCfg,
-					Name:        params.Name,
-					Category:    params.Category,
-					EntryID:     params.EntryID,
-					SourceID:    params.SourceID,
-					TargetID:    params.TargetID,
-					CharacterID: params.CharacterID,
-					OrgID:       params.OrgID,
-					Ctx:         ctx.SectionGenCtx,
+					Section:         params.Section,
+					StoryIdea:       strings.TrimSpace(storyCfg.StoryIdea),
+					Story:           &storyCfg,
+					Name:            params.Name,
+					Category:        params.Category,
+					EntryID:         params.EntryID,
+					SourceID:        params.SourceID,
+					TargetID:        params.TargetID,
+					CharacterID:     params.CharacterID,
+					OrgID:           params.OrgID,
+					CreativityLevel: params.Creativity,
+					Ctx:             ctx.SectionGenCtx,
 				}
 				runner := ctx.StartSectionGenerate
 				if runner == nil {

@@ -3373,9 +3373,10 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 					return h.StartDetachedPrePlanGenerate()
 				}
 				return h.StartDetachedSectionGenerate(agent.SectionGenRequest{
-					Section:   sectionName,
-					StoryIdea: strings.TrimSpace(h.cfg.Story.StoryIdea),
-					Story:     &h.cfg.Story,
+					Section:         sectionName,
+					StoryIdea:       strings.TrimSpace(h.cfg.Story.StoryIdea),
+					Story:           &h.cfg.Story,
+					CreativityLevel: forcedSectionCreativity(fastForced),
 				})
 			}
 			genErr = startOnce()

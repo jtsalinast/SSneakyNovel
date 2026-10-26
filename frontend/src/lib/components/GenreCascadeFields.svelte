@@ -1098,7 +1098,6 @@
     <div class="col-span-2">
       <span class="field-label flex items-center gap-1">
         {labels.settings || 'Specific settings'}
-        <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
         {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
       </span>
       {#if showSettingShortcuts}
@@ -1114,8 +1113,6 @@
             </label>
           {/each}
         </div>
-      {:else}
-        <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
       {/if}
       {#if hasSubgenre && modifierGroups.length}
         <details class="mt-1.5">
@@ -1137,13 +1134,15 @@
         </details>
       {/if}
       <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
-           storage field as the checkboxes so both stay in sync. -->
+           storage field as the checkboxes so both stay in sync. The textarea
+           placeholder now carries the former ⓘ tooltip text plus the "one per
+           line" instruction (user request: no tooltip next to the label). -->
       <textarea
         class="textarea textarea-sm w-full text-xs font-mono mt-1"
         bind:value={freeSettingsText}
         on:blur={applyFreeSettings}
         on:input={() => { freeSettingsDirty = true; }}
-        placeholder={labels.settingsPlaceholder || 'custom_setting_per_line'}
+        placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
         disabled={disabled}
       ></textarea>
     </div>
@@ -1343,7 +1342,6 @@
   <div>
     <span class="field-label flex items-center gap-1">
       {labels.settings || 'Specific settings'}
-      <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
       {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
     </span>
     {#if showSettingShortcuts}
@@ -1359,8 +1357,6 @@
           </label>
         {/each}
       </div>
-    {:else}
-      <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
     {/if}
     {#if hasSubgenre && modifierGroups.length}
       <details class="mt-1.5">
@@ -1382,13 +1378,14 @@
   </div>
 
   <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
-       storage field as the checkboxes so both stay in sync. -->
+       storage field as the checkboxes so both stay in sync. Placeholder carries
+       the former ⓘ tooltip text + the "one per line" instruction. -->
   <textarea
     class="textarea textarea-sm w-full text-xs font-mono"
     bind:value={freeSettingsText}
     on:blur={applyFreeSettings}
     on:input={() => { freeSettingsDirty = true; }}
-    placeholder={labels.settingsPlaceholder || 'custom_setting_per_line'}
+    placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
     disabled={disabled}
   ></textarea>
 

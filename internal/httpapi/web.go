@@ -59,6 +59,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/knowledge/sync", h.PostKnowledgeSync)
 	mux.HandleFunc("POST /api/settings/story-changes", h.PostSettingChange)
 	mux.HandleFunc("POST /api/generate/{section}", h.PostSectionGenerate)
+	mux.HandleFunc("POST /api/generate/differentiating_idea/suggest", h.PostDifferentiatingIdeaSuggest)
 	mux.HandleFunc("DELETE /api/progress", h.DeleteProgress)
 	mux.HandleFunc("GET /api/status", h.GetStatus)
 

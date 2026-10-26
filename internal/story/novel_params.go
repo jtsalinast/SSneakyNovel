@@ -166,6 +166,18 @@ func NovelParametersBlock(cfg *config.Config) string {
 			lines = append(lines, "[IDEA DE LA HISTORIA - premisa autorizada]\n"+b)
 		}
 	}
+	if v := strings.TrimSpace(sc.ForcesInTension); v != "" {
+		add("[FUERZAS EN TENSIÓN] "+v+" (dramatiza estas fuerzas a favor y en contra del tema/tesis de la obra en el conflicto, los bandos y los puntos de giro; ninguna fuerza debe quedar sin oposición)",
+			"[FORCES IN TENSION] "+v+" (dramatize these for/against forces of the work's thesis in conflict, factions and turning points; no force should go unanswered)")
+	}
+	if v := strings.TrimSpace(sc.ElevatorPitch); v != "" {
+		add("[ELEVATOR PITCH] "+v+" (gancho north-star de alto concepto: la historia debe poder venderse con esta promesa; conserva su giro central al planificar y escribir)",
+			"[ELEVATOR PITCH] "+v+" (north-star high-concept hook: the story must be sellable with this promise; keep its central twist intact when planning and writing)")
+	}
+	if v := strings.TrimSpace(sc.LighthouseSentence); v != "" {
+		add("[FRASE FARO] \""+v+"\" (punto fijo inmutable de la obra: cada arco y capítulo debe navegar hacia ella o alejarse de ella de forma intencional; nunca la contradigas sin que la trama lo pague)",
+			"[LIGHTHOUSE SENTENCE] \""+v+"\" (the work's immutable fixed point: every arc and chapter must navigate toward or deliberately away from it; never contradict it without paying for it in plot)")
+	}
 	if v := strings.TrimSpace(sc.Subgenre); v != "" {
 		// Multi-select support: the stored value may be a comma-separated list
 		// ("Cozy Mystery, Noir"); every entry is surfaced to the AI.
@@ -178,6 +190,18 @@ func NovelParametersBlock(cfg *config.Config) string {
 	}
 	if v := strings.TrimSpace(sc.Tone); v != "" {
 		add("[TONO] "+v, "[TONE] "+v)
+	}
+	if v := strings.TrimSpace(sc.PhilosophicalDilemma); v != "" {
+		add("[DILEMA FILOSÓFICO/OPERACIONAL] "+v+" (es la tensión central de la obra: haz que personajes, decisiones y consecuencias lo encarnen y lo exploren sin resolverlo de forma simplista)",
+			"[PHILOSOPHICAL/OPERATIONAL DILEMMA] "+v+" (this is the work's central tension: make characters, decisions and consequences embody and explore it without a simplistic resolution)")
+	}
+	if v := strings.TrimSpace(sc.ReaderExpectation); v != "" {
+		add("[EXPECTATIVA DEL LECTOR OBJETIVO] "+v+" (cumple las convenciones de género y los motivos obligatorios aquí listados; son compromisos con el lector, no opciones)",
+			"[TARGET READER'S EXPECTATION] "+v+" (honor the genre conventions and mandatory motifs listed here; they are promises to the reader, not options)")
+	}
+	if v := strings.TrimSpace(sc.DifferentiatingIdea); v != "" {
+		add("[IDEA DIFERENCIADORA] "+v+" (es el ángulo único que distingue esta obra de su estante de género: protégelo en premisa, giros y voz; evita tropos que lo diluyan)",
+			"[DIFFERENTIATING IDEA] "+v+" (this is the unique angle that sets the work apart from its genre shelf: protect it in premise, twists and voice; avoid tropes that dilute it)")
 	}
 	if v := strings.TrimSpace(sc.InspirationalPieces); v != "" {
 		add("[OBRAS DE INSPIRACIÓN] "+v+" (úsalas como referencia de estilo/atmósfera/oficio: toma su tono y técnicas, pero nunca copies sus tramas, personajes ni configuraciones propias)",

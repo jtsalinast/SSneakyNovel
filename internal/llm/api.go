@@ -21,6 +21,43 @@ type ChatRequest struct {
 	Stream        bool           `json:"stream,omitempty"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
 	MaxTokens     int            `json:"max_tokens,omitempty"`
+	// Temperature is only serialized when set (>0). The creativity slider of
+	// the "differentiating idea" generator maps its 1-5 level to a sampling
+	// temperature through CallAPIWithTemperature below.
+	Temperature *float64 `json:"temperature,omitempty"`
+}
+
+// WithTemperature returns a shallow copy of apiCfg carrying the given sampling
+// temperature (nil = provider default). It never mutates the shared project
+// config: h.apiCfg stays untouched and each caller passes the derived copy to
+// one specific call.
+func WithTemperature(apiCfg *config.APIConfig, temp *float64) *config.APIConfig {
+	if apiCfg == nil || temp == nil {
+		return apiCfg
+	}
+	cp := *apiCfg
+	return &cp
+}
+
+// temperatureFromContext retrieves the per-call temperature attached with
+// ContextWithTemperature, or nil when none was set.
+func temperatureFromContext(ctx context.Context) *float64 {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(temperatureCtxKey{}).(*float64); ok {
+		return v
+	}
+	return nil
+}
+
+type temperatureCtxKey struct{}
+
+// ContextWithTemperature returns a context carrying a sampling temperature for
+// downstream chat calls (used by CallAPIWithTemperature / llmJSONWithTemp).
+func ContextWithTemperature(ctx context.Context, temp float64) context.Context {
+	t := temp
+	return context.WithValue(ctx, temperatureCtxKey{}, &t)
 }
 
 type streamOptions struct {
@@ -359,9 +396,10 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	tracker.beginCall(messages)
 
 	reqBody := ChatRequest{
-		Model:     apiCfg.Model,
-		Messages:  messages,
-		MaxTokens: apiCfg.MaxTokens,
+		Model:       apiCfg.Model,
+		Messages:    messages,
+		MaxTokens:   apiCfg.MaxTokens,
+		Temperature: temperatureFromContext(ctx),
 	}
 
 	bts, err := json.Marshal(reqBody)
@@ -478,6 +516,15 @@ func CallAPIWithRetryLog(ctx context.Context, apiCfg *config.APIConfig, system, 
 	})
 }
 
+// CallAPITemperature is the retrying call variant used by generators that need
+// an explicit sampling temperature (e.g. the differentiating-idea creativity
+// level). The temperature travels through the context so both the streaming
+// and synchronous paths serialize it into the chat request body.
+func CallAPITemperature(ctx context.Context, apiCfg *config.APIConfig, system, user string, logger *sse.LogBroadcaster, temperature float64) string {
+	ctx = ContextWithTemperature(ctx, temperature)
+	return CallAPIWithRetryLog(ctx, apiCfg, system, user, logger)
+}
+
 func RetryWaitTime(retry int) int {
 	if retry > 4 {
 		return 20
@@ -528,6 +575,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 		MaxTokens:     apiCfg.MaxTokens,
+		Temperature:   temperatureFromContext(ctx),
 	}
 
 	bts, err := json.Marshal(reqBody)

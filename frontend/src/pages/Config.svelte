@@ -74,7 +74,7 @@
   // what the user typed).
   let sharedStoryDraft = null;   // last localStoryCfg value
 
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
+  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', philosophical_dilemma: '', reader_expectation: '', forces_in_tension: '', elevator_pitch: '', lighthouse_sentence: '', differentiating_idea: '', creativity_level: 0 };
   // Preserve unsaved edits across workspace-tab switches (this component is
   // recreated on every tab change; without this the Genre field and friends
   // would silently reset to whatever was last saved on the server).
@@ -968,14 +968,19 @@ function randomizeStoryParams() {
       const st = cfg?.story || {};
       const owned = new Set();
       for (const sec of finishedSections) {
-        if (sec === 'motif') { owned.add('theme'); owned.add('motif'); owned.add('tone'); }
+        // Theme & Motif card now generates theme/motif/tone/dilemma only —
+        // reader_expectation moved to the "Ideal reader profile" card.
+        if (sec === 'motif') { owned.add('theme'); owned.add('motif'); owned.add('tone'); owned.add('philosophical_dilemma'); }
         else if (sec === 'inspirational_pieces') owned.add('inspirational_pieces');
-        else if (sec === 'story_idea') owned.add('story_idea');
-        else if (sec === 'audience_profile') owned.add('audience_profile');
+        else if (sec === 'story_idea') { owned.add('story_idea'); owned.add('forces_in_tension'); owned.add('elevator_pitch'); owned.add('lighthouse_sentence'); }
+        // Ideal reader profile card fills BOTH its fields together (user request).
+        else if (sec === 'audience_profile') { owned.add('audience_profile'); owned.add('reader_expectation'); }
+        else if (sec === 'reader_expectation') owned.add('reader_expectation');
+        else if (sec === 'differentiating_idea') owned.add('differentiating_idea');
         else if (sec === 'style') { owned.add('writing_style'); owned.add('writing_pov'); }
       }
       const merged = {};
-      for (const k of ['theme', 'motif', 'tone', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov']) {
+      for (const k of ['theme', 'motif', 'tone', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov', 'philosophical_dilemma', 'reader_expectation', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence', 'differentiating_idea']) {
         const sv = (st[k] || '').trim();
         if (!sv) continue;
         if (owned.has(k) || !(localStoryCfg[k] || '').trim()) merged[k] = st[k];
@@ -1233,14 +1238,18 @@ function randomizeStoryParams() {
     else if (section === 'locations') captureSnapshot(undoKey, { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
     else if (section.startsWith('wv_')) captureSnapshot(undoKey, { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
     else if (section === 'style') captureStoryFields(undoKey, ['writing_style', 'writing_pov']);
-    else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif', 'tone']);
+    else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif', 'tone', 'philosophical_dilemma']);
     else if (section === 'inspirational_pieces') captureStoryFields(undoKey, ['inspirational_pieces']);
-    else if (section === 'story_idea') captureStoryFields(undoKey, ['story_idea']);
-    else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile']);
+    else if (section === 'story_idea') captureStoryFields(undoKey, ['story_idea', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence']);
+    // The Ideal reader profile card now owns both fields (reader_expectation
+    // moved here from Theme & Motif — user request).
+    else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile', 'reader_expectation']);
+    else if (section === 'reader_expectation') captureStoryFields(undoKey, ['reader_expectation']);
+    else if (section === 'differentiating_idea') captureStoryFields(undoKey, ['differentiating_idea']);
     await persistStoryBeforeGenerate();
     const story = storyPayload();
     const idea = (story.story_idea || '').trim() || ($config?.story?.story_idea || '').trim();
-    if (!idea && section !== 'motif' && section !== 'inspirational_pieces' && section !== 'story_idea' && section !== 'audience_profile' && section !== 'style') { addToast($t('config.story_idea.required'), 'error'); discardUndo(undoKey); return; }
+    if (!idea && section !== 'motif' && section !== 'inspirational_pieces' && section !== 'story_idea' && section !== 'audience_profile' && section !== 'style' && section !== 'reader_expectation' && section !== 'differentiating_idea') { addToast($t('config.story_idea.required'), 'error'); discardUndo(undoKey); return; }
     // Section-level Generate buttons now go through the chat assistant: the
     // message below is matched by the agent's system prompt, which MUST call
     // the generate_section tool with this exact section key. The tool reuses
@@ -1264,8 +1273,14 @@ function randomizeStoryParams() {
       inspirational_pieces: $t('config.generate.chat.inspirational_pieces'),
       story_idea: $t('config.generate.chat.story_idea'),
       audience_profile: $t('config.generate.chat.audience_profile'),
+      reader_expectation: $t('config.generate.chat.reader_expectation'),
     };
-    const msg = chatMsgs[section];
+    const msg = section === 'differentiating_idea'
+      // Story appeal: the creativity level travels through the deterministic
+      // chat fast path — the agent parses [generate-section:X;creativity=N]
+      // and forwards N to the generator (prompt ambition + sampling temp).
+      ? `${$t('config.generate.chat.differentiating_idea')} [creativity=${appealCreativity}]`
+      : chatMsgs[section];
     console.log('[generate] dispatching via chat?', section, 'msg found:', !!msg);
     if (msg) {
       genBusy = { ...genBusy, [section]: true };
@@ -1309,6 +1324,39 @@ function randomizeStoryParams() {
   // <button> stops native propagation. Calling stopPropagation on the forwarded
   // (non-native) event throws a TypeError, which previously made every section
   // Generate button silently fail ("sections no longer load/generate").
+  // —— Story appeal (differentiating idea) ——
+  // The differentiating-idea flow is fully independent from every other
+  // Generate button: "Sugerir" calls the synchronous suggest endpoint (no
+  // global task, no busy-flag coupling) and only writes this textarea; the
+  // card's Generate dispatches the background section with the slider level.
+  let appealCreativity = 3;      // 1 Pragmatic .. 5 Disruptive (default Balanced)
+  let appealPanelOpen = false;   // "Sugerir" collapsible bar state
+  let appealSuggesting = false;  // in-flight synchronous suggestion
+
+  $: appealLevelLabel = $t('config.appeal.level' + appealCreativity);
+
+  function toggleAppealPanel() { appealPanelOpen = !appealPanelOpen; }
+
+  async function suggestDifferentiatingIdea() {
+    if (appealSuggesting) return;
+    appealSuggesting = true;
+    addToast($t('config.appeal.generating'), 'info');
+    try {
+      const res = await api('POST', '/api/generate/differentiating_idea/suggest', {
+        story: storyPayload(),
+        creativity: appealCreativity,
+      });
+      const idea = String(res?.differentiating_idea || '').trim();
+      if (!idea) throw new Error($t('config.appeal.error'));
+      localStoryCfg = { ...localStoryCfg, differentiating_idea: idea, creativity_level: appealCreativity };
+      addToast($t('config.appeal.done'), 'success');
+    } catch (e) {
+      addToast(e?.message || $t('config.appeal.error'), 'error');
+    } finally {
+      appealSuggesting = false;
+    }
+  }
+
   const genClick = (section) => () => { generateSection(section); };
 
   $: resolvedChatURL = resolveChatCompletionsURL(localApiCfg.base_url, !!localApiCfg.url_strict);
@@ -2020,6 +2068,10 @@ function randomizeStoryParams() {
                 protagonist: $t('config.story.protagonist'),
                 settings: $t('config.story.specificSettings'),
                 settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
+                // Former ⓘ tooltip text now lives in the textarea placeholder
+                // (user request): passed via labels so the component can join
+                // it with the "one per line" instruction.
+                settingsTip: $t('config.tip.specificSettings'),
                 modifiers: $t('config.story.modifiers'),
                 pickGenre: $t('config.settings.pickGenre'),
                 pickSubgenre: $t('config.settings.pickSubgenre'),
@@ -2393,12 +2445,23 @@ function randomizeStoryParams() {
         </div>
         <div class="space-y-1.5">
           <div>
+            <!-- Target reader's expectation moved to the "Ideal reader profile"
+                 card (user request): that card's Generate button now writes it
+                 together with the audience profile. -->
             <span class="field-label">{$t('config.story.theme')}</span>
             <textarea class="textarea textarea-sm w-full text-sm" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning}></textarea>
           </div>
           <div>
             <span class="field-label">{$t('config.motif.title')}</span>
             <textarea class="textarea textarea-sm w-full text-sm" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
+          </div>
+          <div>
+            <!-- Philosophical / operational dilemma: filled together with
+                 theme/motif/tone by THIS card's Generate button (motif section
+                 now returns five fields). No ⓘ tooltip (user request): the
+                 explanation lives in the placeholder. -->
+            <span class="field-label">{$t('config.dilemma.title')}</span>
+            <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.philosophical_dilemma} placeholder={$t('config.dilemma.placeholder')} disabled={$taskRunning}></textarea>
           </div>
           <div>
             <span class="field-label">{$t('config.story.tone')}</span>
@@ -2441,6 +2504,98 @@ function randomizeStoryParams() {
             <textarea class="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.audience_profile}
               placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
           </div>
+          <div>
+            <!-- Target reader's expectation: moved here from the Theme & Motif
+                 card (user request). No own Generate button anymore — it is
+                 filled TOGETHER with the audience profile by THIS card's
+                 Generate button (audience_section returns both fields). The
+                 "Genre conventions & obligatory motifs" subtitle was removed;
+                 its guidance now lives in the placeholder. -->
+            <span class="field-label">{$t('config.readerExp.title')}</span>
+            <textarea class="textarea textarea-sm w-full text-xs" rows="3" bind:value={localStoryCfg.reader_expectation}
+              placeholder={$t('config.readerExp.placeholder')} disabled={$taskRunning}></textarea>
+          </div>
+      </div>
+      <div class="group/hover-section">
+        <!-- Story appeal: the differentiating idea. Divider separates it from
+             "Ideal reader profile". Its Suggest/Generate flow is completely
+             independent (own synchronous endpoint + own background section):
+             no other Generate button writes this field. -->
+        <div class="divider my-0 py-6 h-px"></div>
+        <!-- Story appeal (user request): no ⓘ tooltip next to the title and NO
+             standalone Generate button — the only generator is the aurora
+             "Suggest" bulb inside the bar revealed by the grey "Suggest"
+             toggle below the textarea. -->
+        <h3 class="card-title text-base">{$t('config.appeal.title')}</h3>
+        <!-- Differentiating idea: label OUTSIDE the box, like every other
+             textarea field in this page (user request). -->
+        <span class="field-label">{$t('config.appeal.ideaTitle')}</span>
+        <div class="relative bg-[#FAFAFA] rounded-2xl border border-[#E5E5E5] focus-within:border-[#191919] transition-all duration-200 overflow-hidden shadow-sm dark:bg-base-100 dark:border-base-300">
+          <textarea class="w-full bg-transparent p-4 text-sm leading-relaxed font-mono focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
+            bind:value={localStoryCfg.differentiating_idea} placeholder={$t('config.appeal.placeholder')}></textarea>
+          <div class="border-t border-[#EFEFEF] bg-white p-3 flex flex-col gap-1 dark:bg-base-100 dark:border-base-300">
+            <!-- Collapsible creativity bar (grid 0fr->1fr + fade, per design) -->
+            <div class="appeal-collapsible" class:appeal-open={appealPanelOpen}>
+              <div class="appeal-collapsible-inner grid grid-cols-[auto_1fr_auto] items-center gap-3">
+                <div class="flex justify-start">
+                  <button type="button" onclick={toggleAppealPanel}
+                    class="w-7 h-7 rounded-lg border border-[#E5E5E5] text-[#777777] hover:text-[#191919] hover:border-[#CCCCCC] bg-[#FAFAFA] text-xs font-mono transition-all duration-150 flex items-center justify-center"
+                    title={$t('config.appeal.close')}>✕</button>
+                </div>
+                <div class="flex flex-col gap-1.5 w-full max-w-[280px] sm:max-w-[320px] mx-auto px-2">
+                  <div class="flex items-center justify-between text-xs font-mono">
+                    <span class="text-[11px] text-[#888888] flex items-center gap-1.5">
+                      <span class="w-1.5 h-1.5 rounded-full bg-[#191919] inline-block"></span>
+                      {$t('config.appeal.creativity')}
+                    </span>
+                    <span class="text-[11px] font-semibold text-[#191919] dark:text-base-content">{appealLevelLabel}</span>
+                  </div>
+                  <div class="flex items-center gap-2 w-full">
+                    <span class="text-[10px] text-[#AAAAAA]">1</span>
+                    <input type="range" min="1" max="5" step="1" bind:value={appealCreativity} class="appeal-range w-full cursor-pointer" />
+                    <span class="text-[10px] text-[#AAAAAA]">5</span>
+                  </div>
+                </div>
+                <div class="flex justify-end">
+                  <button type="button" class="appeal-suggest-btn shrink-0" class:appeal-loading={appealSuggesting}
+                    disabled={appealSuggesting} onclick={suggestDifferentiatingIdea} title={$t('config.appeal.suggest')}>
+                    <span class="relative z-[2] flex items-center h-full pl-2">
+                      <span class="w-5 h-5 flex items-center justify-center shrink-0">
+                        {#if appealSuggesting}
+                          <span class="loading loading-spinner loading-xs text-white"></span>
+                        {:else}
+                          <svg class="w-[18px] h-[18px] overflow-visible" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                              <linearGradient id="auroraGlowCfg" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+                                <stop offset="0%" class="appeal-stop1" />
+                                <stop offset="50%" class="appeal-stop2" />
+                                <stop offset="100%" class="appeal-stop3" />
+                              </linearGradient>
+                            </defs>
+                            <g class="appeal-analemma">
+                              <path d="M12 3C8.13401 3 5 6.13401 5 10C5 12.83 7.2 15.2 8.5 16.3C9.2 16.9 9.5 17.3 9.5 18V18.5C9.5 18.8866 9.8134 19.2 10.2 19.2H13.8C14.1866 19.2 14.5 18.8866 14.5 18.5V18C14.5 17.3 14.8 16.9 15.5 16.3C16.8 15.2 19 12.83 19 10C19 6.13401 15.866 3 12 3Z" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                              <path d="M13 5L8.5 11.5H12.5L11 16.5L16 10H12L13 5Z" fill="url(#auroraGlowCfg)" stroke="url(#auroraGlowCfg)" stroke-width="0.5" stroke-linejoin="round" />
+                              <path d="M10 20.8H14" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" />
+                            </g>
+                          </svg>
+                        {/if}
+                      </span>
+                      <span class="appeal-label font-mono font-semibold text-[13px] whitespace-nowrap select-none">{$t('config.appeal.suggest')}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center justify-end">
+              {#if !appealPanelOpen}
+                <button type="button" onclick={toggleAppealPanel}
+                  class="px-3 py-1.5 rounded-lg border border-[#E5E5E5] text-[#555555] hover:text-[#191919] hover:border-[#CCCCCC] bg-[#FAFAFA] text-xs font-mono font-medium transition-all duration-150 flex items-center gap-1.5 dark:bg-base-100 dark:text-base-content/60">
+                  <span>{$t('config.appeal.suggest')}</span>
+                </button>
+              {/if}
+            </div>
+          </div>
+        </div>
       </div>
       <div class="flex justify-end gap-1.5">
         <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
@@ -2460,6 +2615,18 @@ function randomizeStoryParams() {
       <div>
         <span class="field-label">{$t('config.story_idea.subtitle')}</span>
         <textarea class="textarea w-full text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
+      </div>
+      <div>
+        <span class="field-label">{$t('config.forces.title')}</span>
+        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.forces_in_tension} placeholder={$t('config.forces.placeholder')} disabled={$taskRunning}></textarea>
+      </div>
+      <div>
+        <span class="field-label">{$t('config.elevator.title')}</span>
+        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.elevator_pitch} placeholder={$t('config.elevator.placeholder')} disabled={$taskRunning}></textarea>
+      </div>
+      <div>
+        <span class="field-label">{$t('config.lighthouse.title')}</span>
+        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.lighthouse_sentence} placeholder={$t('config.lighthouse.placeholder')} disabled={$taskRunning}></textarea>
       </div>
       <div class="flex justify-end gap-1.5">
         <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
@@ -2859,5 +3026,149 @@ function randomizeStoryParams() {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0);
+  }
+
+  /* —— Story appeal (differentiating idea) — component styles ported from the
+     Notion x Revolut design: fluid grid 0fr->1fr collapsible, custom range
+     thumb and the aurora-animated "Suggest" bulb button. Scoped to this page. */
+  .appeal-collapsible {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    visibility: hidden;
+    overflow: hidden;
+    transition: grid-template-rows 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+                visibility 0.45s ease,
+                padding 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+    padding-top: 0px;
+    padding-bottom: 0px;
+  }
+  .appeal-collapsible.appeal-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    visibility: visible;
+    padding-top: 2px;
+    padding-bottom: 4px;
+  }
+  .appeal-collapsible-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+  .appeal-range {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    height: 16px;
+  }
+  .appeal-range:focus { outline: none; }
+  .appeal-range::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: #EFEFEF;
+    border-radius: 9999px;
+  }
+  .appeal-range::-webkit-slider-thumb {
+    height: 14px;
+    width: 14px;
+    border-radius: 50%;
+    background: #191919;
+    cursor: pointer;
+    -webkit-appearance: none;
+    margin-top: -5px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    transition: transform 0.15s ease;
+  }
+  .appeal-range::-webkit-slider-thumb:hover { transform: scale(1.2); }
+  .appeal-range::-moz-range-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: #EFEFEF;
+    border-radius: 9999px;
+  }
+  .appeal-range::-moz-range-thumb {
+    height: 14px;
+    width: 14px;
+    border: none;
+    border-radius: 50%;
+    background: #191919;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  }
+  .appeal-suggest-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    width: 36px;
+    padding: 0;
+    background: #0f1115;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    color: #ffffff;
+    cursor: pointer;
+    outline: none;
+    overflow: hidden;
+    transition: width 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 0.25s ease,
+                box-shadow 0.35s ease,
+                background-color 0.25s ease,
+                transform 0.1s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12),
+                0 8px 16px -4px rgba(0, 0, 0, 0.18),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+  .appeal-suggest-btn:hover:not(:disabled) {
+    width: 116px;
+    border-color: rgba(255, 255, 255, 0.22);
+    background: #14171d;
+    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.25),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  }
+  .appeal-suggest-btn:active:not(:disabled) { transform: scale(0.96); }
+  .appeal-suggest-btn:disabled { opacity: 0.8; cursor: wait; }
+  .appeal-label {
+    position: absolute;
+    left: 36px;
+    letter-spacing: -0.1px;
+    opacity: 0;
+    transform: translateX(6px);
+    transition: opacity 0.2s ease 0.06s, transform 0.3s ease 0.06s;
+  }
+  .appeal-suggest-btn:hover:not(:disabled) .appeal-label {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  .appeal-analemma {
+    animation: appealAnalemmaOrbit 5s ease-in-out infinite;
+    filter: drop-shadow(0 0 3px rgba(254, 240, 138, 0.35));
+  }
+  @keyframes appealAnalemmaOrbit {
+    0%   { transform: translate(0px, 0px) rotate(0deg); }
+    25%  { transform: translate(0.4px, -1.2px) rotate(0.5deg); }
+    50%  { transform: translate(0px, -2px) rotate(0deg); }
+    75%  { transform: translate(-0.4px, -1.2px) rotate(-0.5deg); }
+    100% { transform: translate(0px, 0px) rotate(0deg); }
+  }
+  .appeal-stop1 { stop-color: #fef08a; animation: appealStop1 8s ease-in-out infinite; }
+  .appeal-stop2 { stop-color: #f472b6; animation: appealStop2 8s ease-in-out infinite; }
+  .appeal-stop3 { stop-color: #a78bfa; animation: appealStop3 8s ease-in-out infinite; }
+  @keyframes appealStop1 {
+    0%, 20% { stop-color: #fef08a; }
+    45%, 70% { stop-color: #ffffff; }
+    95%, 100% { stop-color: #fef08a; }
+  }
+  @keyframes appealStop2 {
+    0%, 20% { stop-color: #f472b6; }
+    45%, 70% { stop-color: #ffffff; }
+    95%, 100% { stop-color: #f472b6; }
+  }
+  @keyframes appealStop3 {
+    0%, 20% { stop-color: #a78bfa; }
+    45%, 70% { stop-color: #ffffff; }
+    95%, 100% { stop-color: #a78bfa; }
   }
 </style>

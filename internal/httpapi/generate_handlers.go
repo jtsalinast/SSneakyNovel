@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"showmethestory/internal/agent"
 	"showmethestory/internal/config"
@@ -27,7 +28,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	section := r.PathValue("section")
 	switch section {
-	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "pre_planning":
+	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "pre_planning":
 	default:
 		// Per-category worldview sections (wv_geography, wv_faction, ...) are
 		// also valid — see agent.WorldviewCategoryBySection.
@@ -57,6 +58,9 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		// Per-category worldview section (wv_geography, ...): the frontend can
 		// pass the category explicitly; otherwise it is derived from the key.
 		WorldviewCategory string `json:"worldview_category"`
+		// Creativity level for the differentiating-idea generator (1 Pragmatic ..
+		// 5 Disruptive); ignored by every other section.
+		Creativity int `json:"creativity"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.endTask()
@@ -75,6 +79,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		CharacterID:       body.CharacterID,
 		OrgID:             body.OrgID,
 		WorldviewCategory: body.WorldviewCategory,
+		CreativityLevel:   body.Creativity,
 		Ctx:               h.taskCtx, // snapshot: the caller holds the task lock
 	}
 	if err := h.validateSectionGen(req); err != nil {
@@ -162,7 +167,7 @@ func (h *Handlers) normalizeSectionGen(req SectionGenRequest) (config.StoryConfi
 	// that *produce* a story idea must never require one: they are seeded from
 	// the other novel parameters already entered. Everything else needs the
 	// story idea as its generation seed.
-	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "pre_planning" {
+	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "reader_expectation" && req.Section != "differentiating_idea" && req.Section != "pre_planning" {
 		return storyCfg, errors.New("story_idea_required")
 	}
 	return storyCfg, nil
@@ -327,6 +332,10 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 			err = h.generateAudienceProfile(ctx, &storyCfg)
 		case "inspirational_pieces":
 			err = h.generateInspirationalPieces(ctx, &storyCfg)
+		case "reader_expectation":
+			err = h.generateReaderExpectation(ctx, &storyCfg)
+		case "differentiating_idea":
+			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -396,6 +405,10 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 			err = h.generateAudienceProfile(ctx, &storyCfg)
 		case "inspirational_pieces":
 			err = h.generateInspirationalPieces(ctx, &storyCfg)
+		case "reader_expectation":
+			err = h.generateReaderExpectation(ctx, &storyCfg)
+		case "differentiating_idea":
+			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -465,6 +478,12 @@ func sectionLabel(section, lang string) string {
 	case "inspirational_pieces":
 
 		return "inspirational pieces"
+	case "reader_expectation":
+
+		return "target reader's expectation"
+	case "differentiating_idea":
+
+		return "differentiating idea"
 	case "pre_planning":
 
 		return "pre-planning (book plan)"
@@ -472,6 +491,19 @@ func sectionLabel(section, lang string) string {
 
 		return "relations"
 	}
+}
+
+// forcedSectionCreativity extracts the optional creativity level carried by a
+// forced generate_section tool call (from a [generate-section:X;creativity=N]
+// tag) so the chat fast path forwards it to the differentiating-idea generator.
+func forcedSectionCreativity(call *agent.ToolCall) int {
+	var params struct {
+		Creativity int `json:"creativity"`
+	}
+	if call != nil {
+		_ = json.Unmarshal(call.Arguments, &params)
+	}
+	return params.Creativity
 }
 
 // storyParamsContext assembles the full novel parameters (including the story
@@ -489,10 +521,12 @@ func storyParamsContext(sc *config.StoryConfig, lang string) string {
 
 func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) error {
 	var b strings.Builder
-	b.WriteString("You are a literary consultant. Based on the work parameters below, propose the central theme, one recurring literary motif and a fitting tone for this work:\n")
+	b.WriteString("You are a literary consultant. Based on the work parameters below, propose the central theme, one recurring literary motif, a fitting tone and the philosophical/operational dilemma at the heart of this work:\n")
 	b.WriteString("- \"theme\": the novel's central idea stated as a short thematic statement (one clause, no explanations);\n")
 	b.WriteString("- \"motif\": one concrete recurring image or device that carries that theme (a short phrase naming one or two key images, no explanations);\n")
-	b.WriteString("- \"tone\": 2-4 mood adjectives describing the work's emotional register, comma-separated.\n")
+	b.WriteString("- \"tone\": 2-4 mood adjectives describing the work's emotional register, comma-separated;\n")
+	b.WriteString("- \"philosophical_dilemma\": the core dilemma the plot revolves around, stated as an unavoidable choice between two legitimate but incompatible values or positions (philosophical, moral and/or operational/practical), 1-3 sentences; it must be dramatizable — something the protagonist is forced to decide through action, not abstract commentary. Ground it in the genre's conventions and the target audience above;\n")
+	b.WriteString("- \"reader_expectation\": what the TARGET READER of this genre/audience band expects to find: the mandatory genre conventions and obligatory motifs this book must honor, plus the emotional payoff they sign up for; 3-6 short lines separated by newlines.\n")
 
 	wroteParams := false
 	if t := strings.TrimSpace(sc.Type); t != "" {
@@ -546,13 +580,15 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 	if !wroteParams {
 		b.WriteString("No parameters were provided; draw broadly from classic and modern literature (rebirth, doubles, thresholds, water & purification, mirrors, revenge, homecoming, forbidden love...), keeping theme, motif and tone coherent with each other.\n")
 	}
-	schema := `{"theme": "...", "motif": "...", "tone": "..."}`
+	schema := `{"theme": "...", "motif": "...", "tone": "...", "philosophical_dilemma": "...", "reader_expectation": "..."}`
 	b.WriteString("\nOutput only one JSON object, no other text, no code fences. Format: " + schema)
 
 	var out struct {
-		Theme string `json:"theme"`
-		Motif string `json:"motif"`
-		Tone  string `json:"tone"`
+		Theme                string `json:"theme"`
+		Motif                string `json:"motif"`
+		Tone                 string `json:"tone"`
+		PhilosophicalDilemma string `json:"philosophical_dilemma"`
+		ReaderExpectation    string `json:"reader_expectation"`
 	}
 	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
 		return err
@@ -560,14 +596,17 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 	theme := strings.TrimSpace(out.Theme)
 	motif := strings.TrimSpace(out.Motif)
 	tone := strings.TrimSpace(out.Tone)
-	if theme == "" && motif == "" && tone == "" {
+	dilemma := strings.TrimSpace(out.PhilosophicalDilemma)
+	expectation := strings.TrimSpace(out.ReaderExpectation)
+	if theme == "" && motif == "" && tone == "" && dilemma == "" && expectation == "" {
 		return errEmptyGeneration
 	}
 
 	newCfg := *h.cfg
 	newCfg.Story = *sc
-	// The Theme & Motif Generate button fills the three fields of its card:
-	// Theme, Literary motif and Tone. Only non-empty LLM answers overwrite.
+	// The Theme & Motif Generate button fills the fields of its card:
+	// Theme, Literary motif, Tone, Philosophical/operational dilemma and
+	// Target reader's expectation. Only non-empty LLM answers overwrite.
 	if theme != "" {
 		newCfg.Story.Theme = theme
 	}
@@ -576,6 +615,12 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 	}
 	if tone != "" {
 		newCfg.Story.Tone = tone
+	}
+	if dilemma != "" {
+		newCfg.Story.PhilosophicalDilemma = dilemma
+	}
+	if expectation != "" {
+		newCfg.Story.ReaderExpectation = expectation
 	}
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
@@ -595,7 +640,10 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 
 func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.StoryConfig) error {
 	var b strings.Builder
-	b.WriteString("You are a novel planning assistant. From the work parameters below, write a coherent story idea of 120-220 words in English: cover the world, the protagonist's situation, the central conflict and the story's direction; rely only on these parameters and never contradict them. Skip any parameter that is empty.\n\n")
+	b.WriteString("You are a novel planning assistant. From the work parameters below, write a coherent story idea of 120-220 words in English (cover the world, the protagonist's situation, the central conflict and the story's direction), plus the narrative forces in tension, an elevator pitch and a lighthouse sentence; rely only on these parameters and never contradict them. Skip any parameter that is empty.\n\n")
+		b.WriteString("- \"forces_in_tension\": the driving forces FOR the work's thesis (allies, momentum, values propelling it) and the opposing forces AGAINST it (antagonists, systemic resistance, inner contradictions), stated as 2 short paired groups separated by \" || \";\n")
+	b.WriteString("- \"elevator_pitch\": a 2-4 sentence high-concept hook that sells this book to a stranger;\n")
+	b.WriteString("- \"lighthouse_sentence\": ONE immutable guiding sentence — the story's fixed point / core question every chapter must navigate by;\n\n")
 
 	addPair := func(zhLbl, enLbl, v string) {
 		if v = strings.TrimSpace(v); v == "" {
@@ -618,6 +666,8 @@ func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.S
 	}
 	addPair("/make", "Working title", sc.Title)
 	addPair("and", "Theme & motif", strings.TrimSpace(sc.EffectiveMotif()+" | "+sc.Theme))
+	addPair("", "Philosophical/operational dilemma", sc.PhilosophicalDilemma)
+	addPair("", "Target reader's expectation", sc.ReaderExpectation)
 	addPair("", "Tone", sc.Tone)
 	if lbl := lengthLabelEN(sc.StoryLength); lbl != "" {
 		chMin, chMax := config.SuggestedChaptersByLength(sc.StoryLength)
@@ -667,15 +717,18 @@ func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.S
 		addPair("otherdirection", "Gender lean", "balanced")
 	}
 	if bt := strings.TrimSpace(sc.StoryIdea); bt != "" {
-		b.WriteString("Existing story idea (rewrite/expand it, but keep it consistent with the parameters above):\n" + bt + "\n")
+		b.WriteString("Existing story idea (rewrite/expand it, but keep it consistent with the parameters above; regenerate the forces/pitch/lighthouse fresh from the rewritten idea):\n" + bt + "\n")
 
 	}
 	b.WriteString("When some parameters are missing, still ground the story idea in whatever was provided.\n")
 
-	b.WriteString(jsonRule(h.cfg.Language, `{"story_idea": "..."}`))
+	b.WriteString(jsonRule(h.cfg.Language, `{"story_idea": "...", "forces_in_tension": "...", "elevator_pitch": "...", "lighthouse_sentence": "..."}`))
 
 	var out struct {
-		StoryIdea string `json:"story_idea"`
+		StoryIdea          string `json:"story_idea"`
+		ForcesInTension    string `json:"forces_in_tension"`
+		ElevatorPitch      string `json:"elevator_pitch"`
+		LighthouseSentence string `json:"lighthouse_sentence"`
 	}
 	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
 		return err
@@ -688,6 +741,225 @@ func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.S
 	newCfg := *h.cfg
 	newCfg.Story = *sc
 	newCfg.Story.StoryIdea = generated
+	// The Story idea card Generate button fills its whole card: abstract
+	// overview (story idea), forces in tension, elevator pitch and lighthouse
+	// sentence. Only non-empty LLM answers overwrite.
+	if v := strings.TrimSpace(out.ForcesInTension); v != "" {
+		newCfg.Story.ForcesInTension = v
+	}
+	if v := strings.TrimSpace(out.ElevatorPitch); v != "" {
+		newCfg.Story.ElevatorPitch = v
+	}
+	if v := strings.TrimSpace(out.LighthouseSentence); v != "" {
+		newCfg.Story.LighthouseSentence = v
+	}
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
+}
+
+// —— reader_expectation (Theme & Motif card: target reader's expectation) ——
+
+// generateReaderExpectation produces the "Target reader's expectation" field:
+// what the readers of this genre/audience band explicitly expect to find,
+// including mandatory genre conventions and obligatory motifs/conventions
+// ("conveniencias") the book must honor. It has its own Generate button in
+// the Theme & Motif card and is seeded from the other novel parameters (it
+// never requires a story idea). The result is stored in
+// Story.ReaderExpectation and injected into outline/writing prompts via
+// NovelParametersBlock, so it genuinely steers generation quality.
+func (h *Handlers) generateReaderExpectation(ctx context.Context, sc *config.StoryConfig) error {
+	var b strings.Builder
+	b.WriteString("You are a commercial fiction analyst. Based on the work parameters below, write the TARGET READER'S EXPECTATION for this book: what a reader who buys this genre/subgenre for this audience band expects to experience, and what would make them feel cheated if absent.\n")
+	b.WriteString("Cover, as compact bullet-like sentences separated by newlines (5-8 lines total):\n")
+	b.WriteString("- the 2-4 mandatory genre conventions this book MUST honor (promise structure, required scenes/elements);\n")
+	b.WriteString("- the obligatory motifs/themes the genre canon touches (the \"must-hit\" beats);\n")
+	b.WriteString("- the emotional payoff the target reader signs up for, and the pacing they expect;\n")
+	b.WriteString("- 1-2 fresh angles that satisfy those expectations without being cliché.\n")
+	b.WriteString("Ground every line in the concrete genre, subgenre and target audience given; never contradict them. Write in English.\n\n")
+
+	wroteParams := false
+	addLine := func(label, v string) {
+		if v = strings.TrimSpace(v); v == "" {
+			return
+		}
+		b.WriteString(label + ": " + v + "\n")
+		wroteParams = true
+	}
+	addLine("Genre", sc.Type)
+	for _, part := range config.SplitSubgenreList(sc.Subgenre) {
+		addLine("Subgenre", part)
+	}
+	addLine("Theme", sc.Theme)
+	addLine("Literary motif", sc.EffectiveMotif())
+	addLine("Tone", sc.Tone)
+	addLine("Philosophical/operational dilemma", sc.PhilosophicalDilemma)
+	addLine("Conflict scale", sc.EffectiveConflict())
+	addLine("Protagonist type", sc.EffectiveProtagonist())
+	if v := strings.TrimSpace(sc.TargetAudience); v != "" {
+		addLine("Target audience", config.AudienceLabel(v, "en"))
+	}
+	addLine("Ideal reader profile", sc.AudienceProfile)
+	addLine("World darkness", config.WorldDarknessLabel(sc.WorldDarkness, "en"))
+	addLine("Existing story idea (background only)", sc.StoryIdea)
+	if !wroteParams {
+		b.WriteString("No parameters were provided; infer a plausible genre/audience combination and state its expectations clearly.\n")
+	}
+	b.WriteString("\nOutput only one JSON object, no other text, no code fences. Format: {\"reader_expectation\": \"...\"}")
+
+	var out struct {
+		ReaderExpectation string `json:"reader_expectation"`
+	}
+	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
+		return err
+	}
+	expectation := strings.TrimSpace(out.ReaderExpectation)
+	if expectation == "" {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	newCfg.Story.ReaderExpectation = expectation
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
+}
+
+// —— differentiating_idea (Story appeal card: unique selling angle) ——
+
+// buildDifferentiatingPrompt assembles the differentiating-idea prompt for a
+// creativity level (1 Pragmatic .. 5 Disruptive). Shared by the background
+// generator below and the synchronous /api/generate/differentiating_idea/suggest
+// handler used by the Story appeal card's "Sugerir" button.
+func buildDifferentiatingPrompt(sc *config.StoryConfig, lang string, level int) string {
+	if level < 1 || level > 5 {
+		level = 3
+	}
+	label := agent.CreativityLevelLabel(level)
+	prompt := storyParamsContext(sc, lang)
+	prompt += fmt.Sprintf("\nBased on the novel parameters above, write ONE \"differentiating idea\" for this book: the unique selling angle that sets it apart from every other title in its genre/subgenre for its target audience. Creativity level: %d (%s). ", level, label)
+	switch level {
+	case 1:
+		prompt += "Pragmatic: stay inside proven market formulas; differentiate only through a solid, familiar execution twist readers already trust.\n"
+	case 2:
+		prompt += "Conservative: a well-known trope deliberately inverted or recombined with one adjacent-genre element; still instantly legible on the shelf.\n"
+	case 4:
+		prompt += "Bold: a high-concept mashup or unexpected POV/structure choice that challenges genre norms while keeping the core promise intact.\n"
+	case 5:
+		prompt += "Disruptive: break the genre's rules on purpose — a form, premise or narrative contract that could not exist in a conventional book of this shelf, yet still delivers the genre's emotional payoff.\n"
+	default:
+		prompt += "Balanced: one clear, marketable twist on the genre conventions that feels fresh but never alienates the target reader.\n"
+	}
+	prompt += "Write 2-4 punchy sentences stating what makes THIS book the only one of its kind; name the conventions it honors and the one it breaks. Do not summarize the plot."
+	prompt += jsonRule(lang, `{"differentiating_idea": "..."}`)
+	return prompt
+}
+
+// parseDifferentiatingIdea extracts the idea text out of a raw LLM answer
+// (JSON object preferred, plain text fallback). Returns "" when unusable.
+func parseDifferentiatingIdea(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if extracted := llm.ExtractJSON(content); extracted != "" {
+		var out struct {
+			DifferentiatingIdea string `json:"differentiating_idea"`
+		}
+		if err := json.Unmarshal([]byte(extracted), &out); err == nil && strings.TrimSpace(out.DifferentiatingIdea) != "" {
+			return strings.TrimSpace(out.DifferentiatingIdea)
+		}
+	}
+	// Fallback: the model ignored the JSON rule — keep the plain text.
+	return content
+}
+
+// PostDifferentiatingIdeaSuggest is the SYNCHRONOUS counterpart of the
+// differentiating_idea background section: the Story appeal card's "Sugerir"
+// flow calls it with the current live payload + slider level and receives the
+// suggestion immediately, WITHOUT starting a global task, so it neither blocks
+// nor gets blocked by other Generate buttons (the design requirement: this
+// field is affected only by its own button). Persisting the accepted idea
+// happens through the normal Save/PUT /api/config path.
+func (h *Handlers) PostDifferentiatingIdeaSuggest(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	var body struct {
+		Story      *config.StoryConfig `json:"story"`
+		Creativity int                 `json:"creativity"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	sc := h.cfg.Story
+	if body.Story != nil {
+		sc = *body.Story
+	}
+	level := body.Creativity
+	if level < 1 || level > 5 {
+		level = 3
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	prompt := buildDifferentiatingPrompt(&sc, h.cfg.Language, level)
+	content := llm.CallAPITemperature(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger, agent.CreativityTemperature(level))
+	idea := parseDifferentiatingIdea(content)
+	if idea == "" {
+		h.writeErrorReq(w, r, http.StatusBadGateway, "empty_generation", "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"differentiating_idea": idea,
+		"creativity_level":     level,
+	})
+}
+
+// generateDifferentiatingIdea writes the "differentiating idea": the single
+// angle that sets this book apart from everything else on its genre shelf.
+// Unlike every other generator it is driven by an explicit creativity level
+// (1 Pragmatic .. 5 Disruptive, from the UI slider): the level both shapes the
+// prompt ambition and sets the sampling temperature (agent.CreativityTemperature),
+// so low levels propose shelf-tested twists and high levels propose
+// category-breaking ones. This section ONLY fills differentiating_idea — it
+// never touches the other fields, and no other button overwrites it.
+func (h *Handlers) generateDifferentiatingIdea(ctx context.Context, sc *config.StoryConfig, level int) error {
+	if level < 1 || level > 5 {
+		level = 3
+	}
+	prompt := buildDifferentiatingPrompt(sc, h.cfg.Language, level)
+
+	content := llm.CallAPITemperature(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger, agent.CreativityTemperature(level))
+	idea := parseDifferentiatingIdea(content)
+	if idea == "" {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	newCfg.Story.DifferentiatingIdea = idea
+	newCfg.Story.CreativityLevel = level
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
@@ -779,19 +1051,28 @@ func (h *Handlers) llmJSON(ctx context.Context, prompt string, out any) error {
 
 // —— audience_profile: free-text ideal-reader description (Theme & Motif block) ——
 
+// It fills BOTH fields of the "Ideal reader profile" card together (user
+// request): audience_profile AND reader_expectation — the latter moved from
+// the Theme & Motif card to this section. The expectation half covers the
+// mandatory genre conventions, the obligatory must-hit motifs and the
+// emotional payoff the target reader signs up for.
 func (h *Handlers) generateAudienceProfile(ctx context.Context, sc *config.StoryConfig) error {
 	prompt := storyParamsContext(sc, h.cfg.Language)
-	prompt += "\nBased on the work parameters and target-age band above, write an \"ideal reader profile\" for this work: the reader's age and identity, reading habits, preferred genres and deal-breakers, and why this book would attract them (4-6 actionable sentences)."
+	prompt += "\nBased on the work parameters and target-age band above, produce TWO fields for this work:\n" +
+		"- \"audience_profile\": the ideal reader's age and identity, reading habits, preferred genres and deal-breakers, and why this book would attract them (4-6 actionable sentences).\n" +
+		"- \"reader_expectation\": what the TARGET READER of this genre/subgenre/audience band expects to find: the 2-4 mandatory genre conventions this book MUST honor, the obligatory motifs/themes the genre canon touches (the must-hit beats), the emotional payoff and pacing they sign up for, and 1-2 fresh angles that satisfy those expectations without being cliché (5-8 short lines separated by newlines). Never contradict the given genre, subgenre or target audience."
 
-	prompt += jsonRule(h.cfg.Language, `{"audience_profile": "..."}`)
+	prompt += jsonRule(h.cfg.Language, `{"audience_profile": "...", "reader_expectation": "..."}`)
 
 	var out struct {
-		AudienceProfile string `json:"audience_profile"`
+		AudienceProfile   string `json:"audience_profile"`
+		ReaderExpectation string `json:"reader_expectation"`
 	}
 	if err := h.llmJSON(ctx, prompt, &out); err != nil {
 		return err
 	}
 	profile := strings.TrimSpace(out.AudienceProfile)
+	expectation := strings.TrimSpace(out.ReaderExpectation)
 	if profile == "" {
 		return errEmptyGeneration
 	}
@@ -799,6 +1080,11 @@ func (h *Handlers) generateAudienceProfile(ctx context.Context, sc *config.Story
 	newCfg := *h.cfg
 	newCfg.Story = *sc
 	newCfg.Story.AudienceProfile = profile
+	// Only overwrite the expectation when the model actually returned it, so a
+	// hand-written value is never wiped by a partial generation.
+	if expectation != "" {
+		newCfg.Story.ReaderExpectation = expectation
+	}
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
