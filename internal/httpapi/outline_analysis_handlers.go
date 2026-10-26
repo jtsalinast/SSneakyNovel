@@ -100,7 +100,7 @@ func (h *Handlers) PostOutlineAnalysisApply(w http.ResponseWriter, r *http.Reque
 		"status":   "applied",
 		"id":       body.ID,
 		"chapters": changed,
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 
@@ -156,7 +156,7 @@ func (h *Handlers) PostOutlineAnalysisEditRecommendation(w http.ResponseWriter, 
 	h.broadcastProgress()
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "updated",
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 
@@ -210,7 +210,7 @@ func (h *Handlers) PostOutlineAnalysisPropose(w http.ResponseWriter, r *http.Req
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "proposed",
 		"id":       s.ID,
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 

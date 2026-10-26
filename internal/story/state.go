@@ -245,10 +245,19 @@ type Progress struct {
 	// OutlineAnalysis is the last bestseller-editor pass over the full outline
 	// (POST /api/outline/analyze); nil until the author runs an analysis.
 	OutlineAnalysis *OutlineAnalysisReport `json:"outline_analysis,omitempty"`
-	// ScenePlanAnalysis is the last bestseller-editor pass over the pending
-	// chapter scene plans (POST /api/scene-plan/analyze); nil until the author
-	// runs an analysis.
-	ScenePlanAnalysis *ScenePlanAnalysisReport `json:"scene_plan_analysis,omitempty"`
+	// ScenePlanAnalysisOld is the DEPRECATED single-report shape of the
+	// scene-plan critic (before reports were split per chapter). It only exists
+	// so progress.json files written by older builds still decode; on load,
+	// migrateScenePlanAnalyses moves it into ScenePlanAnalysis under key 0 and
+	// clears it. New code must never read or write this field.
+	ScenePlanAnalysisOld *ScenePlanAnalysisReport `json:"scene_plan_analysis,omitempty"`
+	// ScenePlanAnalysis holds one bestseller-editor pass per chapter beat sheet
+	// (POST /api/chapters/{n}/scene-plan/analyze) plus, under key 0, the global
+	// pass over all pending plans (POST /api/scene-plan/analyze). Keyed by
+	// 1-based chapter number so each chapter's critique card stays isolated:
+	// switching from chapter 6 to 5 can never echo chapter 6's report. Nil map
+	// until the author runs an analysis.
+	ScenePlanAnalyses map[int]*ScenePlanAnalysisReport `json:"scene_plan_analyses,omitempty"`
 	// ActAnalyses holds one bestseller-editor pass per pre-planning act whose
 	// chapters have just finished being drafted (the writing pipeline triggers
 	// it when the last chapter of an act is confirmed; POST /api/acts/analyze
@@ -351,11 +360,31 @@ func loadProgressUnlocked(path string) (*Progress, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("analizar progreso: %w", err)
 	}
+	migrateScenePlanAnalyses(&p)
 
 	if err := loadChapterContents(path, &p); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// migrateScenePlanAnalyses upgrades the legacy single scene-plan report
+// (Progress.ScenePlanAnalysisOld, written by builds that kept ONE global
+// report) into the per-chapter map under key 0 — the slot reserved for the
+// global pass. The legacy field is cleared so the next save only writes the
+// new shape. Without this, projects analysed before the per-chapter split
+// would silently lose their stored critique after an update.
+func migrateScenePlanAnalyses(p *Progress) {
+	if p == nil || p.ScenePlanAnalysisOld == nil {
+		return
+	}
+	if p.ScenePlanAnalyses == nil {
+		p.ScenePlanAnalyses = map[int]*ScenePlanAnalysisReport{}
+	}
+	if _, ok := p.ScenePlanAnalyses[0]; !ok {
+		p.ScenePlanAnalyses[0] = p.ScenePlanAnalysisOld
+	}
+	p.ScenePlanAnalysisOld = nil
 }
 
 // SaveProgress persists chapter prose to per-chapter files (only chapters

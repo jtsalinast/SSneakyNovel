@@ -82,6 +82,25 @@ var messageCatalog = map[string]map[string]string{
 	"log.sceneplan_analyze_failed": {
 
 		LangEN: "Scene-plan analysis failed: %s"},
+	// Per-chapter re-analysis outcomes (PostChapterScenePlanAnalyze). The
+	// empty/accepted cases used to surface only as the generic failure log
+	// above with a raw error string; now they have dedicated messages.
+	"log.sceneplan_analyze_empty_chapter": {
+
+		LangEN: "Chapter %d has no beat sheet to analyze — generate its scene plan first"},
+	"log.sceneplan_analyze_chapter_accepted": {
+
+		LangEN: "Chapter %d is already accepted — reopen it or regenerate its scene plan before re-analyzing"},
+	"log.sceneplan_analyze_done_ch": {
+
+		LangEN: "Scene-plan analysis complete for chapter %d"},
+	// HTTP 400 reasons for POST /api/chapters/{n}/scene-plan/analyze.
+	"scene_plan_empty_chapter": {
+
+		LangEN: "Chapter %d has no beat sheet to analyze — generate its scene plan first"},
+	"scene_plan_chapter_accepted": {
+
+		LangEN: "Chapter %d is already accepted — reopen it or regenerate its scene plan before re-analyzing"},
 	"log.sceneplan_analyze_done": {
 
 		LangEN: "Scene-plan analysis complete — %d editorial suggestions"},

@@ -50,6 +50,7 @@ type Handlers struct {
 	taskMu             sync.Mutex
 	taskRunning        bool
 	activeWork         int
+	stuckSince         time.Time // first moment reconcileTaskState saw counters claim work while the task stack is empty; zero otherwise
 	taskCtx            context.Context
 	generationID       uint64 // bumped on every task start/stop; see tryStartTask
 	taskCancel         context.CancelFunc
@@ -191,9 +192,25 @@ func (h *Handlers) writeErrorReq(w http.ResponseWriter, r *http.Request, code in
 }
 
 func (h *Handlers) writeJSON(w http.ResponseWriter, code int, v interface{}) {
+	// Encode the payload to a buffer FIRST. The previous streaming encoder
+	// wrote bytes straight to the socket while ranging over live state maps
+	// (e.g. scene_plan_analyses); if a background task mutated one of those
+	// maps mid-encode the resulting concurrent map read/write is an
+	// unrecoverable runtime throw that kills the whole server process — the
+	// browser then saw exactly this symptom: GETs keep answering for a moment,
+	// every button stops doing anything, and chapter loads hang forever.
+	// Buffering keeps the socket pristine until the payload is complete, so a
+	// marshal error (or a panic caught by the recovery middleware) can still be
+	// reported as a clean 500 instead of a truncated body that leaves frontend
+	// spinners waiting on a response that will never settle.
+	buf, err := json.Marshal(v)
+	if err != nil {
+		buf = []byte(`{"error":"json_encode_failed"}`)
+		code = http.StatusInternalServerError
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
+	w.Write(buf)
 }
 
 // newTaskTokenTracker builds the fresh per-task tracker and publishes it under
@@ -361,9 +378,128 @@ func (h *Handlers) activeWorkCount() int {
 	return h.activeWork
 }
 
+// reconcileTaskState is the server-side self-heal for the task bookkeeping.
+// Every LLM handler pairs tryStartTask() with `defer/go defer h.endTask()` and
+// logger.TaskStart/TaskEnd, but a panic inside one of those bodies skips both
+// endTask AND TaskEnd — leaving activeWork > 0 forever while the broadcaster's
+// task stack is empty. From then on every action POST is rejected with 409
+// ("task_running_wait") even though nothing runs: the UI stays clickable but
+// no button does anything anymore. /api/status is polled by the frontend
+// whenever it believes a task runs, so checking the invariant there (active
+// work claimed but zero live tasks on the broadcaster) heals the stuck counter
+// without a restart. The 3s grace keeps a legitimate in-flight start (the
+// window between tryStartTask and the goroutine's TaskStart emit) from being
+// mistaken for a leak.
+func (h *Handlers) reconcileTaskState() {
+	if !h.isTaskRunning() {
+		return
+	}
+	// A live task is one the broadcaster's TaskStart/TaskEnd stack still knows
+	// about. When the stack is empty AND the task context is alive, work may
+	// still be legitimately running: background bodies launched with
+	// context.Background() (scene-plan analysis, act critique) never observe
+	// the ceiling firing, and non-LLM phases (knowledge sync after endTask,
+	// plain file writes guarded by rejectIfTaskRunning) emit no task_start at
+	// all. Healing instantly on an empty stack would cancel those in-flight
+	// operations mid-write — worse than the stuck counter it tries to fix. So
+	// we only heal on proven signatures:
+	//   1. the task context is done (ceiling fired / Stop requested) yet
+	//      endTask never ran to reset the counters; or
+	//   2. the counters claim work while the task stack has been empty for
+	//      longer than a grace window — the fingerprint of a panicked or lost
+	//      background body whose deferred TaskEnd/endTask were skipped (the
+	//      "UI stays clickable but every POST answers 409 forever" symptom).
+	h.taskMu.Lock()
+	if h.taskCtx == nil {
+		h.taskCtx = context.Background()
+	}
+	cur := h.logger.CurrentTask()
+	ctxDone := h.taskCtx.Err() != nil
+	switch {
+	case cur != "":
+		// Task name still stacked: if its context is alive this is a normal
+		// running task — leave it alone. If the context finished, the goroutine
+		// may be unwinding right now; give it until the grace window expires.
+		if !ctxDone || time.Since(h.taskCtxDeadline()) < 3*time.Second {
+			h.stuckSince = time.Time{}
+			h.taskMu.Unlock()
+			return
+		}
+	case !ctxDone:
+		// Counters claim work, stack is empty, context is alive: could be a
+		// legitimate non-emitting phase. Start/keep the grace timer and only
+		// heal if this contradiction persists past it.
+		if h.stuckSince.IsZero() {
+			h.stuckSince = time.Now()
+			h.taskMu.Unlock()
+			return
+		}
+		if time.Since(h.stuckSince) < 5*time.Second {
+			h.taskMu.Unlock()
+			return
+		}
+	default:
+		// ctxDone with an empty stack: endTask was definitively skipped.
+	}
+	h.stuckSince = time.Time{}
+	aw := h.activeWork
+	h.activeWork = 0
+	h.taskRunning = false
+	cancelled := false
+	if h.taskCancel != nil {
+		h.taskCancel()
+		h.taskCancel = nil
+		cancelled = true
+	}
+	h.generationID++
+	h.taskMu.Unlock()
+	devlog.Log("reconcileTaskState healed stuck counters activeWork=%d cancelled=%v", aw, cancelled)
+	h.logger.Emit("task_end", map[string]interface{}{"task": "reconciled", "success": false})
+}
+
+// taskContextDone reports whether the current task's context has already been
+// cancelled or hit its wall-clock ceiling while the counters still claim work.
+func (h *Handlers) taskContextDone() bool {
+	h.taskMu.Lock()
+	ctx := h.taskCtx
+	h.taskMu.Unlock()
+	return ctx != nil && ctx.Err() != nil
+}
+
+// taskCtxDeadline reports when the current task's wall-clock ceiling fires.
+// A context without a deadline (ceiling disabled) reads as "started long ago"
+// so the reconciliation grace never blocks. Callers must hold taskMu.
+func (h *Handlers) taskCtxDeadline() time.Time {
+	if h.taskCtx == nil {
+		return time.Now().Add(-time.Hour)
+	}
+	if d, ok := h.taskCtx.Deadline(); ok {
+		// Deadline is absolute; approximate the start instant from the remaining
+		// budget only to detect FRESH tasks: any task whose deadline is more than
+		// its full ceiling away just started. Simpler and safe: treat "no way to
+		// know" as old (heal allowed), since a fresh task always has CurrentTask
+		// set within milliseconds anyway.
+		return d.Add(-h.taskCeilingOrDefault())
+	}
+	return time.Now().Add(-time.Hour)
+}
+
+func (h *Handlers) taskCeilingOrDefault() time.Duration {
+	if c := h.taskCeiling(); c > 0 {
+		return c
+	}
+	return llm.MaxTaskDuration
+}
+
 // rejectIfTaskRunning in AI travelexpectcompileclassplease, defendintentoutsideinteract.
 // return true tablealreadywriteenter 409 noiseshould, usesquareshouldconnect return.
 func (h *Handlers) rejectIfTaskRunning(w http.ResponseWriter, r *http.Request) bool {
+	// Reconcile first: if a background body died before endTask, the counters
+	// stay stuck and EVERY guarded write would 409 forever — exactly the
+	// "the UI is clickable but no button does anything" symptom. GET-only
+	// endpoints keep answering during the stuck window, so this is often the
+	// only request shape that can still reach the heal logic.
+	h.reconcileTaskState()
 	if h.isTaskRunning() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_locked")
 		return true
@@ -623,7 +759,7 @@ func (h *Handlers) DeletePendingConfigChanges(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handlers) GetProgress(w http.ResponseWriter, r *http.Request) {
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 // GetChapterContent returns one chapter with full prose content.
@@ -948,7 +1084,7 @@ func (h *Handlers) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.state = &story.Progress{Phase: "outline"}
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 func (h *Handlers) PostOutlineConfirm(w http.ResponseWriter, r *http.Request) {
@@ -973,7 +1109,7 @@ func (h *Handlers) PostOutlineConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.outline_confirmed")
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 func (h *Handlers) PostOutlineRevise(w http.ResponseWriter, r *http.Request) {
@@ -1249,7 +1385,7 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 		}
 		h.logger.SuccessKey("log.chapter_kept_review", ch.Num)
 		h.broadcastProgress()
-		h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+		h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	case "retry":
 		if h.state.PendingWritingConflict == nil {
 			h.writeErrorReq(w, r, http.StatusBadRequest, "writing_conflict_none")
@@ -1463,7 +1599,7 @@ func (h *Handlers) PostChapterConfirm(w http.ResponseWriter, r *http.Request) {
 	// Bestseller act critic: if this manual confirmation closes a
 	// pre-planning act, launch the act analysis in the background.
 	h.maybeAnalyzeCompletedAct(ch.Num)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
 }
 
@@ -1610,7 +1746,7 @@ func (h *Handlers) PostChapterReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.broadcastProgress()
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 func (h *Handlers) PostChapterEdit(w http.ResponseWriter, r *http.Request) {
@@ -1838,7 +1974,7 @@ func (h *Handlers) DeleteChapter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.chapter_deleted", num)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
 }
 
@@ -1868,7 +2004,7 @@ func (h *Handlers) DeleteOutline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.outline_deleted")
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
 }
 
@@ -1914,7 +2050,7 @@ func (h *Handlers) PutChapterOutline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.chapter_outline_updated", num)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	if len(h.state.Foreshadows) > 0 {
 		background = true
 		go h.runForeshadowOutlineCheck()
@@ -2013,7 +2149,7 @@ func (h *Handlers) DeleteChaptersFrom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.chapters_deleted_from", num, deletedCount)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
 }
 
@@ -2056,7 +2192,21 @@ func (h *Handlers) GetStatus(w http.ResponseWriter, r *http.Request) {
 	if h.cfg != nil {
 		lang = i18n.NormalizeLanguage(h.cfg.Language)
 	}
+	// Self-heal first: the frontend polls /api/status exactly when it believes
+	// a task runs, so this is the only recurring touchpoint that can rescue
+	// stuck counters (a panicked background body never reaches endTask, and
+	// from then on every POST is rejected with 409 — buttons stop doing
+	// anything while GETs keep answering).
+	h.reconcileTaskState()
 	running := h.isTaskRunning()
+	if h.state == nil {
+		// No project selected: /api/status must still answer (the frontend
+		// polls it unconditionally) instead of panicking on the state derefs.
+		h.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"is_task_running": running,
+		})
+		return
+	}
 	totalChapters, _ := chapterProgress(h.state.Chapters)
 	resp := map[string]interface{}{
 		"phase":            h.state.Phase,

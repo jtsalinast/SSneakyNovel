@@ -2888,10 +2888,7 @@ func ReconfirmActChapters(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 		}
 		if len(widened) > 0 {
 			targets = widened
-			clearScenePlanCacheOnEdit(state)
-			if state.ScenePlanAnalysis != nil {
-				state.ScenePlanAnalysis = nil
-			}
+			clearScenePlanCacheOnEdit(state, 0)
 			if serr := SaveProgress(progressPath, state); serr != nil {
 				return targets, serr
 			}

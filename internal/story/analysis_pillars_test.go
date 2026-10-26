@@ -198,8 +198,13 @@ func newMergeTestState() (*Progress, string) {
 				NewTitle: "A+B fused", NewDescription: "folded beats", NewWordsBudget: 1900},
 		},
 	}}}
-	state.ScenePlanAnalysis = rep
+	state.ScenePlanAnalyses = map[int]*ScenePlanAnalysisReport{1: rep}
 	return state, path
+}
+
+// scenePlanTestRep returns the chapter-1 report used by the merge tests.
+func scenePlanTestRep(state *Progress) *ScenePlanAnalysisReport {
+	return state.ScenePlanAnalyses[1]
 }
 
 func TestApplyScenePlanSuggestion_RealMergeDeletesAbsorbedScene(t *testing.T) {
@@ -226,8 +231,8 @@ func TestApplyScenePlanSuggestion_RealMergeDeletesAbsorbedScene(t *testing.T) {
 	if surv.ID != 1 || surv.Title != "A+B fused" || surv.Description != "folded beats" || surv.WordsBudget != 1900 {
 		t.Fatalf("survivor must carry folded content, got %+v", surv)
 	}
-	if state.ScenePlanAnalysis.Suggestions[0].Status != "applied" {
-		t.Fatalf("suggestion should be marked applied, got %q", state.ScenePlanAnalysis.Suggestions[0].Status)
+	if scenePlanTestRep(state).Suggestions[0].Status != "applied" {
+		t.Fatalf("suggestion should be marked applied, got %q", scenePlanTestRep(state).Suggestions[0].Status)
 	}
 	if state.Chapters[0].ScenePlan.Approved {
 		t.Fatal("plan must be un-approved after editing")
@@ -239,7 +244,7 @@ func TestApplyScenePlanSuggestion_InvalidMergeTargetDegradesToReplacement(t *tes
 	defer os.RemoveAll(filepath.Dir(path))
 
 	// Target scene 99 does not exist: degrade to plain replacement, delete nothing.
-	state.ScenePlanAnalysis.Suggestions[0].Recommendations[0].MergeIntoSceneID = 99
+	scenePlanTestRep(state).Suggestions[0].Recommendations[0].MergeIntoSceneID = 99
 	n, err := ApplyScenePlanSuggestion(state, "s1", path)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
@@ -260,7 +265,7 @@ func TestEditScenePlanRecommendation_CancelMerge(t *testing.T) {
 	state, path := newMergeTestState()
 	defer os.RemoveAll(filepath.Dir(path))
 
-	rec := &state.ScenePlanAnalysis.Suggestions[0].Recommendations[0]
+	rec := &scenePlanTestRep(state).Suggestions[0].Recommendations[0]
 	if rec.MergeIntoSceneID != 1 {
 		t.Fatalf("precondition: merge target 1, got %d", rec.MergeIntoSceneID)
 	}

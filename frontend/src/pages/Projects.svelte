@@ -96,7 +96,7 @@
   async function backupProject(name) {
     backupBusy = true;
     try {
-      const response = await apiFetch('/api/projects/' + encodeURIComponent(name) + '/backup');
+      const response = await apiFetch('/api/projects/' + encodeURIComponent(name) + '/backup', { noBody: true });
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement('a');
       link.href = url;

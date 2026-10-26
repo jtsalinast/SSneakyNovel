@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -20,8 +21,9 @@ import (
 // ---------------------------------------------------------------------------
 
 // PostScenePlanAnalyze runs the bestseller-editor pass over all PENDING
-// chapter scene plans in one background task; report persisted on
-// state.ScenePlanAnalysis so the Writing page / plan editor can render it.
+// chapter scene plans in one background task; the report is persisted on
+// state.ScenePlanAnalyses under key 0 (the global slot) so the Writing page /
+// plan editor can render it without leaking into per-chapter cards.
 func (h *Handlers) PostScenePlanAnalyze(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -43,8 +45,17 @@ func (h *Handlers) PostScenePlanAnalyze(w http.ResponseWriter, r *http.Request) 
 	go func() {
 		defer h.endTask()
 		ctx := h.ensureTaskTokens(h.taskCtx)
+		// TaskStart INSIDE the goroutine: emitting it synchronously would let a
+		// client that reacts to the task_start SSE event (e.g. the Writing page
+		// auto-analyzing the selected chapter's beat sheet right after) fire a
+		// second POST while tryStartTask already succeeded but the child task
+		// has not started yet — that request gets 409 and the UI looks dead.
 		h.logger.TaskStart("sceneplan_analyze")
 		err := story.AnalyzePendingScenePlans(ctx, h.apiCfg, h.cfg, h.state, h.settings, h.logger)
+		count := 0
+		if rep := h.state.ScenePlanAnalyses[0]; rep != nil {
+			count = len(rep.Suggestions)
+		}
 		if err == nil {
 			err = story.SaveProgress(h.progressPath, h.state)
 		}
@@ -57,7 +68,7 @@ func (h *Handlers) PostScenePlanAnalyze(w http.ResponseWriter, r *http.Request) 
 			h.logger.TaskEnd("sceneplan_analyze", false)
 			return
 		}
-		h.logger.SuccessKey("log.sceneplan_analyze_done", len(h.state.ScenePlanAnalysis.Suggestions))
+		h.logger.SuccessKey("log.sceneplan_analyze_done", count)
 		h.logger.TaskEnd("sceneplan_analyze", true)
 		h.broadcastProgress()
 	}()
@@ -65,9 +76,9 @@ func (h *Handlers) PostScenePlanAnalyze(w http.ResponseWriter, r *http.Request) 
 }
 
 // PostChapterScenePlanAnalyze runs the bestseller-editor pass restricted to a
-// single chapter's beat sheet. The resulting suggestions are merged into
-// state.ScenePlanAnalysis replacing any previous ones attributed to that
-// chapter, so each chapter gets its own scene-plan critique card.
+// single chapter's beat sheet. The report lands in ITS OWN slot of
+// state.ScenePlanAnalyses (keyed by chapter number), so each chapter carries
+// an isolated scene-plan critique card that never echoes another chapter's.
 func (h *Handlers) PostChapterScenePlanAnalyze(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -76,10 +87,16 @@ func (h *Handlers) PostChapterScenePlanAnalyze(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	idx := story.FindChapterIdx(h.state, num)
-	ch := h.state.Chapters[idx]
-	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
-		h.writeErrorReq(w, r, http.StatusBadRequest, "scene_plan_empty_chapter", num)
+	// Shared rule-set with AnalyzeChapterScenePlan: reject synchronously with
+	// the exact reason (accepted chapter / empty beat sheet) BEFORE claiming
+	// the task and answering 202 — otherwise the failure only surfaced later
+	// as the opaque "log.sceneplan_analyze_failed" toast.
+	if analyzable, reason := story.CheckChapterScenePlanAnalyzable(h.state, num); !analyzable {
+		code := "scene_plan_empty_chapter"
+		if errors.Is(reason, story.ErrChapterScenePlanAccepted) {
+			code = "scene_plan_chapter_accepted"
+		}
+		h.writeErrorReq(w, r, http.StatusBadRequest, code, num)
 		return
 	}
 	if !h.tryStartTask() {
@@ -97,17 +114,33 @@ func (h *Handlers) PostChapterScenePlanAnalyze(w http.ResponseWriter, r *http.Re
 		if err != nil {
 			if ctx.Err() != nil {
 				h.logger.WarnKey("log.sceneplan_analyze_cancelled")
+			} else if code, ok := scenePlanErrCode(err); ok {
+				// Known analyzability reasons get their own localized log line
+				// instead of the generic "analysis failed: <raw error>" one.
+				h.logger.ErrorKey("log.sceneplan_analyze_"+code, num)
 			} else {
 				h.logger.ErrorKey("log.sceneplan_analyze_failed", err)
 			}
 			h.logger.TaskEnd("sceneplan_analyze_ch", false)
 			return
 		}
-		h.logger.SuccessKey("log.sceneplan_analyze_done", num)
+		h.logger.SuccessKey("log.sceneplan_analyze_done_ch", num)
 		h.logger.TaskEnd("sceneplan_analyze_ch", true)
 		h.broadcastProgress()
 	}()
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+// scenePlanErrCode maps the typed analyzability sentinels from the story layer
+// onto i18n log-key suffixes ("empty_chapter"/"chapter_accepted").
+func scenePlanErrCode(err error) (string, bool) {
+	switch {
+	case errors.Is(err, story.ErrChapterScenePlanEmpty):
+		return "empty_chapter", true
+	case errors.Is(err, story.ErrChapterScenePlanAccepted):
+		return "chapter_accepted", true
+	}
+	return "", false
 }
 
 // PostScenePlanAnalysisPropose asks the editor to draft concrete per-scene
@@ -123,7 +156,7 @@ func (h *Handlers) PostScenePlanAnalysisPropose(w http.ResponseWriter, r *http.R
 		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_suggestion_id")
 		return
 	}
-	if h.state.ScenePlanAnalysis == nil {
+	if len(h.state.ScenePlanAnalyses) == 0 {
 		h.writeErrorReq(w, r, http.StatusNotFound, "no_scene_plan_analysis")
 		return
 	}
@@ -141,7 +174,7 @@ func (h *Handlers) PostScenePlanAnalysisPropose(w http.ResponseWriter, r *http.R
 		status := http.StatusInternalServerError
 		code := "propose_failed"
 		switch err.Error() {
-		case "no_scene_plan_analysis", "suggestion_not_found":
+		case "suggestion_not_found":
 			status = http.StatusNotFound
 			code = "suggestion_not_found"
 		case "suggestion_already_applied":
@@ -156,7 +189,7 @@ func (h *Handlers) PostScenePlanAnalysisPropose(w http.ResponseWriter, r *http.R
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "proposed",
 		"id":       s.ID,
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 
@@ -170,7 +203,7 @@ func (h *Handlers) PostScenePlanAnalysisApply(w http.ResponseWriter, r *http.Req
 	if h.rejectIfTaskRunning(w, r) {
 		return
 	}
-	if h.state.ScenePlanAnalysis == nil {
+	if len(h.state.ScenePlanAnalyses) == 0 {
 		h.writeErrorReq(w, r, http.StatusNotFound, "no_scene_plan_analysis")
 		return
 	}
@@ -192,7 +225,7 @@ func (h *Handlers) PostScenePlanAnalysisApply(w http.ResponseWriter, r *http.Req
 		"status":   "applied",
 		"id":       body.ID,
 		"scenes":   changed,
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 
@@ -203,7 +236,7 @@ func (h *Handlers) PostScenePlanAnalysisEditRecommendation(w http.ResponseWriter
 	if !h.ensureProject(w, r) {
 		return
 	}
-	if h.state.ScenePlanAnalysis == nil {
+	if len(h.state.ScenePlanAnalyses) == 0 {
 		h.writeErrorReq(w, r, http.StatusNotFound, "no_scene_plan_analysis")
 		return
 	}
@@ -239,7 +272,7 @@ func (h *Handlers) PostScenePlanAnalysisEditRecommendation(w http.ResponseWriter
 	h.broadcastProgress()
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "updated",
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 
@@ -248,7 +281,17 @@ func (h *Handlers) DeleteScenePlanAnalysis(w http.ResponseWriter, r *http.Reques
 	if !h.ensureProject(w, r) || h.rejectIfTaskRunning(w, r) {
 		return
 	}
-	h.state.ScenePlanAnalysis = nil
+	if v := r.URL.Query().Get("ch"); v != "" {
+		num, err := strconv.Atoi(v)
+		if err != nil || num <= 0 {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+			return
+		}
+		delete(h.state.ScenePlanAnalyses, num)
+		delete(h.state.ScenePlanAnalyses, 0)
+	} else {
+		h.state.ScenePlanAnalyses = nil
+	}
 	if err := story.SaveProgress(h.progressPath, h.state); err != nil {
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err)
 		return
@@ -383,7 +426,7 @@ func (h *Handlers) PostActInterventionsPropose(w http.ResponseWriter, r *http.Re
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "proposed",
 		"id":       s.ID,
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 
@@ -437,7 +480,7 @@ func (h *Handlers) PostActInterventionsApply(w http.ResponseWriter, r *http.Requ
 		"status":        "applied",
 		"id":            body.ID,
 		"interventions": applied,
-		"progress":      story.ProgressView(h.state),
+		"progress":      story.SnapshotProgress(h.state),
 	})
 }
 
@@ -628,7 +671,7 @@ func (h *Handlers) PostChapterInterventionsPropose(w http.ResponseWriter, r *htt
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "proposed",
 		"id":       s.ID,
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	})
 }
 
@@ -676,7 +719,7 @@ func (h *Handlers) PostChapterInterventionsApply(w http.ResponseWriter, r *http.
 		"status":        "applied",
 		"id":            body.ID,
 		"interventions": applied,
-		"progress":      story.ProgressView(h.state),
+		"progress":      story.SnapshotProgress(h.state),
 	})
 }
 
@@ -729,7 +772,7 @@ func (h *Handlers) PostChapterInterventionApplyOne(w http.ResponseWriter, r *htt
 		"status":   "applied",
 		"id":       body.ID,
 		"iv":       body.IV,
-		"progress": story.ProgressView(h.state),
+		"progress": story.SnapshotProgress(h.state),
 	}
 	for i := range h.state.Chapters {
 		if h.state.Chapters[i].Num == touched {
@@ -771,7 +814,7 @@ func (h *Handlers) PostChapterInterventionDismiss(w http.ResponseWriter, r *http
 		return
 	}
 	h.broadcastProgress()
-	h.writeJSON(w, http.StatusOK, map[string]any{"status": "dismissed", "progress": story.ProgressView(h.state)})
+	h.writeJSON(w, http.StatusOK, map[string]any{"status": "dismissed", "progress": story.SnapshotProgress(h.state)})
 }
 
 // PutChapterSheet replaces ALL block texts of a chapter in one request — the
@@ -897,7 +940,7 @@ func (h *Handlers) PostChapterResyncUI(w http.ResponseWriter, r *http.Request) {
 		"scenes":    scenes,
 		"realigned": realigned,
 		"chapter":   resp,
-		"progress":  story.ProgressView(h.state),
+		"progress":  story.SnapshotProgress(h.state),
 	})
 	// NOTE: no startKnowledgeSync() here on purpose. Resync only rebuilds
 	// editor bookkeeping (blocks/spans) — the prose and its content revision
@@ -967,7 +1010,7 @@ func (h *Handlers) PostChapterSubdivideBeats(w http.ResponseWriter, r *http.Requ
 		"subscenes":  units,
 		"subdivided": subdivided,
 		"chapter":    resp,
-		"progress":   story.ProgressView(h.state),
+		"progress":   story.SnapshotProgress(h.state),
 	})
 }
 

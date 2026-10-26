@@ -22,7 +22,7 @@
 
   async function download(url, mark) {
     try {
-      const r = await apiFetch(url);
+      const r = await apiFetch(url, { noBody: true });
       const blob = await r.blob(), a = document.createElement('a'); a.href = URL.createObjectURL(blob);
       const base = $config?.story?.title || $progress?.title || 'novel';
       a.download = url.includes('outline') ? `${base}-outlines.md` : url.includes('proofread') ? `${base}-proofreading-report.md` : `${base}.txt`;

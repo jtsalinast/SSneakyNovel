@@ -42,7 +42,7 @@ func (h *Handlers) PostStoryComplete(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err)
 		return
 	}
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 func (h *Handlers) PostPlanningReview(w http.ResponseWriter, r *http.Request) {
@@ -97,5 +97,5 @@ func (h *Handlers) PostStoryResume(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err)
 		return
 	}
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }

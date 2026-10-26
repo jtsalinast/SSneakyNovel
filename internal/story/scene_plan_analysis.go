@@ -86,7 +86,9 @@ type SceneSuggestion struct {
 
 // ScenePlanAnalysisReport is the full editorial pass over the novel's pending
 // scene plans, persisted on Progress so the Writing page can render it point
-// by point with propose/apply actions per suggestion.
+// by point with propose/apply actions per suggestion. Reports live in
+// Progress.ScenePlanAnalysis keyed by chapter number (key 0 = the global pass
+// over every pending plan) so each chapter's critique card stays isolated.
 type ScenePlanAnalysisReport struct {
 	GeneratedAt      string             `json:"generated_at"`
 	BasedOnStructure string             `json:"based_on_structure,omitempty"`
@@ -133,6 +135,27 @@ func scenePlanFingerprintFor(state *Progress, onlyCh int) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// scenePlanReportKey maps an analysis pass to its slot in the per-chapter
+// report map: key 0 holds the global pass over every pending plan, keys >= 1
+// hold a single chapter's own critique. Storing reports separately is what
+// keeps chapters isolated — chapter 5's card can never fall back to chapter
+// 6's summary/pillars because they live in different entries.
+func scenePlanReportKey(onlyCh int) int {
+	if onlyCh < 0 {
+		return 0
+	}
+	return onlyCh
+}
+
+// scenePlanReport returns the stored report for one slot (chapter number, or
+// 0 for the global pass), or nil when absent.
+func scenePlanReport(state *Progress, key int) *ScenePlanAnalysisReport {
+	if state == nil || state.ScenePlanAnalyses == nil {
+		return nil
+	}
+	return state.ScenePlanAnalyses[key]
+}
+
 // buildScenePlanEditorPrompt assembles the single LLM prompt for the
 // bestseller-editor pass over the pending beat sheets. It explicitly frames
 // the artifact under review as a SCENE PLAN so the model never slips into
@@ -149,8 +172,8 @@ func buildScenePlanEditorPromptFor(cfg *config.Config, state *Progress, settings
 	// re-analysis after corrections re-grades the SAME items and provably
 	// raises them — instead of drifting around randomized example anchors.
 	var prevChecklist string
-	if state.ScenePlanAnalysis != nil {
-		prevChecklist = renderPreviousChecklistBlock(state.ScenePlanAnalysis, "THE SCENE PLANS")
+	if prev := scenePlanReport(state, scenePlanReportKey(onlyCh)); prev != nil {
+		prevChecklist = renderPreviousChecklistBlock(prev, "THE SCENE PLANS")
 	}
 	sc := cfg.Story
 	var meta strings.Builder
@@ -272,30 +295,77 @@ func AnalyzePendingScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg
 
 // AnalyzeChapterScenePlan runs the same bestseller-editor pass restricted to a
 // SINGLE chapter's beat sheet: the prompt shows only that plan and every point
-// is force-attributed to it. The fresh suggestions replace (never merge) the
-// previously attributed ones for that chapter in the stored report, so each
-// chapter can carry its own scene-plan critique without re-grading the others.
+// is force-attributed to it. The report is stored in its own map slot keyed by
+// chapter number (never merged with other chapters' reports), so each chapter
+// carries an isolated scene-plan critique card. Returns typed errors so the
+// HTTP layer can answer 400 BEFORE launching the background task instead of
+// failing silently behind a generic "analysis failed" log.
 func AnalyzeChapterScenePlan(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, chapterNum int, logger *sse.LogBroadcaster) error {
 	if chapterNum <= 0 {
 		return fmt.Errorf("invalid chapter number")
 	}
-	for _, ch := range state.Chapters {
-		if ch.Num == chapterNum {
-			if ch.Status == StatusAccepted || ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
-				return fmt.Errorf("no_scene_plans")
-			}
-			break
-		}
+	if ok, err := CheckChapterScenePlanAnalyzable(state, chapterNum); !ok {
+		return err
 	}
 	return analyzeScenePlans(ctx, apiCfg, cfg, state, settings, logger, chapterNum)
 }
 
+// Scene-plan analyzability errors returned by CheckChapterScenePlanAnalyzable
+// so both the HTTP handler (synchronous 400) and the story layer (background
+// guard) share ONE validation rule-set instead of diverging — divergence was
+// what made per-chapter re-analysis fail behind the opaque
+// "log.sceneplan_analyze_failed" toast. The Error() text doubles as an i18n
+// catalog key, so handlers can pass the error straight to writeErrorReq and
+// SSE log keys resolve it through i18n.T.
+var (
+	// ErrChapterScenePlanAccepted: the chapter is already accepted/locked; its
+	// beat sheet is out of the critic's scope by design.
+	ErrChapterScenePlanAccepted = fmt.Errorf("scene_plan_chapter_accepted")
+	// ErrChapterScenePlanEmpty: the chapter has no beat sheet (or zero scenes).
+	ErrChapterScenePlanEmpty = fmt.Errorf("scene_plan_empty_chapter")
+)
+
+// CheckChapterScenePlanAnalyzable validates that one chapter's beat sheet can
+// be sent through the scene-plan critic. It returns (false, reason) with a
+// sentinel-style error whose text doubles as an i18n catalog key, so both the
+// HTTP handler (synchronous 400 BEFORE the 202/background launch) and the
+// story layer (background guard) share ONE rule-set instead of diverging —
+// divergence was what made per-chapter re-analysis fail behind the opaque
+// "log.sceneplan_analyze_failed" toast. A missing chapter is reported with
+// ok=true/no error so callers fall back to their own not-found handling.
+func CheckChapterScenePlanAnalyzable(state *Progress, chapterNum int) (bool, error) {
+	if state == nil || chapterNum <= 0 {
+		return false, ErrChapterScenePlanEmpty
+	}
+	idx := FindChapterIdx(state, chapterNum)
+	if idx < 0 {
+		return true, nil // unknown chapter: let the caller answer "not found"
+	}
+	ch := state.Chapters[idx]
+	if ch.Status == StatusAccepted {
+		return false, ErrChapterScenePlanAccepted
+	}
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+		return false, ErrChapterScenePlanEmpty
+	}
+	return true, nil
+}
+
 func analyzeScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, logger *sse.LogBroadcaster, onlyCh int) error {
+	key := scenePlanReportKey(onlyCh)
+	if key > 0 {
+		// Background safety net: re-check analyzability (the chapter may have
+		// been accepted or its plan cleared between the handler's synchronous
+		// guard and this goroutine firing).
+		if ok, err := CheckChapterScenePlanAnalyzable(state, key); !ok {
+			return err
+		}
+	}
 	fingerprint := scenePlanFingerprintFor(state, onlyCh)
 	if fingerprint == "" {
-		return fmt.Errorf("no_scene_plans")
+		return ErrChapterScenePlanEmpty
 	}
-	if prev := state.ScenePlanAnalysis; prev != nil && prev.ScenePlanFingerprint != "" && prev.ScenePlanFingerprint == fingerprint {
+	if prev := scenePlanReport(state, key); prev != nil && prev.ScenePlanFingerprint != "" && prev.ScenePlanFingerprint == fingerprint {
 		logger.InfoKey("log.sceneplan_analyze_unchanged")
 		return nil
 	}
@@ -393,40 +463,32 @@ func analyzeScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 	result.GeneratedAt = time.Now().Format(time.RFC3339)
 	result.BasedOnStructure = structureLabel(cfg.Story.Structure, lang)
 	result.ScenePlanFingerprint = fingerprint
-	if onlyCh > 0 {
-		// Per-chapter pass: replace ONLY this chapter's points inside the stored
-		// report (other chapters keep theirs untouched), then rebuild the global
-		// fingerprint so the merged view stays coherent.
-		merged := make([]SceneSuggestion, 0)
-		if prev := state.ScenePlanAnalysis; prev != nil {
-			for _, ps := range prev.Suggestions {
-				apps := ps.AppliesToChapters
-				touches := len(apps) == 0
-				for _, n := range apps {
-					if n == onlyCh {
-						touches = true
-					}
-				}
-				if !touches {
-					merged = append(merged, ps)
-				}
-			}
-		}
-		merged = append(merged, kept...)
-		result.Suggestions = merged
-		result.ScenePlanFingerprint = scenePlanFingerprint(state)
+	// Store the report in ITS OWN slot: chapter N's critique never merges with
+	// (or overwrites) another chapter's — this is what isolates the per-chapter
+	// bestseller cards. The global pass lives under key 0.
+	if state.ScenePlanAnalyses == nil {
+		state.ScenePlanAnalyses = map[int]*ScenePlanAnalysisReport{}
 	}
-	state.ScenePlanAnalysis = &result
+	stored := result
+	state.ScenePlanAnalyses[key] = &stored
 	return nil
 }
 
-// clearScenePlanCacheOnEdit drops the stored scene-plan analysis when the
+// clearScenePlanCacheOnEdit drops the stored scene-plan analyses when the
 // underlying plans change through the editing API, so stale proposals can
-// never be applied to scenes that no longer exist.
-func clearScenePlanCacheOnEdit(state *Progress) {
-	if state != nil && state.ScenePlanAnalysis != nil {
-		state.ScenePlanAnalysis = nil
+// never be applied to scenes that no longer exist. When onlyCh > 0 only that
+// chapter's report (and the global one, whose rubric covered it) is dropped;
+// other chapters' critiques stay valid.
+func clearScenePlanCacheOnEdit(state *Progress, onlyCh int) {
+	if state == nil || state.ScenePlanAnalyses == nil {
+		return
 	}
+	if onlyCh > 0 {
+		delete(state.ScenePlanAnalyses, onlyCh)
+		delete(state.ScenePlanAnalyses, 0)
+		return
+	}
+	state.ScenePlanAnalyses = nil
 }
 
 // findSceneSuggestion locates a suggestion by ID in the stored report.
@@ -442,6 +504,49 @@ func findSceneSuggestion(rep *ScenePlanAnalysisReport, id string) int {
 	return -1
 }
 
+// locateSceneSuggestion finds one scene-plan suggestion across the stored
+// reports: it searches the report of each chapter named in hintChapters (the
+// per-chapter cards' own slots), then every remaining per-chapter slot, and
+// finally the global pass under key 0.
+// Returns the owning report, the suggestion index, and whether it was found.
+// Suggestion IDs are unique per generation, so at most one report matches.
+func locateSceneSuggestion(state *Progress, id string, hintChapters ...int) (*ScenePlanAnalysisReport, int) {
+	if state == nil || state.ScenePlanAnalyses == nil {
+		return nil, -1
+	}
+	tried := map[int]bool{}
+	try := func(key int) int {
+		if tried[key] {
+			return -1
+		}
+		tried[key] = true
+		rep := state.ScenePlanAnalyses[key]
+		return findSceneSuggestion(rep, id)
+	}
+	for _, n := range hintChapters {
+		if n > 0 {
+			if idx := try(n); idx >= 0 {
+				return state.ScenePlanAnalyses[n], idx
+			}
+		}
+	}
+	// Fall back to scanning every per-chapter slot: callers without a chapter
+	// hint (e.g. apply/edit by suggestion ID alone) must still resolve IDs
+	// owned by any chapter's report.
+	for key, rep := range state.ScenePlanAnalyses {
+		if key <= 0 {
+			continue
+		}
+		if idx := try(key); idx >= 0 {
+			return rep, idx
+		}
+	}
+	if idx := try(0); idx >= 0 {
+		return state.ScenePlanAnalyses[0], idx
+	}
+	return nil, -1
+}
+
 // ProposeScenePlanReplacements turns one advice-only scene-plan point into
 // concrete ready-to-apply per-scene replacements, drafted with the same
 // bestseller bar as the outline pass: the goal is not merely to obey the
@@ -451,12 +556,8 @@ func findSceneSuggestion(rep *ScenePlanAnalysisReport, id string) int {
 // calls (new ones win per scene) and are marked Proposed:true so the UI only
 // reveals them inside collapsed accordions after this explicit action.
 func ProposeScenePlanReplacements(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, suggestionID string, progressPath string, logger *sse.LogBroadcaster) (*SceneSuggestion, error) {
-	rep := state.ScenePlanAnalysis
-	if rep == nil {
-		return nil, fmt.Errorf("no_scene_plan_analysis")
-	}
-	idx := findSceneSuggestion(rep, suggestionID)
-	if idx == -1 {
+	rep, idx := locateSceneSuggestion(state, suggestionID)
+	if rep == nil || idx < 0 {
 		return nil, fmt.Errorf("suggestion_not_found")
 	}
 	s := rep.Suggestions[idx]
@@ -597,12 +698,8 @@ Return STRICT JSON only (no markdown fences): {"recommendations":[{"chapter_num"
 // longer exist and only the survivor remains (never the other way around, and
 // never on accepted chapters). Returns the number of scenes changed.
 func ApplyScenePlanSuggestion(state *Progress, suggestionID string, progressPath string) (int, error) {
-	rep := state.ScenePlanAnalysis
-	if rep == nil {
-		return 0, fmt.Errorf("no_scene_plan_analysis")
-	}
-	idx := findSceneSuggestion(rep, suggestionID)
-	if idx == -1 {
+	rep, idx := locateSceneSuggestion(state, suggestionID)
+	if rep == nil || idx < 0 {
 		return 0, fmt.Errorf("suggestion_not_found")
 	}
 	s := rep.Suggestions[idx]
@@ -757,12 +854,8 @@ func sceneExists(ch *ChapterState, id int) bool {
 // chapter); mergeInto == 0 with field "merge_into_scene_id" cancels the merge
 // and degrades the entry back to a plain in-place replacement.
 func EditScenePlanRecommendation(state *Progress, suggestionID string, chapterNum, sceneID int, field, value string, mergeInto int, progressPath string) error {
-	rep := state.ScenePlanAnalysis
-	if rep == nil {
-		return fmt.Errorf("no_scene_plan_analysis")
-	}
-	idx := findSceneSuggestion(rep, suggestionID)
-	if idx == -1 {
+	rep, idx := locateSceneSuggestion(state, suggestionID)
+	if rep == nil || idx < 0 {
 		return fmt.Errorf("suggestion_not_found")
 	}
 	recs := rep.Suggestions[idx].Recommendations

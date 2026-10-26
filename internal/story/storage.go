@@ -343,7 +343,20 @@ func ResetProgressFiles(progressPath string) error {
 // (word count + content revision kept) and memory snippets resolved, for API
 // responses.
 func ProgressView(p *Progress) *Progress {
+	return progressViewOf(p)
+}
+
+// progressViewOf is the internal builder; it never derefs Block slices while
+// scanning memory references, so it is safe to call on a state that another
+// goroutine may append to (FindChapterIdx only reads the chapter-number
+// fields, which are not mutated during generation — see the handler-side
+// progressStorageMu guard for whole-slice stability).
+func progressViewOf(p *Progress) *Progress {
 	cp := *p
+	// In-memory state loaded before this build's migration (or created by an
+	// older handler path) may still hold the legacy single report; fold it into
+	// the per-chapter map so API clients only ever see `scene_plan_analyses`.
+	migrateScenePlanAnalyses(&cp)
 	cp.Chapters = make([]ChapterState, len(p.Chapters))
 	for i, ch := range p.Chapters {
 		if ch.Content != "" {
@@ -364,7 +377,7 @@ func ProgressView(p *Progress) *Progress {
 		entries := make([]MemoryEntry, len(p.MemoryEntries))
 		for i, m := range p.MemoryEntries {
 			for _, ref := range m.References {
-				if ReferenceLive(p, ref) {
+				if referenceLiveOwned(p, ref) {
 					r := []rune(ref.Quote)
 					if len(r) > 100 {
 						r = r[:100]
@@ -379,4 +392,29 @@ func ProgressView(p *Progress) *Progress {
 		cp.MemoryEntries = entries
 	}
 	return &cp
+}
+
+// SnapshotProgress returns the API view of p while holding the same storage
+// lock SaveProgress uses. HTTP handlers MUST call this instead of
+// story.ProgressView(h.state) whenever background tasks may be mutating and
+// persisting h.state concurrently: without the lock, a save landing mid-copy
+// produces a torn Progress (stale length + swapped slices) that json.Marshal
+// then serializes inconsistently — or blocks behind it, which is what froze
+// every button and left chapter loads spinning under heavy interaction.
+func SnapshotProgress(p *Progress) *Progress {
+	progressStorageMu.Lock()
+	defer progressStorageMu.Unlock()
+	return progressViewOf(p)
+}
+
+// referenceLiveOwned is ReferenceLive without touching Blocks: block quotes
+// are stripped from the progress view anyway (facts load on demand), so under
+// shared-state reads we skip the read of the slice a background task may be
+// appending to.
+func referenceLiveOwned(state *Progress, ref MemoryReference) bool {
+	if ref.Stale {
+		return false
+	}
+	i := FindChapterIdx(state, ref.Chapter)
+	return i >= 0
 }

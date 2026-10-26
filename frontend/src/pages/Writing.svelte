@@ -159,6 +159,16 @@
   let chapterBlocks = [];
   let loadedNum = -1;
   let loadedRev = null;
+  // In-flight content load per chapter. Without this guard the reactive rule
+  // re-fires on every progress poll while a fetch is pending, and each stale
+  // response used to reset loadedNum/loadedRev for the PREVIOUS request —
+  // rapid chapter switching then permanently desynced the bookkeeping so the
+  // spinner never resolved ("capítulo cargando sin mostrar info") and queued
+  // requests starved the browser's per-host connection pool (botones sin
+  // respuesta). loadSeq identifies the current request; older replies are
+  // dropped without touching the state.
+  let loadingNum = -1;
+  let loadSeq = 0;
   $: if (ch) maybeLoadContent(ch);
   function applyChapter(num, full) {
     if (loadedNum !== num) return;
@@ -193,17 +203,54 @@
   async function maybeLoadContent(c) {
     const rev = c.content_rev || '';
     if (c.num === loadedNum && rev === loadedRev) return;
+    // A request for this exact chapter is already in flight: don't stack a
+    // duplicate on top of it (progress polls re-fire this rule constantly).
+    if (loadingNum === c.num) return;
     if (c.num !== loadedNum) selectedBlockId = null;
     loadedNum = c.num;
-    loadedRev = rev;
+    loadedRev = rev; // provisional: cleared below if the reply mismatches/errs
     hideIVPopup();
     ivLocator = null; ivLocatorNum = -1; // stale tiling must never tint the new chapter
-    if (!rev) { chapterContent = ''; chapterBlocks = []; return; }
+    if (!rev) { chapterContent = ''; chapterBlocks = []; loadingNum = -1; return; }
+    const seq = ++loadSeq;
+    loadingNum = c.num;
     try {
-      const full = await api('GET', '/api/chapters/' + c.num);
+      const full = await api('GET', '/api/chapters/' + c.num, undefined, undefined, 20000);
+      if (seq !== loadSeq) return; // superseded by a newer selection — drop it
       applyChapter(c.num, full);
       loadIVLocator(c.num); // refresh the subscene tiling used to confine critic marks
-    } catch (e) {}
+    } catch (e) {
+      if (seq !== loadSeq) return;
+      // Never leave the bookkeeping claiming this chapter is loaded: the next
+      // poll/interaction will retry instead of spinning forever. But do NOT
+      // retry in a tight loop either: while an LLM task saturates the server,
+      // every progress poll would re-fire this rule and each failed fetch was
+      // immediately retried — a retry storm that kept the connection pool
+      // permanently starved ("capítulo cargando sin mostrar info" forever).
+      // Back off exponentially (3s → 6s → … capped at 30s) and give up after
+      // 5 consecutive failures until the next deliberate interaction.
+      loadedRev = '';
+      contentRetry.num = c.num;
+      contentRetry.attempt++;
+      scheduleContentRetry(c.num, Math.min(30000, 3000 * 2 ** (contentRetry.attempt - 1)));
+    } finally {
+      if (seq === loadSeq) loadingNum = -1;
+    }
+  }
+  const contentRetry = { num: -1, attempt: 0, timer: null };
+  function scheduleContentRetry(num, delayMs) {
+    if (contentRetry.timer) clearTimeout(contentRetry.timer);
+    if (contentRetry.attempt >= 5) return; // stop hammering; user actions reset below
+    contentRetry.timer = setTimeout(() => {
+      contentRetry.timer = null;
+      if (ch?.num === num && ch.content_rev && !(ch.num === loadedNum && (ch.content_rev || '') === loadedRev)) {
+        maybeLoadContent(ch);
+      }
+    }, delayMs);
+  }
+  function resetContentRetry() {
+    contentRetry.attempt = 0;
+    if (contentRetry.timer) { clearTimeout(contentRetry.timer); contentRetry.timer = null; }
   }
   $: hasContent = !!(ch?.content_rev);
 
@@ -1205,7 +1252,13 @@
     try {
       const res = await api('GET', `/api/chapters/${num}/scene-plan`);
       planByChapter = { ...planByChapter, [num]: res?.plan?.scenes || [] };
-    } catch { /* no plan — chips simply show no tooltip */ }
+    } catch {
+      // Release the in-flight marker so a later interaction can retry after a
+      // transient failure (stale markers would otherwise suppress tooltips and
+      // leave dependent UI waiting on a fetch that already died).
+      delete planByChapter[num];
+      planByChapter = { ...planByChapter };
+    }
   }
   // Warm the cache for the selected chapter while on the writing tab.
   $: if (writingTab === 2 && ch?.num) ensurePlanFor(ch.num);
@@ -1217,25 +1270,25 @@
   $: orphanWriting = !!(ch && isCurrent && ch.status === 'writing' && !writingConflict && !$taskRunning);
 
   // --- Bestseller-editor critique passes (siblings of the outline one) ---
-  // Scene-plan pass: ONE report over all PENDING beat sheets, but each
-  // chapter only shows the suggestions that apply to it (AppliesToChapters /
-  // per-scene recommendations carry the chapter number), so switching from
-  // chapter 6 back to 5 never leaves the other chapter's card behind.
-  $: scenePlanAnalysis = p?.scene_plan_analysis || null;
+  // Scene-plan pass: reports are stored PER CHAPTER on the backend
+  // (progress.scene_plan_analyses, keyed by chapter number; key "0" holds the
+  // global pass over all pending plans). Each chapter card shows ONLY its own
+  // report — or, when absent, the points explicitly attributed to it in the
+  // global pass — so switching from chapter 6 back to 5 can never echo
+  // chapter 6's summary, pillars or unattributed suggestions.
   $: scenePlanForChapter = (() => {
-    const rep = scenePlanAnalysis;
-    if (!rep || !ch) return null;
+    const byNum = p?.scene_plan_analyses || {};
+    if (!ch) return null;
     const num = ch.num;
-    const all = rep.suggestions || [];
-    const own = all.filter(s => (s.applies_to_chapters || []).includes(num)
+    const own = byNum[String(num)];
+    if (own) return own;
+    const global = byNum["0"];
+    if (!global) return null;
+    const all = global.suggestions || [];
+    const attributed = all.filter(s => (s.applies_to_chapters || []).includes(num)
       || (s.recommendations || []).some(r => r.chapter_num === num));
-    // If this chapter has explicitly-attributed points, show ONLY those.
-    // Unattributed advice is inherited solely when the chapter has none of
-    // its own — otherwise every chapter would display the same generic card
-    // and switching 6→5 would look like "chapter 6's report".
-    if (own.length > 0) return { ...rep, suggestions: own };
-    const generic = all.filter(s => !(s.applies_to_chapters || []).length && !(s.recommendations || []).length);
-    return { ...rep, suggestions: generic };
+    if (attributed.length > 0) return { ...global, suggestions: attributed };
+    return null; // no critique for this chapter yet — show the empty state
   })();
   $: scenePlanPendingCount = chapters.filter(c => c.status !== 'accepted' && c.scene_plan?.scenes?.length).length;
   // Act pass: reports keyed by pre-planning act number, rendered newest first.
@@ -1451,6 +1504,9 @@
     actReviewNo = null; // leaving the act-critic section when a chapter is picked
     selectedSettings = [];
     showKnowledge = false;
+    // A deliberate chapter change is a fresh interaction: clear any backoff
+    // left over from earlier failed fetches so this load retries immediately.
+    resetContentRetry();
     selectedChapter.set(i);
     maybeLoadContent(chapters[i]);
     showRevise = false;
@@ -1637,7 +1693,7 @@
     const written = chapters.filter(c => c.content_rev);
     if (written.length === 0) { addToast($t('writing.toasts.exportEmpty'), 'error'); return; }
     try {
-      const r = await apiFetch('/api/export/txt');
+      const r = await apiFetch('/api/export/txt', { noBody: true });
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
