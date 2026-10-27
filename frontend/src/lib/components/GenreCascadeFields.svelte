@@ -52,6 +52,14 @@
   // so the parent can place them at the same level as the rest of the
   // "Story parameters" content instead of nested inside two extra divs.
   export let flat = false;
+  // UI-reorder request: Tone now lives in the "Theme & Motif" card (Config.svelte
+  // renders it there, bound to the same cfg.tone field). When this flag is set,
+  // the cascade hides its own Tone block so the field is not duplicated.
+  export let showTone = true;
+  // UI-reorder request: render a daisyUI `<div class="divider">` right before
+  // the "Specific settings" block (both flat and card layouts). Used when the
+  // cascade sits inside a larger field grid so the section gets a visual rule.
+  export let dividerBeforeSettings = false;
   // Escape hatch: the legacy ComboSelect twins of Genre/Subgenre/Conflict/
   // Protagonist are hidden by default (the SmartCombobox widgets are now the
   // primary UI). Set this to true to bring them back — they stay mounted and
@@ -80,20 +88,6 @@
       adventure: 'Movement-driven fiction: quests, exploration, survival and treasure hunts where the journey and its dangers are the plot.',
       mystery_thriller: 'Crime, puzzles and suspense: investigations from cozy whodunits to hard-boiled noir, plus chases, conspiracies and high-stakes thrillers.',
     },
-    zh: {
-      fantasy: '幻想世界：魔法、神话生物或超自然规则——从史诗第二世界到都市隐秘社会。',
-      scifi: '以科技、科学或未来社会为根基的推想小说：太空歌剧、赛博朋克、反乌托邦、初次接触……',
-      mystery: '以罪案与谜团为核心：调查推动情节，从乡村安乐椅推理到硬汉黑色侦探与劫案故事。',
-      romance: '爱情故事即主线情节——情感弧线、关系障碍与令读者满意的结局是这类作品的承诺。',
-      thriller: '节奏、危险与悬念：追逐、阴谋与高风险，无论是谍战、律政、家庭还是动作向。',
-      horror: '以制造恐惧与不安为目的：超自然惊悚、宇宙性渺小、肉体恐怖或身边的怪物。',
-      historical: '扎根于真实历史时期的小说，时代风物、习俗与事件塑造人物命运。',
-      western: '边疆故事：无法无天、荣誉准则与旷野——经典、意大利面式、怪异或移植到太空的西部片。',
-      drama: '以人物为先的文学小说：家族史诗、成长、心理写实、元小说、存在主义与哲思故事。',
-      comedy: '以笑声为首要承诺的小说：戏仿、闹剧、情景喜剧群像、黑色与荒诞幽默、职场与超自然喜剧。',
-      adventure: '以行动驱动的虚构：冒险、探索、求生与寻宝——旅程与危险即情节。',
-      mystery_thriller: '罪案、谜团与悬念：从安乐椅推理到硬汉黑色侦探，外加追逐、阴谋与高风险惊悚。',
-    },
   };
   const LENGTH_BLURBS = {
     en: {
@@ -105,16 +99,6 @@
       anthology: 'Anthology: a collection of self-contained stories linked by theme or world; each entry has its own arc.',
       novel: 'Standard novel (~60k–90k words): full multi-chapter arc; ~4,000-word chapters balance pace and depth.',
       epic: 'Epic novel (100k+ words): multiple POVs/subplots and world-scale stakes; longer ~5,000-word chapters.',
-    },
-    zh: {
-      flash: '微型小说：一篇连续完成（约1500字内），聚焦一个瞬间与一次反转。',
-      short: '短篇小说（约1500–7500词）：单一线索、少量角色、迅速收束。',
-      novelette: '中短篇（约7500–17500词）：主线之外可容纳一条副线与更多成长。',
-      novella: '中篇（约17500–40000词）：情节集中、人物精简，具备长篇质感。',
-      light_novel: '轻小说：日式连载文体——短章节（约3500词）、对白密集、以篇章推进。',
-      anthology: '短篇集：多篇独立故事以主题或世界观串联，各自成篇。',
-      novel: '标准长篇（约6–9万词）：完整多章结构，单章约4000词平衡节奏与深度。',
-      epic: '史诗长篇（10万词以上）：多视角多支线、世界级冲突，单章约5000词。',
     },
   };
   const CONFLICT_FAMILIES = {
@@ -778,6 +762,33 @@
     }
   }
 
+  // External re-sync (Randomize): when the PARENT programmatically rewrites
+  // cfg.type / cfg.subgenre, the one-shot seeds above intentionally refuse to
+  // clobber a widget the user already touched ("the widget owns the
+  // interaction"). That is exactly why Randomize appeared dead: the new genre
+  // and subgenre never reached the visible comboboxes. bump() tells this block
+  // "an external rewrite just happened": mirror every bound value into the
+  // widgets (SmartCombobox re-parses any bound value that differs from its
+  // lastEmitted) and clear the dirty flags so the free-text settings textarea
+  // re-derives from the new cfg values instead of keeping stale drafts.
+  export let bump = () => {};
+  function resyncFromCfg() {
+    const parts = String(cfg.type || '').split(',').map((x) => x.trim()).filter(Boolean);
+    genreSmartValue = parts.join(', ');
+    genreSmartSeeded = parts.length > 0;
+    const chips = splitSubgenreText(cfg.subgenre);
+    subSmartValue = chips.join(', ');
+    subSmartSeeded = chips.length > 0;
+    protagSmartValue = splitMultiList(cfg.protagonist_type).join(', ');
+    protagSmartSeeded = !!protagSmartValue;
+    conflictSmartValue = splitMultiList(cfg.conflict_scale).join(', ');
+    conflictSmartSeeded = !!conflictSmartValue;
+    freeSettingsDirty = false;
+  }
+  // Fire whenever the parent bumps us (bump is a plain prop — its identity
+  // changes on every randomize) or the payload refreshes.
+  $: if (bump) resyncFromCfg();
+
   // —— SmartCombobox #5 — "Genre" proof of concept (NO groups) —————————————
   // All ten top-level genres as ONE flat list (grouped={false} hides the
   // accordion headers entirely). Multi-select, mirroring cfg.type with the
@@ -907,6 +918,15 @@
     cfg.structure = String(e.detail.value || '').trim();
     dispatch('structureChange', { value: cfg.structure });
   }
+
+  // —— UI-reorder (novel-params): the flat-mode Length & Structure cells are
+  // rendered by Config.svelte directly (in the grid rows under Gore Level), so
+  // these accessors expose the reactive option lists and change handlers for
+  // that use. The card-mode twins below keep using them internally. ————
+  export function getLengthOpts() { return lengthOpts; }
+  export function getStructureOpts() { return structureOpts; }
+  export function applyLengthChange(e) { onLengthChange(e); }
+  export function applyStructureChange(e) { onStructureChange(e); }
 </script>
 
 {#if flat}
@@ -1073,10 +1093,11 @@
       </div>
     {/if}
 
+    {#if dividerBeforeSettings}<div class="divider col-span-2 my-0 py-6 h-px"></div>{/if}
+
     <div class="col-span-2">
       <span class="field-label flex items-center gap-1">
         {labels.settings || 'Specific settings'}
-        <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
         {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
       </span>
       {#if showSettingShortcuts}
@@ -1092,8 +1113,6 @@
             </label>
           {/each}
         </div>
-      {:else}
-        <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
       {/if}
       {#if hasSubgenre && modifierGroups.length}
         <details class="mt-1.5">
@@ -1115,17 +1134,27 @@
         </details>
       {/if}
       <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
-           storage field as the checkboxes so both stay in sync. -->
+           storage field as the checkboxes so both stay in sync. The textarea
+           placeholder now carries the former ⓘ tooltip text plus the "one per
+           line" instruction (user request: no tooltip next to the label). -->
       <textarea
-        class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1"
+        class="textarea textarea-sm w-full text-xs font-mono mt-1"
         bind:value={freeSettingsText}
         on:blur={applyFreeSettings}
         on:input={() => { freeSettingsDirty = true; }}
-        placeholder={labels.settingsPlaceholder || 'custom_setting_per_line'}
+        placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
         disabled={disabled}
       ></textarea>
     </div>
 
+    <!-- UI-reorder: Length & Structure moved OUT of this block — Config.svelte
+         now renders them (using the exported lengthOpts/structureOpts/
+         onLengthChange/onStructureChange) in the grid rows under Gore Level:
+         "Story length | Target words per chapter" then
+         "Story structure | Story language". The card-mode twins further below
+         are untouched. -->
+
+    {#if showTone}
     <div class="col-span-2">
       <span class="field-label flex items-center gap-1">
         {labels.tone || 'Tone'}
@@ -1143,50 +1172,7 @@
         </div>
       {/if}
     </div>
-
-    <!-- Story length — SmartSelect (unified UI). Same lengthOpts data and
-         onLengthChange handler as the old ComboSelect: ONE value, searchable
-         two-line rows (label + blurb), ⓘ summary popover and ✕ clear button.
-         Optional field → clearing maps to the legacy "—" (empty) state, so
-         allowCustom stays off (a free-text length makes no sense here). -->
-    <div>
-      <span class="field-label flex items-center gap-1">
-        {labels.length || 'Story length'}
-      </span>
-      <!-- svelte-ignore a11y-no-redundant-roles -->
-      <SmartSelect
-        options={lengthOpts}
-        allowCustom={false}
-        placeholder={labels.lengthNone || '—'}
-        emptyLabel={labels.lengthNone || '—'}
-        disabled={disabled}
-        title={tips.length || ''}
-        ariaLabel={labels.length || 'Story length'}
-        bind:value={cfg.story_length}
-        on:change={onLengthChange}
-      />
-    </div>
-    <!-- Narrative structure — SmartSelect (unified UI). Same structureOpts /
-         onStructureChange as the old ComboSelect; custom values allowed
-         ("Other"), matching the legacy allowOther={true} behaviour. -->
-    <div>
-      <span class="field-label flex items-center gap-1">
-        {labels.structure || 'Narrative structure'}
-      </span>
-      <!-- svelte-ignore a11y-no-redundant-roles -->
-      <SmartSelect
-        options={structureOpts}
-        allowCustom={true}
-        otherLabel={otherLabel}
-        placeholder={labels.structurePlaceholder || ''}
-        emptyLabel={emptyLabel}
-        disabled={disabled}
-        title={tips.structure || ''}
-        ariaLabel={labels.structure || 'Narrative structure'}
-        bind:value={cfg.structure}
-        on:change={onStructureChange}
-      />
-    </div>
+    {/if}
   </div>
 {:else}
 <div class="surface-card p-3 space-y-3">
@@ -1351,10 +1337,11 @@
     {/if}
   </div>
 
+  {#if dividerBeforeSettings}<div class="divider my-0 py-6 h-px" style="width: 100%"></div>{/if}
+
   <div>
     <span class="field-label flex items-center gap-1">
       {labels.settings || 'Specific settings'}
-      <InfoTip text={tips.specificSettings} label={labels.settings || 'Specific settings'} />
       {#if showSettingShortcuts}<span class="badge badge-ghost badge-sm font-mono normal-case pointer-events-none">{settingOpts.length}</span>{/if}
     </span>
     {#if showSettingShortcuts}
@@ -1370,8 +1357,6 @@
           </label>
         {/each}
       </div>
-    {:else}
-      <p class="text-xs text-base-content/45">{labels.pickSubgenre || labels.pickGenre || 'Select a subgenre to populate these checkboxes.'}</p>
     {/if}
     {#if hasSubgenre && modifierGroups.length}
       <details class="mt-1.5">
@@ -1393,18 +1378,20 @@
   </div>
 
   <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
-       storage field as the checkboxes so both stay in sync. -->
+       storage field as the checkboxes so both stay in sync. Placeholder carries
+       the former ⓘ tooltip text + the "one per line" instruction. -->
   <textarea
-    class="textarea textarea-sm w-full h-12 text-xs font-mono"
+    class="textarea textarea-sm w-full text-xs font-mono"
     bind:value={freeSettingsText}
     on:blur={applyFreeSettings}
     on:input={() => { freeSettingsDirty = true; }}
-    placeholder={labels.settingsPlaceholder || 'custom_setting_per_line'}
+    placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
     disabled={disabled}
   ></textarea>
 
   <!-- Tone: free text + per-subgenre suggestion chips (from the resolved
        catalog). Same comma-separated storage as the legacy field. -->
+  {#if showTone}
   <div>
     <span class="field-label flex items-center gap-1">
       {labels.tone || 'Tone'}
@@ -1422,6 +1409,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 
   <!-- Length & structure: SmartSelect twins of the flat-mode fields above
        (same lengthOpts/structureOpts data and handlers). Picking a length

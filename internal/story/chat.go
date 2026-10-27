@@ -72,12 +72,12 @@ func LoadChatSessions(baseDir string) (*ChatSessionIndex, error) {
 		if os.IsNotExist(err) {
 			return &ChatSessionIndex{}, nil
 		}
-		return nil, fmt.Errorf("读取会话索引失败: %w", err)
+		return nil, fmt.Errorf("leer registro de sesión: %w", err)
 	}
 
 	var idx ChatSessionIndex
 	if err := json.Unmarshal(data, &idx); err != nil {
-		return nil, fmt.Errorf("解析会话索引失败: %w", err)
+		return nil, fmt.Errorf("analizar registro de sesión: %w", err)
 	}
 
 	return &idx, nil
@@ -93,20 +93,20 @@ func saveChatSessions(baseDir string, idx *ChatSessionIndex) error {
 
 func LoadChatSession(baseDir, id string) (*ChatSession, error) {
 	if !isValidSessionID(id) {
-		return nil, fmt.Errorf("无效的会话ID")
+		return nil, fmt.Errorf("ID de sesión no válido")
 	}
 	path := filepath.Join(ChatSessionsDir(baseDir), id+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("会话不存在: %s", id)
+			return nil, fmt.Errorf("sesión no encontrada: %s", id)
 		}
-		return nil, fmt.Errorf("读取会话失败: %w", err)
+		return nil, fmt.Errorf("leer sesión: %w", err)
 	}
 
 	var session ChatSession
 	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, fmt.Errorf("解析会话失败: %w", err)
+		return nil, fmt.Errorf("analizar sesión: %w", err)
 	}
 
 	return &session, nil
@@ -130,7 +130,7 @@ func SaveChatSession(baseDir string, session *ChatSession) error {
 
 func DeleteChatSession(baseDir, id string) error {
 	if !isValidSessionID(id) {
-		return fmt.Errorf("无效的会话ID")
+		return fmt.Errorf("ID de sesión no válido")
 	}
 	path := filepath.Join(ChatSessionsDir(baseDir), id+".json")
 	if err := fsutil.Delete(path); err != nil && !os.IsNotExist(err) {

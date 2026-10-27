@@ -21,6 +21,12 @@ func (h *Handlers) reloadSkills() {
 }
 
 func (h *Handlers) activateSkills(ctx context.Context, scope string, inject bool) context.Context {
+	// Safety net for every background task: LLM calls only report prompt/
+	// completion counts when a TaskTokenUsage tracker lives in their context.
+	// Callers pass h.taskCtx snapshots here, so re-attaching the current tracker
+	// guarantees no generation silently skips the token badge. No-op when ctx
+	// already carries one or no tracker exists yet.
+	ctx = h.ensureTaskTokens(ctx)
 	if scope == "" {
 		return ctx
 	}
@@ -339,7 +345,7 @@ Text references:
 	if lang == "en" {
 		out.Name += " (Optimized)"
 	} else {
-		out.Name += "（优化版）"
+		out.Name += "()"
 	}
 	m := story.SkillManifest{SchemaVersion: 1, ID: newID, Name: out.Name, Description: out.Description, Category: out.Category, Languages: out.Languages, AppliesTo: out.AppliesTo, EntryPoint: "SKILL.md"}
 	mb, _ := json.MarshalIndent(m, "", "  ")

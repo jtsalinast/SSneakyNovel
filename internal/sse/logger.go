@@ -98,7 +98,7 @@ func (lb *LogBroadcaster) logKey(level, key string, args ...any) {
 		Level:   level,
 		MsgKey:  key,
 		MsgArgs: i18n.MsgArgs(args...),
-		Msg:     i18n.T(i18n.LangZH, key, args...),
+		Msg:     i18n.T(i18n.LangEN, key, args...),
 		MsgEN:   i18n.T(i18n.LangEN, key, args...),
 		Time:    time.Now().Format("15:04:05"),
 	})

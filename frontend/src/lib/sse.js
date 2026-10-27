@@ -10,7 +10,7 @@ let tokenPollTimer = null;
 let taskEventVersion = 0;
 let statusRequest = 0;
 
-// —— 流式输出节流缓冲 + 尾部窗口 ——
+// —— Streaming-output throttle buffer + tail window ——
 const FLUSH_INTERVAL = 150;
 const TAIL_MAX = 3000;
 
@@ -40,16 +40,53 @@ function resetContentStream(idx) {
 
 let progressFetchTimer = null;
 
+// Concurrency guard for /api/progress. During long LLM tasks the backend
+// emits progress_update events in bursts (each SaveProgress/broadcast); every
+// event used to fire an independent GET, and those requests queued behind the
+// busy server on the same origin. With HTTP/1 that saturates the browser's
+// per-host connection pool: chapter content loads and button-triggered calls
+// stall forever ("los botones dejan de servir", "capítulo cargando sin
+// mostrar info"). Now at most one fetch is ever in flight and further
+// refreshes coalesce into a single trailing fetch.
+let progressInFlight = false;
+let progressQueuedImmediate = false;
+
+function doRefreshProgress() {
+  if (progressInFlight) {
+    // An immediate request must not be lost just because a poll is running:
+    // schedule exactly one trailing refresh when it settles.
+    if (!progressFetchTimer) {
+      progressFetchTimer = setTimeout(() => {
+        progressFetchTimer = null;
+        doRefreshProgress();
+      }, 500);
+    }
+    return;
+  }
+  progressInFlight = true;
+  api('GET', '/api/progress')
+    .then(p => progress.set(p))
+    .catch(() => {})
+    .finally(() => {
+      progressInFlight = false;
+      if (progressQueuedImmediate) {
+        progressQueuedImmediate = false;
+        doRefreshProgress();
+      }
+    });
+}
+
 function refreshProgress(immediate = false) {
   if (immediate) {
     if (progressFetchTimer) { clearTimeout(progressFetchTimer); progressFetchTimer = null; }
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    if (progressInFlight) { progressQueuedImmediate = true; return; }
+    doRefreshProgress();
     return;
   }
   if (progressFetchTimer) return;
   progressFetchTimer = setTimeout(() => {
     progressFetchTimer = null;
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    doRefreshProgress();
   }, 500);
 }
 
@@ -124,6 +161,29 @@ async function syncTaskFromStatus() {
   } catch (_) { /* ignore */ }
 }
 
+// Safety net against a stuck "task running" state. The UI disables most action
+// buttons while `taskRunning` is true, so if the SSE connection drops exactly
+// when the backend emits `task_end` — or the broadcaster's TaskStart/TaskEnd
+// pairing ever desyncs — the whole interface would freeze ("si interactúo
+// mucho dejan de servir los botones"). While we believe a task runs, poll
+// /api/status periodically: it reports the server-side truth (activeWork
+// counter), so a missed task_end is healed within one interval instead of
+// lasting until a manual page reload.
+const STUCK_TASK_CHECK_INTERVAL_MS = 5000;
+let stuckTaskTimer = null;
+
+function startStuckTaskWatch() {
+  if (stuckTaskTimer) return;
+  stuckTaskTimer = setInterval(() => {
+    if (!get(taskRunning)) {
+      clearInterval(stuckTaskTimer);
+      stuckTaskTimer = null;
+      return;
+    }
+    syncTaskFromStatus();
+  }, STUCK_TASK_CHECK_INTERVAL_MS);
+}
+
 export function connectSSE() {
   if (eventSource) eventSource.close();
   const locale = getLocale();
@@ -131,6 +191,12 @@ export function connectSSE() {
 
   eventSource.addEventListener('open', () => {
     syncTaskFromStatus();
+  });
+
+  eventSource.addEventListener('error', () => {
+    // The browser auto-reconnects EventSource; meanwhile keep reconciling the
+    // task state from /api/status so buttons never stay disabled during the gap.
+    if (get(taskRunning)) startStuckTaskWatch();
   });
 
   eventSource.addEventListener('log', e => {
@@ -155,6 +221,10 @@ export function connectSSE() {
     const d = JSON.parse(e.data);
     taskEventVersion++;
     taskRunning.set(true);
+    // Reconcile against /api/status while this task runs: if its `task_end`
+    // is ever missed (SSE blip, reconnect), the watch clears the stuck
+    // "running" state that otherwise disables every action button.
+    startStuckTaskWatch();
     resetContentStream(-1);
     clearChatBuf();
     taskTokenUsage.set(null);
@@ -203,8 +273,8 @@ export function connectSSE() {
       // Notify ChatPanel so sendMessageToChat() callers (Generate buttons)
       // can unblock once the assistant turn is over.
       chatTurnEnd.update(n => n + 1);
-      // 异步工具可能仍有子任务；须在此取消 chat_chunk 延迟 flush，
-      // 否则 reload 后的 messages 与 streaming_text 会各显示一遍相同 reply。
+      // async tools may still have subtasks；must cancel here chat_chunk delayed flush，
+      // otherwise the reloaded messages and streaming_text would each show the same reply twice.
       clearChatBuf();
       let sessionId = null;
       currentChatSession.update(s => {

@@ -28,10 +28,18 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	section := r.PathValue("section")
 	switch section {
-	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "pre_planning":
+	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "pre_planning":
+	case "theme", "tone", "philosophical_dilemma":
+		// Plain novel-parameter fields: valid only as generic wand-"Enhance"
+		// targets (enhance_field + enhance_draft in the body); the runner
+		// dispatches on EnhanceField before the section switch below.
 	default:
-		h.writeErrorReq(w, r, http.StatusBadRequest, "unknown_section", section)
-		return
+		// Per-category worldview sections (wv_geography, wv_faction, ...) are
+		// also valid — see agent.WorldviewCategoryBySection.
+		if !agent.IsWorldviewCategorySection(section) {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "unknown_section", section)
+			return
+		}
 	}
 	if !h.tryStartTask() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
@@ -51,6 +59,21 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		// whole-section batch generation.
 		CharacterID string `json:"character_id"`
 		OrgID       string `json:"org_id"`
+		// Per-category worldview section (wv_geography, ...): the frontend can
+		// pass the category explicitly; otherwise it is derived from the key.
+		WorldviewCategory string `json:"worldview_category"`
+		// Creativity level for the differentiating-idea generator (1 Pragmatic ..
+		// 5 Disruptive); ignored by every other section.
+		Creativity int `json:"creativity"`
+		// EnhanceText switches the differentiating-idea generator from CREATE to
+		// ENHANCE mode (rewrite this draft instead of inventing a new idea).
+		EnhanceText string `json:"enhance_text"`
+		// EnhanceField + EnhanceDraft are the generic wand-"Enhance" pair sent by
+		// every textarea/input of the "Novel parameters" tab: the field name and
+		// its current draft. When present the runner rewrites ONLY that field via
+		// enhanceStoryField instead of running the section's creator.
+		EnhanceField string `json:"enhance_field"`
+		EnhanceDraft string `json:"enhance_draft"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.endTask()
@@ -58,17 +81,22 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := SectionGenRequest{
-		Section:     section,
-		StoryIdea:   body.StoryIdea,
-		Story:       body.Story,
-		Name:        body.Name,
-		Category:    body.Category,
-		EntryID:     body.EntryID,
-		SourceID:    body.SourceID,
-		TargetID:    body.TargetID,
-		CharacterID: body.CharacterID,
-		OrgID:       body.OrgID,
-		Ctx:         h.taskCtx, // snapshot: the caller holds the task lock
+		Section:           section,
+		StoryIdea:         body.StoryIdea,
+		Story:             body.Story,
+		Name:              body.Name,
+		Category:          body.Category,
+		EntryID:           body.EntryID,
+		SourceID:          body.SourceID,
+		TargetID:          body.TargetID,
+		CharacterID:       body.CharacterID,
+		OrgID:             body.OrgID,
+		WorldviewCategory: body.WorldviewCategory,
+		CreativityLevel:   body.Creativity,
+		EnhanceText:       body.EnhanceText,
+		EnhanceField:      body.EnhanceField,
+		EnhanceDraft:      body.EnhanceDraft,
+		Ctx:               h.taskCtx, // snapshot: the caller holds the task lock
 	}
 	if err := h.validateSectionGen(req); err != nil {
 		h.endTask()
@@ -155,7 +183,12 @@ func (h *Handlers) normalizeSectionGen(req SectionGenRequest) (config.StoryConfi
 	// that *produce* a story idea must never require one: they are seeded from
 	// the other novel parameters already entered. Everything else needs the
 	// story idea as its generation seed.
-	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "pre_planning" {
+	// Generic wand-"Enhance" rewrites an existing draft of one field: it is
+	// seeded from that draft (and the other parameters), never from the story
+	// idea, so it must not be blocked when the idea is still empty. Same for
+	// the plain theme/tone/philosophical_dilemma enhance targets.
+	isEnhance := strings.TrimSpace(req.EnhanceField) != "" || agent.EnhanceFieldSections(req.Section) && strings.TrimSpace(req.EnhanceDraft) != ""
+	if storyIdea == "" && !isEnhance && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "reader_expectation" && req.Section != "differentiating_idea" && req.Section != "theme" && req.Section != "tone" && req.Section != "philosophical_dilemma" && req.Section != "pre_planning" {
 		return storyCfg, errors.New("story_idea_required")
 	}
 	return storyCfg, nil
@@ -185,13 +218,22 @@ func (h *Handlers) StartDetachedPrePlanGenerate() error {
 		return errors.New("task_running_wait")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	// Same token wiring as tryStartTask: without llm.WithTaskTokens the LLM
-	// calls inside this detached run report no token activity to the chat
-	// panel (the Pre-planning Generate button looked dead even though the
-	// generation was running).
+	// Same token wiring as tryStartTask: without a llm.TaskTokenUsage tracker in
+	// the context, the LLM calls inside this detached run report no token
+	// activity to the frontend badge. Re-use the live task's tracker when one
+	// exists (chat fast path); only create a fresh one when nothing else owns a
+	// tracker, so /api/status keeps reading the right numbers.
 	h.taskMu.Lock()
 	genID := h.generationID
-	ctx, _ = llm.WithTaskTokens(ctx, h.logger)
+	// Attach the tracker that /api/status actually reads: re-use the live task's
+	// tracker when one exists (chat fast path); otherwise OWN h.taskTokens with a
+	// fresh one. The old fallback created a tracker that was never published to
+	// h.taskTokens, so this detached run's tokens went to an orphan and the badge
+	// showed no counts at all.
+	if h.taskTokens == nil {
+		h.taskTokens = llm.NewTaskTokenUsage(h.logger)
+	}
+	ctx = llm.AttachTaskTokens(ctx, h.taskTokens)
 	h.taskCtx = ctx
 	h.taskCancel = cancel
 	h.taskMu.Unlock()
@@ -240,6 +282,10 @@ func (h *Handlers) StartDetachedSectionGenerate(req SectionGenRequest) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.taskMu.Lock()
 	genID := h.generationID
+	// Re-use the live task's token tracker (the chat turn owns it): without this
+	// the detached generation accumulated its tokens in an orphaned tracker and
+	// the frontend badge showed no prompt/completion counts at all.
+	ctx = llm.AttachTaskTokens(ctx, h.taskTokens)
 	h.taskCtx = ctx
 	h.taskCancel = cancel
 	h.taskMu.Unlock()
@@ -276,29 +322,50 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 	h.logger.TaskStart(taskName)
 	if err == nil {
 		h.logger.InfoKey("log.section_generating", sectionLabel(section, h.cfg.Language))
-		switch section {
-		case "style":
-			err = h.generateStyle(ctx, &storyCfg)
-		case "characters":
-			err = h.generateCharactersEntryOrBatch(ctx, &storyCfg, req.CharacterID)
-		case "organizations":
-			err = h.generateOrganizationsEntryOrBatch(ctx, &storyCfg, req.OrgID)
-		case "relations":
-			err = h.generateRelations(ctx, &storyCfg, req.SourceID, req.TargetID)
-		case "locations":
-			err = h.generateLocations(ctx, &storyCfg)
-		case "worldview":
-			err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
-		case "motif":
-			err = h.generateMotif(ctx, &storyCfg)
-		case "story_idea":
-			err = h.generateStoryIdeaFromParams(ctx, &storyCfg)
-		case "audience_profile":
-			err = h.generateAudienceProfile(ctx, &storyCfg)
-		case "inspirational_pieces":
-			err = h.generateInspirationalPieces(ctx, &storyCfg)
-		default:
-			err = fmt.Errorf("unknown_section: %s", section)
+		if ef := strings.TrimSpace(req.EnhanceField); ef != "" && strings.TrimSpace(req.EnhanceDraft) != "" {
+			// Generic wand-"Enhance": rewrite ONLY that novel-parameter field
+			// (the draft came from its textarea/input) instead of running the
+			// section's creator. Kept in sync across both runners.
+			err = h.enhanceStoryField(ctx, &storyCfg, ef, req.EnhanceDraft)
+		} else {
+			switch section {
+			case "style":
+				err = h.generateStyle(ctx, &storyCfg)
+			case "characters":
+				err = h.generateCharactersEntryOrBatch(ctx, &storyCfg, req.CharacterID)
+			case "organizations":
+				err = h.generateOrganizationsEntryOrBatch(ctx, &storyCfg, req.OrgID)
+			case "relations":
+				err = h.generateRelations(ctx, &storyCfg, req.SourceID, req.TargetID)
+			case "locations":
+				err = h.generateLocations(ctx, &storyCfg)
+			case "worldview":
+				// With an entry target the button enriches that single form entry;
+				// without one it batch-generates entries across all categories.
+				if strings.TrimSpace(req.Name) != "" || strings.TrimSpace(req.EntryID) != "" {
+					err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
+				} else {
+					err = h.generateWorldviewBatch(ctx, &storyCfg)
+				}
+			case "wv_geography", "wv_location", "wv_faction", "wv_rule", "wv_knowledge", "wv_history", "wv_other":
+				// Per-category worldview sections: each Worldview-card section has its
+				// own Generate button and only produces entries for that category.
+				err = h.generateWorldviewCategory(ctx, &storyCfg, worldviewCategoryForSection(section, req.WorldviewCategory))
+			case "motif":
+				err = h.generateMotif(ctx, &storyCfg)
+			case "story_idea":
+				err = h.generateStoryIdeaFromParams(ctx, &storyCfg)
+			case "audience_profile":
+				err = h.generateAudienceProfile(ctx, &storyCfg)
+			case "inspirational_pieces":
+				err = h.generateInspirationalPieces(ctx, &storyCfg)
+			case "reader_expectation":
+				err = h.generateReaderExpectation(ctx, &storyCfg)
+			case "differentiating_idea":
+				err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
+			default:
+				err = fmt.Errorf("unknown_section: %s", section)
+			}
 		}
 	}
 	if err != nil {
@@ -335,29 +402,50 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 	}
 	if err == nil {
 		h.logger.InfoKey("log.section_generating", sectionLabel(section, h.cfg.Language))
-		switch section {
-		case "style":
-			err = h.generateStyle(ctx, &storyCfg)
-		case "characters":
-			err = h.generateCharactersEntryOrBatch(ctx, &storyCfg, req.CharacterID)
-		case "organizations":
-			err = h.generateOrganizationsEntryOrBatch(ctx, &storyCfg, req.OrgID)
-		case "relations":
-			err = h.generateRelations(ctx, &storyCfg, req.SourceID, req.TargetID)
-		case "locations":
-			err = h.generateLocations(ctx, &storyCfg)
-		case "worldview":
-			err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
-		case "motif":
-			err = h.generateMotif(ctx, &storyCfg)
-		case "story_idea":
-			err = h.generateStoryIdeaFromParams(ctx, &storyCfg)
-		case "audience_profile":
-			err = h.generateAudienceProfile(ctx, &storyCfg)
-		case "inspirational_pieces":
-			err = h.generateInspirationalPieces(ctx, &storyCfg)
-		default:
-			err = fmt.Errorf("unknown_section: %s", section)
+		if ef := strings.TrimSpace(req.EnhanceField); ef != "" && strings.TrimSpace(req.EnhanceDraft) != "" {
+			// Generic wand-"Enhance": rewrite ONLY that novel-parameter field
+			// (the draft came from its textarea/input) instead of running the
+			// section's creator. Kept in sync across both runners.
+			err = h.enhanceStoryField(ctx, &storyCfg, ef, req.EnhanceDraft)
+		} else {
+			switch section {
+			case "style":
+				err = h.generateStyle(ctx, &storyCfg)
+			case "characters":
+				err = h.generateCharactersEntryOrBatch(ctx, &storyCfg, req.CharacterID)
+			case "organizations":
+				err = h.generateOrganizationsEntryOrBatch(ctx, &storyCfg, req.OrgID)
+			case "relations":
+				err = h.generateRelations(ctx, &storyCfg, req.SourceID, req.TargetID)
+			case "locations":
+				err = h.generateLocations(ctx, &storyCfg)
+			case "worldview":
+				// With an entry target the button enriches that single form entry;
+				// without one it batch-generates entries across all categories.
+				if strings.TrimSpace(req.Name) != "" || strings.TrimSpace(req.EntryID) != "" {
+					err = h.generateWorldview(ctx, &storyCfg, req.Name, req.Category, req.EntryID)
+				} else {
+					err = h.generateWorldviewBatch(ctx, &storyCfg)
+				}
+			case "wv_geography", "wv_location", "wv_faction", "wv_rule", "wv_knowledge", "wv_history", "wv_other":
+				// Per-category worldview sections: each Worldview-card section has its
+				// own Generate button and only produces entries for that category.
+				err = h.generateWorldviewCategory(ctx, &storyCfg, worldviewCategoryForSection(section, req.WorldviewCategory))
+			case "motif":
+				err = h.generateMotif(ctx, &storyCfg)
+			case "story_idea":
+				err = h.generateStoryIdeaFromParams(ctx, &storyCfg)
+			case "audience_profile":
+				err = h.generateAudienceProfile(ctx, &storyCfg)
+			case "inspirational_pieces":
+				err = h.generateInspirationalPieces(ctx, &storyCfg)
+			case "reader_expectation":
+				err = h.generateReaderExpectation(ctx, &storyCfg)
+			case "differentiating_idea":
+				err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
+			default:
+				err = fmt.Errorf("unknown_section: %s", section)
+			}
 		}
 	}
 	if err != nil {
@@ -376,64 +464,123 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 }
 
 func sectionLabel(section, lang string) string {
-	zh := i18n.NormalizeLanguage(lang) == i18n.LangZH
 	switch section {
 	case "style":
-		if zh {
-			return "写作风格与视角"
-		}
 		return "writing style & POV"
 	case "characters":
-		if zh {
-			return "角色"
-		}
+
 		return "characters"
 	case "organizations":
-		if zh {
-			return "组织"
-		}
+
 		return "organizations"
 	case "locations":
-		if zh {
-			return "地点"
-		}
+
 		return "locations"
 	case "worldview":
-		if zh {
-			return "世界观条目"
-		}
+
 		return "worldview entry"
+	case "wv_geography":
+
+		return "geography entries"
+	case "wv_location":
+
+		return "location entries"
+	case "wv_faction":
+
+		return "faction entries"
+	case "wv_rule":
+
+		return "world rules entries"
+	case "wv_knowledge":
+
+		return "story knowledge entries"
+	case "wv_history":
+
+		return "history entries"
+	case "wv_other":
+
+		return "other worldview entries"
 	case "motif":
-		if zh {
-			return "文学母题"
-		}
+
 		return "literary motif"
 	case "story_idea":
-		if zh {
-			return "故事构想"
-		}
+
 		return "story idea"
 	case "audience_profile":
-		if zh {
-			return "目标读者画像"
-		}
+
 		return "ideal reader profile"
 	case "inspirational_pieces":
-		if zh {
-			return "灵感作品"
-		}
+
 		return "inspirational pieces"
+	case "reader_expectation":
+
+		return "target reader's expectation"
+	case "differentiating_idea":
+
+		return "differentiating idea"
 	case "pre_planning":
-		if zh {
-			return "预规划（全书计划）"
-		}
+
 		return "pre-planning (book plan)"
 	default:
-		if zh {
-			return "关系"
-		}
+
 		return "relations"
 	}
+}
+
+// forcedSectionCreativity extracts the optional creativity level carried by a
+// forced generate_section tool call (from a [generate-section:X;creativity=N]
+// tag) so the chat fast path forwards it to the differentiating-idea generator.
+func forcedSectionCreativity(call *agent.ToolCall) int {
+	var params struct {
+		Creativity int `json:"creativity"`
+	}
+	if call != nil {
+		_ = json.Unmarshal(call.Arguments, &params)
+	}
+	return params.Creativity
+}
+
+// forcedSectionEnhance extracts the optional enhance text carried by a forced
+// generate_section tool call (from a [generate-section:differentiating_idea;
+// enhance=<urlencoded draft>] tag) so the chat fast path rewrites the author's
+// own draft instead of creating a brand-new differentiating idea.
+func forcedSectionEnhance(call *agent.ToolCall) string {
+	var params struct {
+		Enhance string `json:"enhance"`
+	}
+	if call != nil {
+		_ = json.Unmarshal(call.Arguments, &params)
+	}
+	return params.Enhance
+}
+
+// forcedSectionEnhancePair returns the (field, draft) pair carried by a forced
+// generate_section call when it is an ENHANCE request (the generic wand button
+// of every "Novel parameters" textarea/input). The chat fast path uses this to
+// populate SectionGenRequest.EnhanceField/EnhanceDraft so the detached runner
+// rewrites just that field instead of running the section's creator. For plain
+// novel fields (theme, tone, ...) the section itself IS the enhance target; for
+// full generator sections the field only travels when enhance=<draft> is set.
+// Returns ("", "") for CREATE requests, preserving legacy behavior.
+func forcedSectionEnhancePair(call *agent.ToolCall) (field, draft string) {
+	if call == nil {
+		return "", ""
+	}
+	var params struct {
+		Section string `json:"section"`
+		Enhance string `json:"enhance"`
+	}
+	_ = json.Unmarshal(call.Arguments, &params)
+	draft = strings.TrimSpace(params.Enhance)
+	if draft == "" {
+		return "", ""
+	}
+	section := strings.TrimSpace(params.Section)
+	if agent.EnhanceFieldSections(section) {
+		return section, draft
+	}
+	// Legacy/back-compat: differentiating_idea CREATE+ENHANCE used EnhanceText.
+	return "", draft
 }
 
 // storyParamsContext assembles the full novel parameters (including the story
@@ -447,128 +594,111 @@ func storyParamsContext(sc *config.StoryConfig, lang string) string {
 	return story.NovelParametersBlock(cfg) + "\n"
 }
 
-// —— motif ——
-
-// motifSeedCount is how many candidate motifs the LLM proposes; one is picked
-// at random so repeated clicks give varied results.
-const motifSeedCount = 12
+// —— motif (Theme & Motif card: theme + literary motif + tone) ——
 
 func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) error {
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 	var b strings.Builder
-	if zh {
-		b.WriteString("你是文学顾问。基于以下作品参数，提出" + fmt.Sprint(motifSeedCount) + "个彼此不同、适合这部作品的文学母题（motif）。\n")
-	} else {
-		b.WriteString("You are a literary consultant. Based on the work parameters below, propose " + fmt.Sprint(motifSeedCount) + " distinct literary motifs suitable for this work.\n")
-	}
+	b.WriteString("You are a literary consultant. Based on the work parameters below, propose the central theme, one recurring literary motif, a fitting tone and the philosophical/operational dilemma at the heart of this work:\n")
+	b.WriteString("- \"theme\": the novel's central idea stated as a short thematic statement (one clause, no explanations);\n")
+	b.WriteString("- \"motif\": one concrete recurring image or device that carries that theme (a short phrase naming one or two key images, no explanations);\n")
+	b.WriteString("- \"tone\": 2-4 mood adjectives describing the work's emotional register, comma-separated;\n")
+	b.WriteString("- \"philosophical_dilemma\": the core dilemma the plot revolves around, stated as an unavoidable choice between two legitimate but incompatible values or positions (philosophical, moral and/or operational/practical), 1-3 sentences; it must be dramatizable — something the protagonist is forced to decide through action, not abstract commentary. Ground it in the genre's conventions and the target audience above;\n")
+	b.WriteString("- \"reader_expectation\": what the TARGET READER of this genre/audience band expects to find: the mandatory genre conventions and obligatory motifs this book must honor, plus the emotional payoff they sign up for; 3-6 short lines separated by newlines.\n")
+
 	wroteParams := false
 	if t := strings.TrimSpace(sc.Type); t != "" {
-		if zh {
-			b.WriteString("类型：" + t + "\n")
-		} else {
-			b.WriteString("Genre: " + t + "\n")
-		}
+		b.WriteString("Genre: " + t + "\n")
+
 		wroteParams = true
 	}
 	if t := strings.TrimSpace(sc.Subgenre); t != "" {
 		// Multi-select: "Cozy Mystery, Noir" -> every entry on its own line.
 		for _, part := range config.SplitSubgenreList(t) {
-			if zh {
-				b.WriteString("子类型：" + part + "\n")
-			} else {
-				b.WriteString("Subgenre: " + part + "\n")
-			}
+			b.WriteString("Subgenre: " + part + "\n")
+
 			wroteParams = true
 		}
 	}
 	if t := strings.TrimSpace(sc.Theme); t != "" {
-		if zh {
-			b.WriteString("主题： " + t + "\n")
-		} else {
-			b.WriteString("Theme: " + t + "\n")
-		}
+		b.WriteString("Theme: " + t + "\n")
+
 		wroteParams = true
 	}
 	if t := strings.TrimSpace(sc.Tone); t != "" {
-		if zh {
-			b.WriteString("基调：" + t + "\n")
-		} else {
-			b.WriteString("Tone: " + t + "\n")
-		}
+		b.WriteString("Tone: " + t + "\n")
+
 		wroteParams = true
 	}
 	if v := strings.TrimSpace(sc.EffectiveConflict()); v != "" {
-		if zh {
-			b.WriteString("冲突规模：" + v + "\n")
-		} else {
-			b.WriteString("Conflict scale: " + v + "\n")
-		}
+		b.WriteString("Conflict scale: " + v + "\n")
+
 		wroteParams = true
 	}
 	if v := strings.TrimSpace(sc.TargetAudience); v != "" {
-		if zh {
-			b.WriteString("目标读者：" + config.AudienceLabel(v, "zh") + "\n")
-		} else {
-			b.WriteString("Target audience: " + config.AudienceLabel(v, "en") + "\n")
-		}
+		b.WriteString("Target audience: " + config.AudienceLabel(v, "en") + "\n")
+
 		wroteParams = true
 	}
 	if p := strings.TrimSpace(sc.AudienceProfile); p != "" {
-		if zh {
-			b.WriteString("目标读者画像：\n" + p + "\n")
-		} else {
-			b.WriteString("Ideal reader profile:\n" + p + "\n")
-		}
+		b.WriteString("Ideal reader profile:\n" + p + "\n")
+
 		wroteParams = true
 	}
 	if v := strings.TrimSpace(sc.WorldDarkness); v != "" {
-		if zh {
-			b.WriteString("世界残酷度：" + config.WorldDarknessLabel(v, "zh") + "\n")
-		} else {
-			b.WriteString("World darkness: " + config.WorldDarknessLabel(v, "en") + "\n")
-		}
+		b.WriteString("World darkness: " + config.WorldDarknessLabel(v, "en") + "\n")
+
 		wroteParams = true
 	}
 	if bt := strings.TrimSpace(sc.StoryIdea); bt != "" {
-		if zh {
-			b.WriteString("已有故事构想（仅作背景参考）：\n" + bt + "\n")
-		} else {
-			b.WriteString("Existing story idea (background only):\n" + bt + "\n")
-		}
+		b.WriteString("Existing story idea (background only):\n" + bt + "\n")
+
 		wroteParams = true
 	}
-	if !wroteParams && zh {
-		b.WriteString("没有任何已填参数，请从经典与现当代文学中广泛取材（如轮回、替身、门槛、水与净化、镜子、复仇、归乡、禁忌之爱等），确保多样。\n")
-	} else if !wroteParams {
-		b.WriteString("No parameters were provided; draw broadly from classic and modern literature (rebirth, doubles, thresholds, water & purification, mirrors, revenge, homecoming, forbidden love...), keeping the list diverse.\n")
+	if !wroteParams {
+		b.WriteString("No parameters were provided; draw broadly from classic and modern literature (rebirth, doubles, thresholds, water & purification, mirrors, revenge, homecoming, forbidden love...), keeping theme, motif and tone coherent with each other.\n")
 	}
-	schema := `{"motifs": ["...", "..."]}`
-	if zh {
-		b.WriteString("\n每个母题用一句中文短语表达（可附一两个关键意象），不要解释。只输出一个 JSON 对象，不要其他文字，不要用代码块包裹。格式：" + schema)
-	} else {
-		b.WriteString("\nEach motif must be a short English phrase (optionally naming one or two key images); no explanations. Output only one JSON object, no other text, no code fences. Format: " + schema)
-	}
+	schema := `{"theme": "...", "motif": "...", "tone": "...", "philosophical_dilemma": "...", "reader_expectation": "..."}`
+	b.WriteString("\nOutput only one JSON object, no other text, no code fences. Format: " + schema)
 
 	var out struct {
-		Motifs []string `json:"motifs"`
+		Theme                string `json:"theme"`
+		Motif                string `json:"motif"`
+		Tone                 string `json:"tone"`
+		PhilosophicalDilemma string `json:"philosophical_dilemma"`
+		ReaderExpectation    string `json:"reader_expectation"`
 	}
 	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
 		return err
 	}
-	var valid []string
-	for _, m := range out.Motifs {
-		if m = strings.TrimSpace(m); m != "" {
-			valid = append(valid, m)
-		}
-	}
-	if len(valid) == 0 {
+	theme := strings.TrimSpace(out.Theme)
+	motif := strings.TrimSpace(out.Motif)
+	tone := strings.TrimSpace(out.Tone)
+	dilemma := strings.TrimSpace(out.PhilosophicalDilemma)
+	expectation := strings.TrimSpace(out.ReaderExpectation)
+	if theme == "" && motif == "" && tone == "" && dilemma == "" && expectation == "" {
 		return errEmptyGeneration
 	}
-	pick := valid[seededRandInt(len(valid))]
 
 	newCfg := *h.cfg
 	newCfg.Story = *sc
-	newCfg.Story.Theme = pick // theme & motif are merged in the UI
+	// The Theme & Motif Generate button fills the fields of its card:
+	// Theme, Literary motif, Tone, Philosophical/operational dilemma and
+	// Target reader's expectation. Only non-empty LLM answers overwrite.
+	if theme != "" {
+		newCfg.Story.Theme = theme
+	}
+	if motif != "" {
+		newCfg.Story.Motif = motif
+	}
+	if tone != "" {
+		newCfg.Story.Tone = tone
+	}
+	if dilemma != "" {
+		newCfg.Story.PhilosophicalDilemma = dilemma
+	}
+	if expectation != "" {
+		newCfg.Story.ReaderExpectation = expectation
+	}
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
@@ -583,125 +713,99 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 	return nil
 }
 
-// seededRandInt returns a pseudo-random int in [0,n) seeded from the clock —
-// good enough to vary motif picks between clicks without importing math/rand
-// global state.
-func seededRandInt(n int) int {
-	if n <= 1 {
-		return 0
-	}
-	ns := time.Now().UnixNano()
-	return int(ns % int64(n))
-}
-
 // —— story_idea ——
 
 func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.StoryConfig) error {
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 	var b strings.Builder
-	if zh {
-		b.WriteString("你是小说策划助手。请根据以下已填写的作品参数，撰写一段连贯的故事构想（story idea），150-300字中文：概括世界观、主角处境、核心冲突与故事走向；只使用这些参数作为依据，不要发明与参数矛盾的类型或基调。若某参数为空则忽略它。\n\n")
-	} else {
-		b.WriteString("You are a novel planning assistant. From the work parameters below, write a coherent story idea of 120-220 words in English: cover the world, the protagonist's situation, the central conflict and the story's direction; rely only on these parameters and never contradict them. Skip any parameter that is empty.\n\n")
-	}
+	b.WriteString("You are a novel planning assistant. From the work parameters below, write a coherent story idea of 120-220 words in English (cover the world, the protagonist's situation, the central conflict and the story's direction), plus the narrative forces in tension, an elevator pitch and a lighthouse sentence; rely only on these parameters and never contradict them. Skip any parameter that is empty.\n\n")
+	b.WriteString("- \"forces_in_tension\": the driving forces FOR the work's thesis (allies, momentum, values propelling it) and the opposing forces AGAINST it (antagonists, systemic resistance, inner contradictions), stated as 2 short paired groups separated by \" || \";\n")
+	b.WriteString("- \"elevator_pitch\": a 2-4 sentence high-concept hook that sells this book to a stranger;\n")
+	b.WriteString("- \"lighthouse_sentence\": ONE immutable guiding sentence — the story's fixed point / core question every chapter must navigate by;\n\n")
+
 	addPair := func(zhLbl, enLbl, v string) {
 		if v = strings.TrimSpace(v); v == "" {
 			return
 		}
-		if zh {
-			b.WriteString(zhLbl + "：" + v + "\n")
-		} else {
-			b.WriteString(enLbl + ": " + v + "\n")
-		}
+		b.WriteString(enLbl + ": " + v + "\n")
+
 	}
-	addPair("类型", "Genre", sc.Type)
+	addPair("class", "Genre", sc.Type)
 	// Multi-select subgenres: list every comma-separated entry.
 	if subs := config.SplitSubgenreList(sc.Subgenre); len(subs) > 0 {
 		parts := make([]string, 0, len(subs))
 		for _, s := range subs {
-			if zh {
-				parts = append(parts, "子类型："+s)
-			} else {
-				parts = append(parts, "Subgenre: "+s)
-			}
+			parts = append(parts, "Subgenre: "+s)
+
 		}
 		b.WriteString(strings.Join(parts, "\n") + "\n")
 	} else {
-		addPair("子类型", "Subgenre", sc.Subgenre)
+		addPair("class", "Subgenre", sc.Subgenre)
 	}
-	addPair("书名/工作名", "Working title", sc.Title)
-	addPair("主题与母题", "Theme & motif", strings.TrimSpace(sc.EffectiveMotif()+" | "+sc.Theme))
-	addPair("基调", "Tone", sc.Tone)
-	if lbl := lengthLabelZH(sc.StoryLength); lbl != "" {
+	addPair("/make", "Working title", sc.Title)
+	addPair("and", "Theme & motif", strings.TrimSpace(sc.EffectiveMotif()+" | "+sc.Theme))
+	addPair("", "Philosophical/operational dilemma", sc.PhilosophicalDilemma)
+	addPair("", "Target reader's expectation", sc.ReaderExpectation)
+	addPair("", "Tone", sc.Tone)
+	if lbl := lengthLabelEN(sc.StoryLength); lbl != "" {
 		chMin, chMax := config.SuggestedChaptersByLength(sc.StoryLength)
 		if chMin > 0 {
-			if zh {
-				b.WriteString("篇幅：" + lbl + fmt.Sprintf("（规划约 %d-%d 章）\n", chMin, chMax))
-			} else {
-				b.WriteString("Length: " + lengthLabelEN(sc.StoryLength) + fmt.Sprintf(" (plan for roughly %d-%d chapters)\n", chMin, chMax))
-			}
-		} else if zh {
-			b.WriteString("篇幅：" + lbl + "\n")
+			b.WriteString("Length: " + lengthLabelEN(sc.StoryLength) + fmt.Sprintf(" (plan for roughly %d-%d chapters)\n", chMin, chMax))
+
 		} else {
 			b.WriteString("Length: " + lengthLabelEN(sc.StoryLength) + "\n")
 		}
+
 	}
 	if t := structureLabel(sc.Structure, h.cfg.Language); t != "" {
-		addPair("故事结构", "Structure", t)
+		addPair("", "Structure", t)
 	}
-	addPair("冲突规模", "Conflict scale", sc.EffectiveConflict())
-	addPair("主角类型", "Protagonist type", sc.EffectiveProtagonist())
-	addPair("特定设定", "Specific settings", sc.SpecificSettings)
+	addPair("", "Conflict scale", sc.EffectiveConflict())
+	addPair("", "Protagonist type", sc.EffectiveProtagonist())
+	addPair("", "Specific settings", sc.SpecificSettings)
 	if v := strings.TrimSpace(sc.TargetAudience); v != "" {
-		if zh {
-			b.WriteString("目标读者：" + config.AudienceLabel(v, "zh") + "\n")
-		} else {
-			b.WriteString("Target audience: " + config.AudienceLabel(v, "en") + "\n")
-		}
+		b.WriteString("Target audience: " + config.AudienceLabel(v, "en") + "\n")
+
 	}
 	if v := strings.TrimSpace(sc.RomanceLevel); v != "" {
 		lbl := sc.EffectiveRomanceLevel()
 		if lbl == "random" {
 			lbl = config.RomanceLevelKeys[1] // the story idea should read concretely, not "random"
 		}
-		addPair("恋爱线比重", "Romance level", config.RomanceLevelLabel(lbl, h.cfg.Language))
+		addPair("lovethreadratioheavy", "Romance level", config.RomanceLevelLabel(lbl, h.cfg.Language))
 	}
 	if v := strings.TrimSpace(sc.SexualContent); v != "" {
-		addPair("性描写尺度", "Sexual content", config.SexualContentLabel(sc.EffectiveSexualContent(), h.cfg.Language))
+		addPair("writedegree", "Sexual content", config.SexualContentLabel(sc.EffectiveSexualContent(), h.cfg.Language))
 	}
 	if v := strings.TrimSpace(sc.GoreLevel); v != "" {
-		addPair("血腥尺度", "Gore level", config.GoreLevelLabel(sc.EffectiveGoreLevel(), h.cfg.Language))
+		addPair("bloodfishydegree", "Gore level", config.GoreLevelLabel(sc.EffectiveGoreLevel(), h.cfg.Language))
 	}
 	if v := strings.TrimSpace(sc.WorldDarkness); v != "" {
-		addPair("世界残酷度", "World darkness", config.WorldDarknessLabel(v, h.cfg.Language))
+		addPair("degree", "World darkness", config.WorldDarknessLabel(v, h.cfg.Language))
 	}
 	if p := strings.TrimSpace(sc.AudienceProfile); p != "" {
-		addPair("目标读者画像", "Ideal reader profile", p)
+		addPair("metricreaddraw", "Ideal reader profile", p)
 	}
 	switch bias := strings.TrimSpace(sc.GenderBias); bias {
 	case "male":
-		addPair("人物性别倾向", "Gender lean", "male")
+		addPair("otherdirection", "Gender lean", "male")
 	case "female":
-		addPair("人物性别倾向", "Gender lean", "female")
+		addPair("otherdirection", "Gender lean", "female")
 	case "balanced":
-		addPair("人物性别倾向", "Gender lean", "balanced")
+		addPair("otherdirection", "Gender lean", "balanced")
 	}
 	if bt := strings.TrimSpace(sc.StoryIdea); bt != "" {
-		if zh {
-			b.WriteString("已有简介（可在其基础上改写扩充，但须与上述参数一致）：\n" + bt + "\n")
-		} else {
-			b.WriteString("Existing story idea (rewrite/expand it, but keep it consistent with the parameters above):\n" + bt + "\n")
-		}
+		b.WriteString("Existing story idea (rewrite/expand it, but keep it consistent with the parameters above; regenerate the forces/pitch/lighthouse fresh from the rewritten idea):\n" + bt + "\n")
+
 	}
-	if zh {
-		b.WriteString("缺少参数时也要尽量用现有参数提供方向。\n")
-	} else {
-		b.WriteString("When some parameters are missing, still ground the story idea in whatever was provided.\n")
-	}
-	b.WriteString(jsonRule(h.cfg.Language, `{"story_idea": "..."}`))
+	b.WriteString("When some parameters are missing, still ground the story idea in whatever was provided.\n")
+
+	b.WriteString(jsonRule(h.cfg.Language, `{"story_idea": "...", "forces_in_tension": "...", "elevator_pitch": "...", "lighthouse_sentence": "..."}`))
 
 	var out struct {
-		StoryIdea string `json:"story_idea"`
+		StoryIdea          string `json:"story_idea"`
+		ForcesInTension    string `json:"forces_in_tension"`
+		ElevatorPitch      string `json:"elevator_pitch"`
+		LighthouseSentence string `json:"lighthouse_sentence"`
 	}
 	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
 		return err
@@ -714,6 +818,408 @@ func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.S
 	newCfg := *h.cfg
 	newCfg.Story = *sc
 	newCfg.Story.StoryIdea = generated
+	// The Story idea card Generate button fills its whole card: abstract
+	// overview (story idea), forces in tension, elevator pitch and lighthouse
+	// sentence. Only non-empty LLM answers overwrite.
+	if v := strings.TrimSpace(out.ForcesInTension); v != "" {
+		newCfg.Story.ForcesInTension = v
+	}
+	if v := strings.TrimSpace(out.ElevatorPitch); v != "" {
+		newCfg.Story.ElevatorPitch = v
+	}
+	if v := strings.TrimSpace(out.LighthouseSentence); v != "" {
+		newCfg.Story.LighthouseSentence = v
+	}
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
+}
+
+// —— reader_expectation (Theme & Motif card: target reader's expectation) ——
+
+// generateReaderExpectation produces the "Target reader's expectation" field:
+// what the readers of this genre/audience band explicitly expect to find,
+// including mandatory genre conventions and obligatory motifs/conventions
+// ("conveniencias") the book must honor. It has its own Generate button in
+// the Theme & Motif card and is seeded from the other novel parameters (it
+// never requires a story idea). The result is stored in
+// Story.ReaderExpectation and injected into outline/writing prompts via
+// NovelParametersBlock, so it genuinely steers generation quality.
+func (h *Handlers) generateReaderExpectation(ctx context.Context, sc *config.StoryConfig) error {
+	var b strings.Builder
+	b.WriteString("You are a commercial fiction analyst. Based on the work parameters below, write the TARGET READER'S EXPECTATION for this book: what a reader who buys this genre/subgenre for this audience band expects to experience, and what would make them feel cheated if absent.\n")
+	b.WriteString("Cover, as compact bullet-like sentences separated by newlines (5-8 lines total):\n")
+	b.WriteString("- the 2-4 mandatory genre conventions this book MUST honor (promise structure, required scenes/elements);\n")
+	b.WriteString("- the obligatory motifs/themes the genre canon touches (the \"must-hit\" beats);\n")
+	b.WriteString("- the emotional payoff the target reader signs up for, and the pacing they expect;\n")
+	b.WriteString("- 1-2 fresh angles that satisfy those expectations without being cliché.\n")
+	b.WriteString("Ground every line in the concrete genre, subgenre and target audience given; never contradict them. Write in English.\n\n")
+
+	wroteParams := false
+	addLine := func(label, v string) {
+		if v = strings.TrimSpace(v); v == "" {
+			return
+		}
+		b.WriteString(label + ": " + v + "\n")
+		wroteParams = true
+	}
+	addLine("Genre", sc.Type)
+	for _, part := range config.SplitSubgenreList(sc.Subgenre) {
+		addLine("Subgenre", part)
+	}
+	addLine("Theme", sc.Theme)
+	addLine("Literary motif", sc.EffectiveMotif())
+	addLine("Tone", sc.Tone)
+	addLine("Philosophical/operational dilemma", sc.PhilosophicalDilemma)
+	addLine("Conflict scale", sc.EffectiveConflict())
+	addLine("Protagonist type", sc.EffectiveProtagonist())
+	if v := strings.TrimSpace(sc.TargetAudience); v != "" {
+		addLine("Target audience", config.AudienceLabel(v, "en"))
+	}
+	addLine("Ideal reader profile", sc.AudienceProfile)
+	addLine("World darkness", config.WorldDarknessLabel(sc.WorldDarkness, "en"))
+	addLine("Existing story idea (background only)", sc.StoryIdea)
+	if !wroteParams {
+		b.WriteString("No parameters were provided; infer a plausible genre/audience combination and state its expectations clearly.\n")
+	}
+	b.WriteString("\nOutput only one JSON object, no other text, no code fences. Format: {\"reader_expectation\": \"...\"}")
+
+	var out struct {
+		ReaderExpectation string `json:"reader_expectation"`
+	}
+	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
+		return err
+	}
+	expectation := strings.TrimSpace(out.ReaderExpectation)
+	if expectation == "" {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	newCfg.Story.ReaderExpectation = expectation
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
+}
+
+// —— differentiating_idea (Story appeal card: unique selling angle) ——
+
+// buildDifferentiatingPrompt assembles the differentiating-idea prompt for a
+// creativity level (1 Pragmatic .. 5 Disruptive). Shared by the background
+// generator below and the synchronous /api/generate/differentiating_idea/suggest
+// handler used by the Story appeal card's "Sugerir" button.
+func buildDifferentiatingPrompt(sc *config.StoryConfig, lang string, level int) string {
+	if level < 1 || level > 5 {
+		level = 3
+	}
+	label := agent.CreativityLevelLabel(level)
+	prompt := storyParamsContext(sc, lang)
+	prompt += fmt.Sprintf("\nBased on the novel parameters above, write ONE \"differentiating idea\" for this book: the unique selling angle that sets it apart from every other title in its genre/subgenre for its target audience. Creativity level: %d (%s). ", level, label)
+	switch level {
+	case 1:
+		prompt += "Pragmatic: stay inside proven market formulas; differentiate only through a solid, familiar execution twist readers already trust.\n"
+	case 2:
+		prompt += "Conservative: a well-known trope deliberately inverted or recombined with one adjacent-genre element; still instantly legible on the shelf.\n"
+	case 4:
+		prompt += "Bold: a high-concept mashup or unexpected POV/structure choice that challenges genre norms while keeping the core promise intact.\n"
+	case 5:
+		prompt += "Disruptive: break the genre's rules on purpose — a form, premise or narrative contract that could not exist in a conventional book of this shelf, yet still delivers the genre's emotional payoff.\n"
+	default:
+		prompt += "Balanced: one clear, marketable twist on the genre conventions that feels fresh but never alienates the target reader.\n"
+	}
+	prompt += "Write 2-4 punchy sentences stating what makes THIS book the only one of its kind; name the conventions it honors and the one it breaks. Do not summarize the plot."
+	prompt += jsonRule(lang, `{"differentiating_idea": "..."}`)
+	return prompt
+}
+
+// parseDifferentiatingIdea extracts the idea text out of a raw LLM answer
+// (JSON object preferred, plain text fallback). Returns "" when unusable.
+func parseDifferentiatingIdea(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if extracted := llm.ExtractJSON(content); extracted != "" {
+		var out struct {
+			DifferentiatingIdea string `json:"differentiating_idea"`
+		}
+		if err := json.Unmarshal([]byte(extracted), &out); err == nil && strings.TrimSpace(out.DifferentiatingIdea) != "" {
+			return strings.TrimSpace(out.DifferentiatingIdea)
+		}
+	}
+	// Fallback: the model ignored the JSON rule — keep the plain text.
+	return content
+}
+
+// PostDifferentiatingIdeaSuggest is the SYNCHRONOUS counterpart of the
+// differentiating_idea background section: the Story appeal card's "Sugerir"
+// flow calls it with the current live payload + slider level and receives the
+// suggestion immediately, WITHOUT starting a global task, so it neither blocks
+// nor gets blocked by other Generate buttons (the design requirement: this
+// field is affected only by its own button). Persisting the accepted idea
+// happens through the normal Save/PUT /api/config path.
+func (h *Handlers) PostDifferentiatingIdeaSuggest(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	var body struct {
+		Story      *config.StoryConfig `json:"story"`
+		Creativity int                 `json:"creativity"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	sc := h.cfg.Story
+	if body.Story != nil {
+		sc = *body.Story
+	}
+	level := body.Creativity
+	if level < 1 || level > 5 {
+		level = 3
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	prompt := buildDifferentiatingPrompt(&sc, h.cfg.Language, level)
+	content := llm.CallAPITemperature(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger, agent.CreativityTemperature(level))
+	idea := parseDifferentiatingIdea(content)
+	if idea == "" {
+		h.writeErrorReq(w, r, http.StatusBadGateway, "empty_generation", "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"differentiating_idea": idea,
+		"creativity_level":     level,
+	})
+}
+
+// buildEnhancePrompt asks the LLM to rewrite/polish the user's own
+// differentiating-idea draft. Unlike buildDifferentiatingPrompt (which CREATES
+// an idea from scratch at a creativity level), this preserves the author's
+// intent and only sharpens wording, specificity and market punch. The answer
+// must keep the novel's output language so it drops straight back into the
+// textarea.
+func buildEnhancePrompt(sc *config.StoryConfig, lang string, text string) string {
+	prompt := storyParamsContext(sc, lang)
+	prompt += "\nThe author drafted this \"differentiating idea\" (the book's unique selling angle):\n---\n"
+	prompt += text
+	prompt += "\n---\nRewrite it so it is sharper, more concrete and more compelling on the genre shelf, while keeping every idea the author already expressed (do NOT invent new plot elements, do not summarize the story, do not change language). Keep 2-4 punchy sentences."
+	prompt += jsonRule(lang, `{"differentiating_idea": "..."}`)
+	return prompt
+}
+
+// PostDifferentiatingIdeaEnhance powers the wand "Enhance" button that appears
+// inside the Story appeal textarea on focus: it takes the CURRENT textarea
+// text, sends it through the chat pipeline (same deterministic
+// [generate-section:differentiating_idea;enhance] fast path used by the
+// aurora "Suggest" bulb) AND calls the LLM synchronously so the improved text
+// lands in the box immediately — no manual copy-paste from the chat needed.
+// Persisting still happens through the normal Save/PUT /api/config path.
+func (h *Handlers) PostDifferentiatingIdeaEnhance(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	var body struct {
+		Story *config.StoryConfig `json:"story"`
+		Text  string              `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "empty_text", "")
+		return
+	}
+	sc := h.cfg.Story
+	if body.Story != nil {
+		sc = *body.Story
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	prompt := buildEnhancePrompt(&sc, h.cfg.Language, text)
+	content := llm.CallAPIWithRetryLog(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger)
+	enhanced := parseDifferentiatingIdea(content)
+	if enhanced == "" {
+		h.writeErrorReq(w, r, http.StatusBadGateway, "empty_generation", "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"differentiating_idea": enhanced,
+	})
+}
+
+// enhanceFieldLabel maps a generic novel-parameter field key (the ones listed
+// in agent.EnhanceFieldSections) to the human-readable name used inside the
+// rewrite prompt so the LLM knows exactly what kind of text it is polishing.
+func enhanceFieldLabel(field string) (label string, ok bool) {
+	switch field {
+	case "theme":
+		return "theme (the central subject/idea the book explores)", true
+	case "motif":
+		return "literary motif (the recurring symbolic element)", true
+	case "tone":
+		return "tone (the narrative voice and emotional register)", true
+	case "philosophical_dilemma":
+		return "philosophical dilemma at the heart of the work", true
+	case "reader_expectation":
+		return "target reader's expectation (genre conventions the reader expects)", true
+	case "inspirational_pieces":
+		return "inspirational pieces (style/mood reference works)", true
+	case "audience_profile":
+		return "audience profile (description of the ideal reader)", true
+	case "differentiating_idea":
+		return "differentiating idea (the book's unique selling angle)", true
+	}
+	return "", false
+}
+
+// parseEnhancedField extracts the rewritten text from the LLM answer for a
+// generic novel-parameter field. Same tolerance as parseDifferentiatingIdea:
+// prefer the JSON object, fall back to the plain text if the model ignored
+// the JSON rule.
+func parseEnhancedField(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if extracted := llm.ExtractJSON(content); extracted != "" {
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(extracted), &out); err == nil {
+			for _, key := range []string{"value", "enhanced", "text"} {
+				if raw, ok := out[key]; ok {
+					var s string
+					if err := json.Unmarshal(raw, &s); err == nil && strings.TrimSpace(s) != "" {
+						return strings.TrimSpace(s)
+					}
+				}
+			}
+		}
+	}
+	return content
+}
+
+// buildGenericEnhancePrompt asks the LLM to rewrite/polish the author's own
+// draft of ANY novel-parameter field (theme, tone, motif, ...). It mirrors
+// buildEnhancePrompt but is parameterised by the field label, preserves every
+// idea already expressed and keeps the novel's output language so the result
+// drops straight back into the textarea/input.
+func buildGenericEnhancePrompt(sc *config.StoryConfig, lang, label, text string) string {
+	prompt := storyParamsContext(sc, lang)
+	prompt += "\nThe author drafted this \"" + label + "\":\n---\n"
+	prompt += text
+	prompt += "\n---\nRewrite it so it is sharper, more concrete and more compelling, while keeping every idea the author already expressed (do NOT invent new plot elements, do not summarize the story, do not change language). Keep the same length and format as the draft."
+	prompt += jsonRule(lang, `{"value": "..."}`)
+	return prompt
+}
+
+// enhanceStoryField is the generic wand-"Enhance" runner shared by both
+// section-generation paths (runSectionGenerate / runDetachedSectionGenerate):
+// when a request carries EnhanceField + EnhanceDraft it rewrites ONLY that
+// novel-parameter field with the LLM and persists just that key through the
+// normal atomic config-save pattern — no other field is touched, mirroring
+// generateDifferentiatingIdea's isolation guarantee.
+func (h *Handlers) enhanceStoryField(ctx context.Context, sc *config.StoryConfig, field, draft string) error {
+	label, ok := enhanceFieldLabel(field)
+	if !ok {
+		return fmt.Errorf("unknown_field: %s", field)
+	}
+	draft = strings.TrimSpace(draft)
+	if draft == "" {
+		return errors.New("empty_text")
+	}
+	prompt := buildGenericEnhancePrompt(sc, h.cfg.Language, label, draft)
+	content := llm.CallAPIWithRetryLog(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger)
+	enhanced := parseEnhancedField(content)
+	if enhanced == "" {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	switch field {
+	case "theme":
+		newCfg.Story.Theme = enhanced
+	case "motif":
+		newCfg.Story.Motif = enhanced
+	case "tone":
+		newCfg.Story.Tone = enhanced
+	case "philosophical_dilemma":
+		newCfg.Story.PhilosophicalDilemma = enhanced
+	case "reader_expectation":
+		newCfg.Story.ReaderExpectation = enhanced
+	case "inspirational_pieces":
+		newCfg.Story.InspirationalPieces = enhanced
+	case "audience_profile":
+		newCfg.Story.AudienceProfile = enhanced
+	case "differentiating_idea":
+		newCfg.Story.DifferentiatingIdea = enhanced
+	}
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
+}
+
+// generateDifferentiatingIdea writes the "differentiating idea": the single
+// angle that sets this book apart from everything else on its genre shelf.
+// Unlike every other generator it is driven by an explicit creativity level
+// (1 Pragmatic .. 5 Disruptive, from the UI slider): the level both shapes the
+// prompt ambition and sets the sampling temperature (agent.CreativityTemperature),
+// so low levels propose shelf-tested twists and high levels propose
+// category-breaking ones. This section ONLY fills differentiating_idea — it
+// never touches the other fields, and no other button overwrites it.
+func (h *Handlers) generateDifferentiatingIdea(ctx context.Context, sc *config.StoryConfig, level int, enhanceText string) error {
+	if level < 1 || level > 5 {
+		level = 3
+	}
+	prompt := buildDifferentiatingPrompt(sc, h.cfg.Language, level)
+	if strings.TrimSpace(enhanceText) != "" {
+		// Enhance mode (wand button inside the textarea): rewrite the author's
+		// own draft instead of creating a brand-new idea from scratch.
+		prompt = buildEnhancePrompt(sc, h.cfg.Language, enhanceText)
+	}
+
+	content := llm.CallAPITemperature(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger, agent.CreativityTemperature(level))
+	idea := parseDifferentiatingIdea(content)
+	if idea == "" {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	newCfg.Story.DifferentiatingIdea = idea
+	newCfg.Story.CreativityLevel = level
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
@@ -733,13 +1239,13 @@ func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.S
 func lengthLabelZH(length string) string {
 	switch length {
 	case config.LengthShort:
-		return "短篇"
+		return "shortpiece"
 	case config.LengthNovella:
-		return "中篇"
+		return "middlepiece"
 	case config.LengthNovel:
-		return "长篇（标准）"
+		return "longpiece(metricstandard)"
 	case config.LengthEpic:
-		return "史诗长篇"
+		return "longpiece"
 	}
 	return ""
 }
@@ -759,15 +1265,15 @@ func lengthLabelEN(length string) string {
 }
 
 var structureLabels = map[string][2]string{ // key -> {zh, en}
-	"three_act":            {"三幕式结构", "3-Act Structure"},
-	"six_act":              {"六幕式结构", "6-Act Structure"},
-	"fichtean":             {"菲希坦曲线", "Fichtean Curve"},
-	"freytag":              {"弗莱塔格金字塔", "Freytag's Pyramid"},
-	"seven_point":          {"七点式结构", "Seven-Point Structure"},
-	"heros_journey":        {"英雄之旅", "Hero's Journey"},
-	"heros_journey_simple": {"英雄之旅（简化）", "Hero's Journey (Simplified)"},
-	"save_the_cat":         {"救猫咪（Save the Cat!）", "Save the Cat!"},
-	"episodic":             {"单元剧结构", "Episodic Structure"},
+	"three_act":            {"Tres actos", "3-Act Structure"},
+	"six_act":              {"Seis actos", "6-Act Structure"},
+	"fichtean":             {"Curva de Fichtean", "Fichtean Curve"},
+	"freytag":              {"Pirámide de Freytag", "Freytag's Pyramid"},
+	"seven_point":          {"Estructura de siete puntos", "Seven-Point Structure"},
+	"heros_journey":        {"El viaje del héroe", "Hero's Journey"},
+	"heros_journey_simple": {"El viaje del héroe (simplificado)", "Hero's Journey (Simplified)"},
+	"save_the_cat":         {"Save the Cat!", "Save the Cat!"},
+	"episodic":             {"Estructura episódica", "Episodic Structure"},
 }
 
 func structureLabel(structure, lang string) string {
@@ -775,15 +1281,15 @@ func structureLabel(structure, lang string) string {
 	if !ok {
 		return strings.TrimSpace(structure) // free-form value passes through
 	}
-	if i18n.NormalizeLanguage(lang) == i18n.LangZH {
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return pair[0]
 	}
 	return pair[1]
 }
 
 func jsonRule(lang, schema string) string {
-	if i18n.NormalizeLanguage(lang) == i18n.LangZH {
-		return "\n\n只输出一个 JSON 对象，不要输出其他文字，不要用代码块包裹。格式：" + schema
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		return "\n\nOutput only one JSON object, no other text, no code fences. Format: " + schema
 	}
 	return "\n\nOutput only one JSON object, no other text, no code fences. Format: " + schema
 }
@@ -805,23 +1311,28 @@ func (h *Handlers) llmJSON(ctx context.Context, prompt string, out any) error {
 
 // —— audience_profile: free-text ideal-reader description (Theme & Motif block) ——
 
+// It fills BOTH fields of the "Ideal reader profile" card together (user
+// request): audience_profile AND reader_expectation — the latter moved from
+// the Theme & Motif card to this section. The expectation half covers the
+// mandatory genre conventions, the obligatory must-hit motifs and the
+// emotional payoff the target reader signs up for.
 func (h *Handlers) generateAudienceProfile(ctx context.Context, sc *config.StoryConfig) error {
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 	prompt := storyParamsContext(sc, h.cfg.Language)
-	if zh {
-		prompt += "\n基于以上作品参数与目标读者年龄段，为这部作品撰写一段“理想读者画像”：这位读者的年龄与身份、阅读习惯、偏好的题材与雷区、为什么会被本书吸引（4-6 句可执行的中文描述）。"
-	} else {
-		prompt += "\nBased on the work parameters and target-age band above, write an \"ideal reader profile\" for this work: the reader's age and identity, reading habits, preferred genres and deal-breakers, and why this book would attract them (4-6 actionable sentences)."
-	}
-	prompt += jsonRule(h.cfg.Language, `{"audience_profile": "..."}`)
+	prompt += "\nBased on the work parameters and target-age band above, produce TWO fields for this work:\n" +
+		"- \"audience_profile\": the ideal reader's age and identity, reading habits, preferred genres and deal-breakers, and why this book would attract them (4-6 actionable sentences).\n" +
+		"- \"reader_expectation\": what the TARGET READER of this genre/subgenre/audience band expects to find: the 2-4 mandatory genre conventions this book MUST honor, the obligatory motifs/themes the genre canon touches (the must-hit beats), the emotional payoff and pacing they sign up for, and 1-2 fresh angles that satisfy those expectations without being cliché (5-8 short lines separated by newlines). Never contradict the given genre, subgenre or target audience."
+
+	prompt += jsonRule(h.cfg.Language, `{"audience_profile": "...", "reader_expectation": "..."}`)
 
 	var out struct {
-		AudienceProfile string `json:"audience_profile"`
+		AudienceProfile   string `json:"audience_profile"`
+		ReaderExpectation string `json:"reader_expectation"`
 	}
 	if err := h.llmJSON(ctx, prompt, &out); err != nil {
 		return err
 	}
 	profile := strings.TrimSpace(out.AudienceProfile)
+	expectation := strings.TrimSpace(out.ReaderExpectation)
 	if profile == "" {
 		return errEmptyGeneration
 	}
@@ -829,6 +1340,11 @@ func (h *Handlers) generateAudienceProfile(ctx context.Context, sc *config.Story
 	newCfg := *h.cfg
 	newCfg.Story = *sc
 	newCfg.Story.AudienceProfile = profile
+	// Only overwrite the expectation when the model actually returned it, so a
+	// hand-written value is never wiped by a partial generation.
+	if expectation != "" {
+		newCfg.Story.ReaderExpectation = expectation
+	}
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
@@ -852,13 +1368,9 @@ func (h *Handlers) generateAudienceProfile(ctx context.Context, sc *config.Story
 // injected into outline/writing/section prompts via NovelParametersBlock, so
 // it genuinely influences generation (as a craft reference, never copied).
 func (h *Handlers) generateInspirationalPieces(ctx context.Context, sc *config.StoryConfig) error {
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 	prompt := storyParamsContext(sc, h.cfg.Language)
-	if zh {
-		prompt += "\n基于以上小说参数（类型、子类型、主题与母题、基调、冲突规模、世界残酷度、目标读者等；故事构想可有可无），为这部作品推荐 4-6 部真实存在的“灵感作品”（inspirational pieces）：小说、影视、游戏或动漫均可，须与作品的类型气质与叙事手法高度契合。每条一行，格式「《作品名》— 作者/出品方：借鉴点（风格/氛围/结构/技法，一句话）」。只推荐真实存在的作品，不要虚构；不要照搬情节，只作气质与技法参考。"
-	} else {
-		prompt += "\nBased on the novel parameters above (genre, subgenre, theme & motif, tone, conflict scale, world darkness, target audience, etc.; a story idea may be absent), recommend 4-6 real \"inspirational pieces\" for this work — novels, films, games or anime that match its genre temperament and narrative craft. One entry per line, formatted \"Title — author/studio: what to borrow (style/atmosphere/structure/technique, one phrase)\". Only recommend works that actually exist; they are craft references, never plot sources."
-	}
+	prompt += "\nBased on the novel parameters above (genre, subgenre, theme & motif, tone, conflict scale, world darkness, target audience, etc.; a story idea may be absent), recommend 4-6 real \"inspirational pieces\" for this work — novels, films, games or anime that match its genre temperament and narrative craft. One entry per line, formatted \"Title — author/studio: what to borrow (style/atmosphere/structure/technique, one phrase)\". Only recommend works that actually exist; they are craft references, never plot sources."
+
 	// Respect the pinned story output language (EN/ES) for this generated text.
 	switch lang := config.NormalizeOutputLanguage(sc.OutputLanguage); lang {
 	case "en":
@@ -901,7 +1413,7 @@ func (h *Handlers) generateInspirationalPieces(ctx context.Context, sc *config.S
 	return nil
 }
 
-// —— style：写作风格与叙事视角（写入 config.json 的故事配置）——
+// -- style: writing style & POV (written into config.json) --
 
 func (h *Handlers) generateStyle(ctx context.Context, sc *config.StoryConfig) error {
 	type styleOut struct {
@@ -909,8 +1421,8 @@ func (h *Handlers) generateStyle(ctx context.Context, sc *config.StoryConfig) er
 		WritingPOV   string `json:"writing_pov"`
 	}
 	prompt := storyParamsContext(sc, h.cfg.Language)
-	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-		prompt += "\n请为这部作品推荐最合适的“写作风格”（语气、句式、节奏、修辞倾向，2-4 句可执行的描述）和“叙事视角”（如第三人称限知、第一人称女主等，并说明理由要点）。"
+	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
+		prompt += "\nRecommend the most fitting \"writing_style\" (tone, sentence rhythm, rhetoric \u2014 2-4 actionable sentences) and \"writing_pov\" (e.g. third-person limited, first-person heroine) for this work."
 	} else {
 		prompt += "\nRecommend the most fitting \"writing_style\" (tone, sentence rhythm, rhetoric — 2-4 actionable sentences) and \"writing_pov\" (e.g. third-person limited, first-person heroine) for this work."
 	}
@@ -953,26 +1465,22 @@ func (h *Handlers) generateCharacters(ctx context.Context, sc *config.StoryConfi
 	if len(h.settings.Characters) > 0 {
 		lines := make([]string, 0, len(h.settings.Characters))
 		for _, c := range h.settings.Characters {
-			lines = append(lines, fmt.Sprintf("- %s（%s）", c.Name, c.Personality))
+			lines = append(lines, fmt.Sprintf("- %s(%s)", c.Name, c.Personality))
 		}
-		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-			prompt += "\n【已有角色】\n" + strings.Join(lines, "\n") + "\n请在保留并完善已有角色的基础上，补充故事构想与小说参数中需要但缺失的角色。"
+		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
+			prompt += "\n[alreadyhashorn]\n" + strings.Join(lines, "\n") + "\npleaseininsurestayandalreadyhashorn upper, thinkandsmallsaynumbermiddlewant tobut horn. "
 		} else {
 			prompt += "\n[EXISTING CHARACTERS]\n" + strings.Join(lines, "\n") + "\nKeep and enrich the existing characters, and add any characters the story idea requires that are missing."
 		}
 	}
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
-	if zh {
-		prompt += "\n请设计 4-7 位核心角色（主角、对手、关键配角），每位包含姓名、年龄、外貌、性格、背景、动机、能力、备注（可为空）。"
-	} else {
-		prompt += "\nDesign 4-7 core characters (protagonist, antagonist, key supporting roles). For each provide name, age, appearance, personality, background, motivation, abilities, notes (may be empty)."
-	}
+	prompt += "\nDesign 4-7 core characters (protagonist, antagonist, key supporting roles). For each provide name, age, appearance, personality, background, motivation, abilities, notes (may be empty)."
+
 	arcsOn := sc.CharacterArcsEnabled
 	genreKey := config.MatchGenreKey(sc.Type + " " + sc.Subgenre) // composite keys (e.g. scifi:steampunk) supported by presets
 	if genreKey == "" {
 		genreKey = config.MatchAnimeModifierKey(sc.Type + " " + sc.Subgenre) // anime/manhwa/game modifiers carry their own field presets
 	}
-	extraKeys, extraDesc := config.GenreCharacterExtraFields(genreKey, zh)
+	extraKeys, extraDesc := config.GenreCharacterExtraFields(genreKey)
 	// Subgenre presets refine (and take precedence over) the parent-genre fields.
 	if subKeys := config.SubgenreCharacterExtraFields(sc.Subgenre); len(subKeys) > 0 {
 		merged := append([]string{}, subKeys...)
@@ -992,21 +1500,15 @@ func (h *Handlers) generateCharacters(ctx context.Context, sc *config.StoryConfi
 		if extraDesc != "" {
 			extraDesc += " "
 		}
-		if zh {
-			extraDesc += "根据子类型还可补充：" + strings.Join(subKeys, "、") + "（同样可选）。"
-		} else {
-			extraDesc += "Given the subgenre, you may also add: " + strings.Join(subKeys, ", ") + " (also optional)."
-		}
+		extraDesc += "Given the subgenre, you may also add: " + strings.Join(subKeys, ", ") + " (also optional)."
+
 	}
 
 	// Genre-specific character fields (borrowed from NovelWriter's per-genre lore
 	// sheets): suggested by the story type/subgenre but never forced.
 	if extraDesc != "" {
-		if zh {
-			prompt += "\n【类型附加字段（建议，可选）】" + extraDesc
-		} else {
-			prompt += "\n[GENRE-SPECIFIC FIELDS (optional suggestions)] " + extraDesc
-		}
+		prompt += "\n[GENRE-SPECIFIC FIELDS (optional suggestions)] " + extraDesc
+
 	}
 	jsonShape := `{"characters":[{"name":"...","age":"...","appearance":"...","personality":"...","background":"...","motivation":"...","abilities":"...","notes":"..."}]}`
 	tail := `"notes":"..."`
@@ -1127,27 +1629,27 @@ func (h *Handlers) generateOrganizations(ctx context.Context, sc *config.StoryCo
 	if len(h.settings.Organizations) > 0 {
 		lines := make([]string, 0, len(h.settings.Organizations))
 		for _, o := range h.settings.Organizations {
-			lines = append(lines, fmt.Sprintf("- %s（%s）", o.Name, o.Type))
+			lines = append(lines, fmt.Sprintf("- %s(%s)", o.Name, o.Type))
 		}
-		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-			prompt += "\n【已有组织】\n" + strings.Join(lines, "\n") + "\n请在保留已有组织的基础上补充简介需要但缺失的组织。"
+		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
+			prompt += "\n[existing organizations]\n" + strings.Join(lines, "\n") + "\nPlease keep the existing organizations and supplement only those that are needed but missing. "
 		} else {
 			prompt += "\n[EXISTING ORGANIZATIONS]\n" + strings.Join(lines, "\n") + "\nKeep the existing ones and add any organizations the story idea implies but that are missing."
 		}
 	}
 	if len(charLines) > 0 {
-		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-			prompt += "\n【可用角色】\n" + strings.Join(charLines, "、") + "\nmembers 字段只能使用上述角色名。"
+		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
+			prompt += "\n[NOMBRES DE PERSONAJES DISPONIBLES]\n" + strings.Join(charLines, ", ") + "\nEl campo members solo puede referenciar nombres de esta lista."
 		} else {
 			prompt += "\n[AVAILABLE CHARACTER NAMES]\n" + strings.Join(charLines, ", ") + "\nThe members field may only reference names from this list."
 		}
 	}
-	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-		prompt += "\n请设计 2-5 个对剧情有推动作用的组织/势力（门派、公司、家族、秘密结社等），包含名称、类型、描述、成员角色名列表。"
+	if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
+		prompt += "\nPlease design 2-5 organizations/factions that drive the plot (sects, companies, families, secret societies, etc.), each with name, type, description, and a list of member character names. "
 	} else {
 		prompt += "\nDesign 2-5 organizations/factions that drive the plot (sects, companies, families, secret societies...). Provide name, type, description and member character names."
 	}
-	prompt += jsonRule(h.cfg.Language, `{"organizations":[{"name":"...","type":"...","description":"...","members":["角色名"]}]}`)
+	prompt += jsonRule(h.cfg.Language, `{"organizations":[{"name":"...","type":"...","description":"...","members":["character"]}]}`)
 
 	var out struct {
 		Organizations []struct {
@@ -1232,7 +1734,6 @@ func (h *Handlers) generateCharactersEntryOrBatch(ctx context.Context, sc *confi
 // generateCharacterEntry fills the empty fields of one saved character with
 // LLM output derived from the story parameters and the character's own name.
 func (h *Handlers) generateCharacterEntry(ctx context.Context, sc *config.StoryConfig, charID string) error {
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 	var target *story.Character
 	for i := range h.settings.Characters {
 		if h.settings.Characters[i].ID == charID {
@@ -1241,9 +1742,7 @@ func (h *Handlers) generateCharacterEntry(ctx context.Context, sc *config.StoryC
 		}
 	}
 	if target == nil {
-		if zh {
-			return errors.New("找不到该角色，请先保存后再点击生成")
-		}
+
 		return errors.New("character not found; save it before generating")
 	}
 
@@ -1255,20 +1754,14 @@ func (h *Handlers) generateCharacterEntry(ctx context.Context, sc *config.StoryC
 		}
 		line := c.Name
 		if p := strings.TrimSpace(c.Personality); p != "" {
-			if zh {
-				line += "（" + p + "）"
-			} else {
-				line += " (" + p + ")"
-			}
+			line += " (" + p + ")"
+
 		}
 		others = append(others, "- "+line)
 	}
 	if len(others) > 0 {
-		if zh {
-			prompt += "\n【其他已有角色】\n" + strings.Join(others, "\n") + "\n请让新设定与其他角色互补、不冲突。"
-		} else {
-			prompt += "\n[OTHER EXISTING CHARACTERS]\n" + strings.Join(others, "\n") + "\nMake this character complement the others without contradicting them."
-		}
+		prompt += "\n[OTHER EXISTING CHARACTERS]\n" + strings.Join(others, "\n") + "\nMake this character complement the others without contradicting them."
+
 	}
 
 	fieldLines := []string{}
@@ -1277,32 +1770,22 @@ func (h *Handlers) generateCharacterEntry(ctx context.Context, sc *config.StoryC
 		if val == "" {
 			return
 		}
-		if zh {
-			fieldLines = append(fieldLines, fmt.Sprintf("- %s：%s", label, val))
-		} else {
-			fieldLines = append(fieldLines, fmt.Sprintf("- %s: %s", key, val))
-		}
+		fieldLines = append(fieldLines, fmt.Sprintf("- %s: %s", key, val))
+
 	}
-	addField("age", "年龄", target.Age)
-	addField("appearance", "外貌", target.Appearance)
-	addField("personality", "性格", target.Personality)
-	addField("background", "背景", target.Background)
-	addField("motivation", "动机", target.Motivation)
-	addField("abilities", "能力", target.Abilities)
-	addField("notes", "备注", target.Notes)
-	if zh {
-		prompt += fmt.Sprintf("\n请完善角色「%s」。以下字段作者已填写，必须原样保留、不得改写：\n%s\n", target.Name, strings.Join(fieldLines, "\n"))
-		prompt += "只为空缺的字段（age/appearance/personality/background/motivation/abilities/notes，以及 goals/flaws/strengths/arc 若启用）生成与故事构想一致的内容；name 字段返回原值。"
-	} else {
-		prompt += fmt.Sprintf("\nComplete the character \"%s\". The author already filled these fields — keep them verbatim, never rewrite them:\n%s\n", target.Name, strings.Join(fieldLines, "\n"))
-		prompt += "Generate content ONLY for the empty fields (age/appearance/personality/background/motivation/abilities/notes, plus goals/flaws/strengths/arc when enabled), consistent with the story idea; return name unchanged."
-	}
+	addField("age", "year", target.Age)
+	addField("appearance", "outside", target.Appearance)
+	addField("personality", "grid", target.Personality)
+	addField("background", "back", target.Background)
+	addField("motivation", "movemachine", target.Motivation)
+	addField("abilities", "canforce", target.Abilities)
+	addField("notes", "equipment", target.Notes)
+	prompt += fmt.Sprintf("\nComplete the character \"%s\". The author already filled these fields — keep them verbatim, never rewrite them:\n%s\n", target.Name, strings.Join(fieldLines, "\n"))
+	prompt += "Generate content ONLY for the empty fields (age/appearance/personality/background/motivation/abilities/notes, plus goals/flaws/strengths/arc when enabled), consistent with the story idea; return name unchanged."
+
 	if sc.CharacterArcsEnabled {
-		if zh {
-			prompt += "并补充 goals、flaws、strengths、arc。"
-		} else {
-			prompt += " Also fill goals, flaws, strengths and arc."
-		}
+		prompt += " Also fill goals, flaws, strengths and arc."
+
 	}
 	prompt += jsonRule(h.cfg.Language, `{"character":{"name":"...","age":"...","appearance":"...","personality":"...","background":"...","motivation":"...","abilities":"...","notes":"..."}}`)
 
@@ -1369,7 +1852,6 @@ func (h *Handlers) generateOrganizationsEntryOrBatch(ctx context.Context, sc *co
 // generateOrganizationEntry fills the empty description of one saved
 // organization (and suggests members from existing characters).
 func (h *Handlers) generateOrganizationEntry(ctx context.Context, sc *config.StoryConfig, orgID string) error {
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 	var target *story.Organization
 	for i := range h.settings.Organizations {
 		if h.settings.Organizations[i].ID == orgID {
@@ -1378,9 +1860,7 @@ func (h *Handlers) generateOrganizationEntry(ctx context.Context, sc *config.Sto
 		}
 	}
 	if target == nil {
-		if zh {
-			return errors.New("找不到该组织，请先保存后再点击生成")
-		}
+
 		return errors.New("organization not found; save it before generating")
 	}
 
@@ -1392,31 +1872,19 @@ func (h *Handlers) generateOrganizationEntry(ctx context.Context, sc *config.Sto
 		nameToID[strings.TrimSpace(c.Name)] = c.ID
 	}
 	if len(charLines) > 0 {
-		if zh {
-			prompt += "\n【可用角色】\n" + strings.Join(charLines, "、") + "\nmembers 字段只能使用上述角色名。"
-		} else {
-			prompt += "\n[AVAILABLE CHARACTER NAMES]\n" + strings.Join(charLines, ", ") + "\nThe members field may only reference names from this list."
-		}
+		prompt += "\n[AVAILABLE CHARACTER NAMES]\n" + strings.Join(charLines, ", ") + "\nThe members field may only reference names from this list."
+
 	}
 	desc := strings.TrimSpace(target.Description)
-	if zh {
-		prompt += fmt.Sprintf("\n请完善组织「%s」（类型：%s）。", target.Name, target.Type)
-		if desc != "" {
-			prompt += "作者已填写的描述必须保留并在其基础上扩写：" + desc
-		} else {
-			prompt += "请生成一段完整、具体、与故事构想一致的描述。"
-		}
-		prompt += "同时给出 1-4 个最相关的成员（仅限上面列表中的角色名）。不要修改名称与类型。"
+	prompt += fmt.Sprintf("\nComplete the organization \"%s\" (type: %s).", target.Name, target.Type)
+	if desc != "" {
+		prompt += " Keep the author's existing description and enrich it: " + desc
 	} else {
-		prompt += fmt.Sprintf("\nComplete the organization \"%s\" (type: %s).", target.Name, target.Type)
-		if desc != "" {
-			prompt += " Keep the author's existing description and enrich it: " + desc
-		} else {
-			prompt += " Generate one complete, concrete description consistent with the story idea."
-		}
-		prompt += " Also suggest 1-4 most relevant members (only names from the list above). Do not change the name or type."
+		prompt += " Generate one complete, concrete description consistent with the story idea."
 	}
-	prompt += jsonRule(h.cfg.Language, `{"organization":{"description":"...","members":["角色名"]}}`)
+	prompt += " Also suggest 1-4 most relevant members (only names from the list above). Do not change the name or type."
+
+	prompt += jsonRule(h.cfg.Language, `{"organization":{"description":"...","members":["character"]}}`)
 
 	var out struct {
 		Organization struct {
@@ -1471,7 +1939,6 @@ func (h *Handlers) generateOrganizationEntry(ctx context.Context, sc *config.Sto
 // tags derived from the story parameters. When an entry already exists with
 // that name it is enriched in place; otherwise a new entry is created.
 func (h *Handlers) generateWorldview(ctx context.Context, sc *config.StoryConfig, name, category, entryID string) error {
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 	name = strings.TrimSpace(name)
 	category = strings.TrimSpace(category)
 	entryID = strings.TrimSpace(entryID)
@@ -1479,9 +1946,7 @@ func (h *Handlers) generateWorldview(ctx context.Context, sc *config.StoryConfig
 		category = "general"
 	}
 	if name == "" && entryID == "" {
-		if zh {
-			return errors.New("请先填写该世界观条目的名称，再点击生成")
-		}
+
 		return errors.New("enter a name for this worldview entry before generating")
 	}
 	// When editing an existing entry, keep its canonical name/category so the
@@ -1499,15 +1964,10 @@ func (h *Handlers) generateWorldview(ctx context.Context, sc *config.StoryConfig
 	}
 
 	prompt := storyParamsContext(sc, h.cfg.Language)
-	if zh {
-		prompt += fmt.Sprintf("\n请为世界观条目「%s」（类别：%s）生成本故事所需的设定内容。", name, category)
-		prompt += "\ndescription：一段完整、具体、与故事构想和类型一致的设定描述（地点写氛围与用途，组织写性质与目标，概念写规则与代价等）。"
-		prompt += "\ntags：逗号分隔的关键词（可关联已有角色/组织名）。不要修改名称与类别。"
-	} else {
-		prompt += fmt.Sprintf("\nGenerate the worldbuilding content for the entry \"%s\" (category: %s) required by this story.", name, category)
-		prompt += "\ndescription: one complete, concrete paragraph consistent with the story idea, genre and tone (for locations: atmosphere & purpose; organizations: nature & goals; concepts: rules & costs)."
-		prompt += "\ntags: comma-separated keywords (you may reference existing characters/organizations). Do not change the name or category."
-	}
+	prompt += fmt.Sprintf("\nGenerate the worldbuilding content for the entry \"%s\" (category: %s) required by this story.", name, category)
+	prompt += "\ndescription: one complete, concrete paragraph consistent with the story idea, genre and tone (for locations: atmosphere & purpose; organizations: nature & goals; concepts: rules & costs)."
+	prompt += "\ntags: comma-separated keywords (you may reference existing characters/organizations). Do not change the name or category."
+
 	prompt += jsonRule(h.cfg.Language, `{"entry":{"description":"...","tags":"..."}}`)
 
 	var out struct {
@@ -1573,24 +2033,31 @@ func (h *Handlers) generateWorldview(ctx context.Context, sc *config.StoryConfig
 	return nil
 }
 
-// —— locations —— (worldview entries with Category == "location")
+// —— worldview batch —— (generate entries across ALL categories at once:
+// geography, location, faction, rule, knowledge, history, other). Kept for
+// the chat "worldview" section when no entry target is given. The config-page
+// Worldview card now uses generateWorldviewCategory per category instead, so
+// each section only produces what the author actually asked for. When
+// LocationsEnabled is false the "location" category is excluded.
 
-func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig) error {
+func (h *Handlers) generateWorldviewBatch(ctx context.Context, sc *config.StoryConfig) error {
 	prompt := storyParamsContext(sc, h.cfg.Language)
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 
-	existing := h.settings.Locations()
-	if len(existing) > 0 {
-		lines := make([]string, 0, len(existing))
-		for _, w := range existing {
-			lines = append(lines, "- "+w.Name)
-		}
-		if zh {
-			prompt += "\n【已有地点】\n" + strings.Join(lines, "\n") + "\n请在保留已有地点的基础上补充简介需要但缺失的地点。"
-		} else {
-			prompt += "\n[EXISTING LOCATIONS]\n" + strings.Join(lines, "\n") + "\nKeep the existing ones and add any locations the story idea implies but that are missing."
-		}
+	categories := []string{"geography", "faction", "rule", "knowledge", "history", "other"}
+	if sc.LocationsEnabled {
+		categories = append(categories, "location")
 	}
+
+	existingLines := make([]string, 0, len(h.settings.Worldview))
+	for _, w := range h.settings.Worldview {
+		existingLines = append(existingLines, fmt.Sprintf("- [%s] %s", w.Category, w.Name))
+	}
+	if len(existingLines) > 0 {
+		prompt += "\n[EXISTING WORLDBUILDING ENTRIES]\n" + strings.Join(existingLines, "\n") + "\nKeep the existing ones; only add new entries for what the story implies but is missing."
+	} else {
+		prompt += "\nThere are no worldbuilding entries yet — create them from scratch."
+	}
+
 	orgLines := make([]string, 0, len(h.settings.Organizations))
 	for _, o := range h.settings.Organizations {
 		orgLines = append(orgLines, o.Name)
@@ -1599,58 +2066,63 @@ func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig
 	for _, c := range h.settings.Characters {
 		charLines = append(charLines, c.Name)
 	}
-	if zh {
-		prompt += "\n请设计 3-6 个对剧情重要的地点/场景（城市、据点、地标、秘境等），每个包含名称、简短描述、标签（逗号分隔，可关联组织或角色名）。"
-	} else {
-		prompt += "\nDesign 3-6 important locations/scenes for this story (cities, strongholds, landmarks, hidden places...). For each provide name, a short description and comma-separated tags (may mention existing organizations or characters)."
-	}
+
+	prompt += fmt.Sprintf("\nDesign the worldview of this story as concise entries spread across these categories: %s. Cover every category that matters for this story (geography & key places, factions/power groups, governing rules or magic-system constraints, knowledge/lore, pivotal history) and generate as many entries per category as the story genuinely needs — skip a category entirely if it does not apply. For each entry provide name, category, a short concrete description consistent with the story idea, genre and tone, and comma-separated tags (you may reference existing organizations or characters).", strings.Join(categories, ", "))
+
 	if len(orgLines) > 0 || len(charLines) > 0 {
 		names := append(append([]string{}, orgLines...), charLines...)
-		if zh {
-			prompt += "\n【相关实体】" + strings.Join(names, "、") + "（可在 tags 中引用）"
-		} else {
-			prompt += "\n[RELATED ENTITIES] " + strings.Join(names, ", ") + " (you may reference them in tags)"
-		}
+		prompt += "\n[RELATED ENTITIES] " + strings.Join(names, ", ") + " (you may reference them in tags)"
 	}
-	prompt += jsonRule(h.cfg.Language, `{"locations":[{"name":"...","description":"...","tags":"..."}]}`)
+
+	prompt += jsonRule(h.cfg.Language, `{"entries":[{"name":"...","category":"geography|location|faction|rule|knowledge|history|other","description":"...","tags":"..."}]}`)
 
 	var out struct {
-		Locations []struct {
+		Entries []struct {
 			Name        string `json:"name"`
+			Category    string `json:"category"`
 			Description string `json:"description"`
 			Tags        string `json:"tags"`
-		} `json:"locations"`
+		} `json:"entries"`
 	}
 	if err := h.llmJSON(ctx, prompt, &out); err != nil {
 		return err
 	}
-	if len(out.Locations) == 0 {
+	if len(out.Entries) == 0 {
 		return errEmptyGeneration
+	}
+
+	validCategory := map[string]bool{}
+	for _, c := range categories {
+		validCategory[c] = true
 	}
 
 	next := *h.settings
 	next.Worldview = append([]story.WorldviewEntry{}, h.settings.Worldview...)
 	existingNames := map[string]bool{}
 	for _, w := range next.Worldview {
-		if w.Category == story.WorldviewCategoryLocation {
-			existingNames[strings.TrimSpace(w.Name)] = true
-		}
+		existingNames[strings.ToLower(strings.TrimSpace(w.Name))] = true
 	}
 	ps := &next
 	added := 0
-	for _, gen := range out.Locations {
+	for _, gen := range out.Entries {
 		name := strings.TrimSpace(gen.Name)
-		if name == "" || existingNames[name] {
+		cat := strings.TrimSpace(strings.ToLower(gen.Category))
+		if name == "" || existingNames[strings.ToLower(name)] {
 			continue
+		}
+		if !validCategory[cat] {
+			// Unknown/disallowed category (e.g. "location" when disabled): keep
+			// the entry but file it under "other" so it still shows in the UI.
+			cat = "other"
 		}
 		next.Worldview = append(next.Worldview, story.WorldviewEntry{
 			ID:          ps.NextWorldviewID(),
-			Category:    story.WorldviewCategoryLocation,
+			Category:    cat,
 			Name:        name,
 			Description: strings.TrimSpace(gen.Description),
 			Tags:        strings.TrimSpace(gen.Tags),
 		})
-		existingNames[name] = true
+		existingNames[strings.ToLower(name)] = true
 		added++
 	}
 	if added == 0 {
@@ -1664,6 +2136,142 @@ func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig
 	}
 	h.settings = &next
 	return nil
+}
+
+// —— worldview per-category —— (one section per category in the Worldview
+// card: geography, location, faction, rule, knowledge, history, other). Each
+// section's Generate button only produces entries for its own category, and
+// the number of entries is decided by the LLM according to what the story
+// actually needs ("other" gets a soft cap so it never swells). The "location"
+// category requires LocationsEnabled. Existing entries are kept; only new,
+// non-duplicated ones are added.
+
+// worldviewCategoryForSection resolves the target category for a per-category
+// worldview section (wv_geography, ...). An explicit request override wins;
+// otherwise the category is derived from the section key.
+func worldviewCategoryForSection(section, override string) string {
+	if c := strings.TrimSpace(override); c != "" {
+		return c
+	}
+	return agent.WorldviewCategoryBySection()[section]
+}
+
+func (h *Handlers) generateWorldviewCategory(ctx context.Context, sc *config.StoryConfig, category string) error {
+	category = strings.TrimSpace(strings.ToLower(category))
+	if category == "" {
+		return errors.New("worldview category is required")
+	}
+	if category == story.WorldviewCategoryLocation && !sc.LocationsEnabled {
+		return errors.New("locations are disabled in the novel parameters")
+	}
+
+	prompt := storyParamsContext(sc, h.cfg.Language)
+
+	existing := make([]string, 0)
+	for _, w := range h.settings.Worldview {
+		if strings.EqualFold(strings.TrimSpace(w.Category), category) {
+			existing = append(existing, "- "+w.Name+": "+w.Description)
+		}
+	}
+	if len(existing) > 0 {
+		prompt += "\n[EXISTING \"" + category + "\" ENTRIES]\n" + strings.Join(existing, "\n") + "\nKeep the existing ones; only add new entries for what the story implies but is missing."
+	} else {
+		prompt += "\nThere are no \"" + category + "\" entries yet — create them from scratch."
+	}
+
+	orgLines := make([]string, 0, len(h.settings.Organizations))
+	for _, o := range h.settings.Organizations {
+		orgLines = append(orgLines, o.Name)
+	}
+	charLines := make([]string, 0, len(h.settings.Characters))
+	for _, c := range h.settings.Characters {
+		charLines = append(charLines, c.Name)
+	}
+
+	guidance := map[string]string{
+		"geography": "regions, terrain, climate, borders, routes and other spatial facts of the world",
+		"location":  "specific cities, buildings, landmarks or scenes where the story takes place",
+		"faction":   "power groups that drive the plot (sects, companies, families, guilds, secret societies...)",
+		"rule":      "governing rules of the world: physical/magic-system constraints, laws, taboos and their costs",
+		"knowledge": "lore the characters can know or discover: legends, sciences, secrets, in-world books",
+		"history":   "pivotal past events, wars, eras and their consequences for the present story",
+		"other":     "any other worldbuilding element that does not fit the standard categories",
+	}[category]
+	if guidance == "" {
+		guidance = "worldbuilding elements of this kind"
+	}
+
+	countRule := "Generate as many entries as this story genuinely needs for the category (typically 2-6)."
+	if category == "other" {
+		countRule = "Only generate entries that clearly do not fit geography/location/faction/rule/knowledge/history, and keep it minimal (at most 3)."
+	}
+
+	prompt += fmt.Sprintf("\nDesign the \"%s\" dimension of this story's worldview: %s. %s For each entry provide name, a short concrete description consistent with the story idea, genre and tone, and comma-separated tags (you may reference existing organizations or characters). Every entry MUST belong to the category \"%s\".", category, guidance, countRule, category)
+
+	if len(orgLines) > 0 || len(charLines) > 0 {
+		names := append(append([]string{}, orgLines...), charLines...)
+		prompt += "\n[RELATED ENTITIES] " + strings.Join(names, ", ") + " (you may reference them in tags)"
+	}
+
+	prompt += jsonRule(h.cfg.Language, `{"entries":[{"name":"...","description":"...","tags":"..."}]}`)
+
+	var out struct {
+		Entries []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Tags        string `json:"tags"`
+		} `json:"entries"`
+	}
+	if err := h.llmJSON(ctx, prompt, &out); err != nil {
+		return err
+	}
+	if len(out.Entries) == 0 {
+		return errEmptyGeneration
+	}
+
+	next := *h.settings
+	next.Worldview = append([]story.WorldviewEntry{}, h.settings.Worldview...)
+	existingNames := map[string]bool{}
+	for _, w := range next.Worldview {
+		existingNames[strings.ToLower(strings.TrimSpace(w.Name))] = true
+	}
+	ps := &next
+	added := 0
+	for _, gen := range out.Entries {
+		name := strings.TrimSpace(gen.Name)
+		if name == "" || existingNames[strings.ToLower(name)] {
+			continue
+		}
+		next.Worldview = append(next.Worldview, story.WorldviewEntry{
+			ID:          ps.NextWorldviewID(),
+			Category:    category,
+			Name:        name,
+			Description: strings.TrimSpace(gen.Description),
+			Tags:        strings.TrimSpace(gen.Tags),
+		})
+		existingNames[strings.ToLower(name)] = true
+		added++
+	}
+	if added == 0 {
+		return errEmptyGeneration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := story.SaveProjectSettings(h.settingsPath, &next); err != nil {
+		return err
+	}
+	h.settings = &next
+	return nil
+}
+
+// —— locations —— (worldview entries with Category == "location"). Thin alias
+// of the per-category worldview generator so both section keys ("locations"
+// from the chat tool and "wv_location" from the Worldview card button) share
+// exactly one implementation.
+
+func (h *Handlers) generateLocations(ctx context.Context, sc *config.StoryConfig) error {
+	return h.generateWorldviewCategory(ctx, sc, "location")
 }
 
 // —— relations ——
@@ -1707,32 +2315,23 @@ func (h *Handlers) entityListLines() []string {
 func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig, srcID, tgtID string) error {
 	srcID = strings.TrimSpace(srcID)
 	tgtID = strings.TrimSpace(tgtID)
-	zh := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH
 
 	kinds := h.entityKindByID()
 	if srcID != "" && tgtID != "" {
 		if _, ok := kinds[srcID]; !ok {
-			if zh {
-				return errors.New("源实体不存在，请先保存该实体后再生成关系")
-			}
+
 			return errors.New("source entity not found; save it before generating the relation")
 		}
 		if _, ok := kinds[tgtID]; !ok {
-			if zh {
-				return errors.New("目标实体不存在，请先保存该实体后再生成关系")
-			}
+
 			return errors.New("target entity not found; save it before generating the relation")
 		}
 		if srcID == tgtID {
-			if zh {
-				return errors.New("请选择两个不同的实体来生成关系")
-			}
+
 			return errors.New("pick two different entities to generate a relation")
 		}
 	} else if len(h.settings.Characters)+len(h.settings.Organizations) < 2 {
-		if zh {
-			return errors.New("请先生成或添加至少两个角色/组织，然后再生成关系")
-		}
+
 		return errors.New("generate or add at least two characters/organizations before generating relations")
 	}
 
@@ -1740,25 +2339,15 @@ func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig
 	lines := h.entityListLines()
 	if srcID != "" && tgtID != "" {
 		// Single-pair mode: fill the relation between the two chosen entities.
-		if zh {
-			prompt += "\n【现有实体（id | 名称）】\n" + strings.Join(lines, "\n")
-			prompt += fmt.Sprintf("\n只为这一对实体生成一条关系：source_id=%s，target_id=%s。", srcID, tgtID)
-			prompt += "\n结合双方的设定与故事构想，设计一条最有戏剧张力的一条关系（敌对、师承、暗恋、效忠、血缘、阴谋等），label 用一句话描述关系及其暗流。"
-			prompt += "\n只返回 JSON 数组中包含这一条关系的对象。"
-		} else {
-			prompt += "\n[EXISTING ENTITIES (id | name)]\n" + strings.Join(lines, "\n")
-			prompt += fmt.Sprintf("\nGenerate exactly ONE relationship for this pair: source_id=%s, target_id=%s.", srcID, tgtID)
-			prompt += "\nBased on both entities' profiles and the story idea, design the single most dramatically charged relation (rivalry, mentorship, secret loyalty, blood tie, conspiracy...); label is one sentence describing the relation and its undercurrents."
-			prompt += "\nReturn only that one relation in the JSON array."
-		}
+		prompt += "\n[EXISTING ENTITIES (id | name)]\n" + strings.Join(lines, "\n")
+		prompt += fmt.Sprintf("\nGenerate exactly ONE relationship for this pair: source_id=%s, target_id=%s.", srcID, tgtID)
+		prompt += "\nBased on both entities' profiles and the story idea, design the single most dramatically charged relation (rivalry, mentorship, secret loyalty, blood tie, conspiracy...); label is one sentence describing the relation and its undercurrents."
+		prompt += "\nReturn only that one relation in the JSON array."
+
 	} else {
-		if zh {
-			prompt += "\n【现有实体（id | 名称）】\n" + strings.Join(lines, "\n") + "\nsource_id/target_id 必须使用上面的 id；source_type/target_type 取对应方括号中的类型。"
-			prompt += "\n请设计 5-10 条对剧情有张力的关键关系（敌对、师承、暗恋、效忠、血缘等），label 用一句话描述关系及其暗流。避免重复已有关系。"
-		} else {
-			prompt += "\n[EXISTING ENTITIES (id | name)]\n" + strings.Join(lines, "\n") + "\nUse the ids above for source_id/target_id and the bracketed kind for source_type/target_type."
-			prompt += "\nDesign 5-10 key relationships with dramatic tension (rivals, mentorship, secret loyalty, blood ties...); label is one sentence describing the relation and its undercurrents. Avoid duplicating existing relations."
-		}
+		prompt += "\n[EXISTING ENTITIES (id | name)]\n" + strings.Join(lines, "\n") + "\nUse the ids above for source_id/target_id and the bracketed kind for source_type/target_type."
+		prompt += "\nDesign 5-10 key relationships with dramatic tension (rivals, mentorship, secret loyalty, blood ties...); label is one sentence describing the relation and its undercurrents. Avoid duplicating existing relations."
+
 	}
 	if len(h.settings.Relations) > 0 {
 		ex := make([]string, 0, len(h.settings.Relations))
@@ -1770,10 +2359,10 @@ func (h *Handlers) generateRelations(ctx context.Context, sc *config.StoryConfig
 			nameByID[o.ID] = o.Name
 		}
 		for _, rl := range h.settings.Relations {
-			ex = append(ex, fmt.Sprintf("%s → %s：%s", nameByID[rl.SourceID], nameByID[rl.TargetID], rl.Label))
+			ex = append(ex, fmt.Sprintf("%s → %s: %s", nameByID[rl.SourceID], nameByID[rl.TargetID], rl.Label))
 		}
-		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangZH {
-			prompt += "\n【已有关系】\n" + strings.Join(ex, "\n")
+		if i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN {
+			prompt += "\n[alreadyhascloseis]\n" + strings.Join(ex, "\n")
 		} else {
 			prompt += "\n[EXISTING RELATIONS]\n" + strings.Join(ex, "\n")
 		}

@@ -6,7 +6,7 @@ marked.setOptions({
   breaks: true,
 });
 
-// 渲染 markdown 为安全的 HTML（DOMPurify 清洗，防止 AI 输出中夹带脚本）
+// Render markdown as safe HTML（DOMPurify sanitization to prevent AI scripts embedded in AI output）
 export function renderMarkdown(text) {
   if (!text) return '';
   try {

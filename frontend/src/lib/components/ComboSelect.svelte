@@ -40,7 +40,6 @@
   const L10N = {
     en: { accept: 'Accept', close: 'Close', search: 'Search all options…' },
     es: { accept: 'Aceptar', close: 'Cerrar', search: 'Buscar en todas las opciones…' },
-    zh: { accept: '接受', close: '关闭', search: '搜索全部选项…' },
   };
   $: l = L10N[$uiLocale] || L10N.en;
 

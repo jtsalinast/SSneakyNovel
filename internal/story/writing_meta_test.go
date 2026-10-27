@@ -9,50 +9,38 @@ func TestStripChapterMetaProse(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
-		lang string
 		want string
 	}{
 		{
-			name: "zh basic",
-			in:   "第1章 初入江湖\n\n她推开门。\n\n本章完",
-			lang: i18n.LangZH,
-			want: "她推开门。",
-		},
-		{
 			name: "en basic",
 			in:   "Chapter 1: Arrival\n\nShe opened the door.\n\nEnd of chapter",
-			lang: i18n.LangEN,
 			want: "She opened the door.",
-		},
-		{
-			name: "zh preamble revised",
-			in:   "以下为修订后的第3章完整正文：\n\n她走进了房间。\n\n本章完",
-			lang: i18n.LangZH,
-			want: "她走进了房间。",
-		},
-		{
-			name: "zh preamble simple",
-			in:   "第2章 风起云涌\n\n风吹过山岗。",
-			lang: i18n.LangZH,
-			want: "风吹过山岗。",
-		},
-		{
-			name: "zh paren chapter",
-			in:   "（第5章正文）\n\n夜色深沉。\n\n（完）",
-			lang: i18n.LangZH,
-			want: "夜色深沉。",
 		},
 		{
 			name: "en preamble here is",
 			in:   "Here is the revised Chapter 3:\n\nThe door opened.\n\nEnd of chapter",
-			lang: i18n.LangEN,
 			want: "The door opened.",
+		},
+		{
+			name: "en part heading with to be continued",
+			in:   "Part 2 Rising Wind\n\nThe wind crossed the hills.\n\nTo be continued",
+			want: "The wind crossed the hills.",
+		},
+		{
+			name: "en parenthesized chapter meta",
+			in:   "(Chapter 5 text)\n\nNight fell deep.\n\n(End)",
+			want: "Night fell deep.",
+		},
+		{
+			name: "en revision preamble line",
+			in:   "Revised full text of Chapter 3 as follows:\n\nShe walked into the room.",
+			want: "She walked into the room.",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := stripChapterMetaProse(tt.in, tt.lang)
+			got := stripChapterMetaProse(tt.in, i18n.LangEN)
 			if got != tt.want {
 				t.Fatalf("stripChapterMetaProse() = %q, want %q", got, tt.want)
 			}

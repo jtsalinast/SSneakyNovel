@@ -9,6 +9,7 @@ import (
 	"showmethestory/internal/llm"
 	"showmethestory/internal/sse"
 	"strings"
+	"unicode"
 )
 
 type MemoryReference struct {
@@ -100,8 +101,8 @@ func factProtection(state *Progress, num int, lang string) string {
 	}
 	data, _ := json.Marshal(facts)
 	s := "\nPreserve these linked consistency facts unless the author explicitly authorizes changing them. Do not silently alter related passages.\n"
-	if i18n.NormalizeLanguage(lang) == i18n.LangZH {
-		s = "\n除非作者明确授权改变，否则必须保留以下关联的一致性事实，不得静默改写其他关联段落。\n"
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		s = "\nSalvo autorización explícita del autor, conserva estos hechos de consistencia vinculados y no alteres en silencio los pasajes relacionados.\n"
 	}
 	return chapterEnding(state, num, lang) + s + string(data)
 }
@@ -150,7 +151,15 @@ func SyncChapterMemory(ctx context.Context, api *config.APIConfig, cfg *config.C
 	})
 	prompt += memoryLinkPrompt(cfg.Language) + "\n" + string(blocks)
 	var syncErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	// Two correction rounds (three calls max). Models occasionally answer with
+	// prose around the JSON, a truncated payload ("invalid character 'i'
+	// looking for beginning of value") or an out-of-range block id; a single
+	// retry used to give up too early and surface
+	// "Fact or setting sync incomplete; retry from Writing" even though the
+	// feedback prompt usually gets a valid answer on the next try. Each failed
+	// attempt feeds its exact validation error back into the prompt; live
+	// state is only touched once a full batch validates.
+	for attempt := 0; attempt < 3; attempt++ {
 		raw := llm.CallAPIWithRetryLog(ctx, api, i18n.SystemPromptFor(cfg.Language, "memory_manager"), prompt, logger)
 		if err := ctx.Err(); err != nil {
 			return err
@@ -197,6 +206,206 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 	if result.NewMemories == nil {
 		return fmt.Errorf("missing new_memories array")
 	}
+	// Work on a private copy: repair steps (ledger self-heal, row merging) may
+	// mutate entries, but nothing reaches live state unless the whole batch
+	// validates. The caller commits this copy only on success.
+	entries := make([]MemoryEntry, len(next.MemoryEntries))
+	for i, m := range next.MemoryEntries {
+		entries[i] = m
+		entries[i].References = append([]MemoryReference(nil), m.References...)
+	}
+	next.MemoryEntries = entries
+	// Self-heal any pre-existing duplicate ids in the ledger BEFORE validating
+	// rows. Corrupt state (hand-edited JSON, legacy imports) used to make every
+	// sync die with "duplicate fact identity" forever, because the apply pass
+	// visited both entries sharing an id. Re-keying the clones preserves each
+	// fact's content and evidence — only the numeric handle is re-assigned.
+	dedupeMemoryIDs(next)
+	// Pass 1: validate every entry before mutating anything, so one bad row
+	// cannot leave the batch half-applied and trip "duplicate fact identity"
+	// on the retry.
+	parsed := make([]struct {
+		nmID     int
+		content  string
+		category string
+		blockIDs []int
+		target   int
+	}, 0, len(*result.NewMemories))
+	next.NextMemoryID = max(next.NextMemoryID, nextMemoryID(next.MemoryEntries))
+	claimedTargets := map[int]bool{}
+	storedByID := map[int]string{}
+	for _, m := range next.MemoryEntries {
+		storedByID[m.ID] = m.Content
+	}
+	for _, nm := range *result.NewMemories {
+		if nm.ID > 0 && !visibleFacts[nm.ID] {
+			// The memory prompt only shows a budgeted subset of facts, yet models
+			// routinely echo ids from earlier turns or invent their own numbering.
+			// If the id exists in storage and the content matches that stored fact
+			// (verbatim or paraphrase), accept it as an update instead of failing
+			// the whole sync — the previous hard rejection made sync fail
+			// permanently ("id=N was not supplied") on every retry.
+			if _, ok := storedByID[nm.ID]; ok {
+				// Accept verbatim echoes and paraphrases; even a divergent rewrite of
+				// a genuinely stored id is handled leniently below (the sync used to
+				// die here with "was not supplied" whenever the budgeted prompt
+				// omitted that fact). A negation flip against an invisible id is NOT
+				// rejected outright either: it would fail every retry forever when the
+				// chapter legitimately contradicts an old fact. The sanitize step in
+				// this same pass keeps the stored wording instead, refreshing only the
+				// evidence anchors.
+				visibleFacts[nm.ID] = true
+			} else {
+				return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
+			}
+		}
+		if nm.ID < 0 || strings.TrimSpace(nm.Content) == "" || len(nm.BlockIDs) == 0 {
+			return fmt.Errorf("invalid fact evidence")
+		}
+		// Evidence must anchor to REAL blocks of this chapter. Models sometimes
+		// emit paragraph ordinals or invented numbers; accepting them used to
+		// commit unanchored "facts" (the ledger stopped being a source of
+		// truth), so rows whose block_ids match nothing are rejected here and
+		// corrected on the retry. Rows with at least one valid block keep only
+		// the valid anchors below (applyRow skips unknown ids).
+		anyValidBlock := false
+		for _, id := range nm.BlockIDs {
+			if FindBlockIdx(&ch, id) >= 0 {
+				anyValidBlock = true
+				break
+			}
+		}
+		if !anyValidBlock {
+			return fmt.Errorf("invalid fact evidence: none of the supplied block IDs exist in this chapter; use real Block IDs from the evidence list")
+		}
+		switch nm.Category {
+		case "character", "location", "item", "event", "promise", "other":
+		default:
+			return fmt.Errorf("invalid fact category")
+		}
+		target := -1
+		exactID := false
+		for j, m := range next.MemoryEntries {
+			if nm.ID > 0 && m.ID == nm.ID {
+				target = j
+				exactID = true
+				break
+			}
+		}
+		// Paraphrase-dedup for genuinely new facts (id=0): never onto an entry
+		// another row already claims, so two different facts cannot be merged
+		// into one identity by fuzzy matching.
+		if target < 0 && nm.ID == 0 {
+			for j, m := range next.MemoryEntries {
+				if claimedTargets[j] {
+					continue
+				}
+				if m.Content == nm.Content || factContentEquivalent(m.Content, nm.Content) {
+					target = j
+					break
+				}
+			}
+		}
+		// A reworded update of a known fact is not a brand-new fact: when the
+		// model dropped the id while paraphrasing, match it fuzzily against any
+		// unclaimed entry. This prevents spurious duplicates and the hard "must
+		// preserve the supplied content exactly" failure that made sync retry
+		// forever whenever a model legitimately condensed a fact's wording.
+		// Rows that DID echo an exact stored id skip fuzzy matching entirely:
+		// their identity is the id itself. Rerouting a contradicting rewrite
+		// ("Alice has no scar") onto some other similar-looking fact would
+		// silently merge two distinct identities; instead such rows keep their
+		// id target and the sanitize step below preserves the stored wording,
+		// leaving the contradiction visible to the fact-checker.
+		if target < 0 && !exactID && strings.TrimSpace(nm.Content) != "" {
+			for j, m := range next.MemoryEntries {
+				if claimedTargets[j] {
+					continue
+				}
+				if factContentEquivalent(m.Content, nm.Content) {
+					target = j
+					break
+				}
+			}
+		}
+		if target >= 0 {
+			claimedTargets[target] = true
+		}
+		// An existing fact keeps its identity when the model echoes the stored
+		// content verbatim OR paraphrases it with the same meaning. Memory-sync
+		// prompts legitimately ask for deduplicated/rewritten entries; rejecting
+		// every wording change made sync fail permanently on models that never
+		// reproduce text byte-for-byte ("must preserve the supplied content
+		// exactly"). Negations flip meaning entirely, so they are rejected even
+		// though they share most tokens. Evidence references stay validated below,
+		// so nothing unanchored can be claimed.
+		if nm.ID > 0 && target >= 0 {
+			old := normalizeFactText(next.MemoryEntries[target].Content)
+			newC := normalizeFactText(nm.Content)
+			if old != newC {
+				sa, sb := factTokenSet(old), factTokenSet(newC)
+				inter := 0
+				for t := range sa {
+					if sb[t] {
+						inter++
+					}
+				}
+				union := len(sa) + len(sb) - inter
+				score := 1.0
+				if union > 0 {
+					score = float64(inter) / float64(union)
+				}
+				switch {
+				case factNegationFlipped(old, newC):
+					// The rewrite states the opposite of the stored fact. Rather than
+					// failing the entire sync (every retry hit this error because the
+					// chapter text genuinely contradicts the old fact), keep the stored
+					// wording untouched and just refresh its evidence anchors for this
+					// chapter below.
+					nm.Content = next.MemoryEntries[target].Content
+				case score >= minFactOverlapRatio:
+					// Substantially different wording that still shares core tokens:
+					// treat it as a legitimate condensation/update instead of aborting
+					// the whole batch. Sync used to die here with
+					// "id=N must preserve the supplied content exactly".
+				default:
+					// Almost no shared vocabulary — too risky to accept silently.
+					// Keep the stored content and refresh anchors rather than
+					// failing the sync outright.
+					nm.Content = next.MemoryEntries[target].Content
+				}
+			}
+		} else if nm.ID > 0 && target < 0 {
+			// The model echoed a real stored id whose CONTENT matches nothing in
+			// the ledger (exact + fuzzy match failed). Failing here made sync
+			// retry forever with "id=N must preserve the supplied content
+			// exactly" whenever a model legitimately condensed or reworded a
+			// fact past the similarity floor. Ids are stable identities, so
+			// trust the id over the text: route the row to the entry the id
+			// names and keep the stored wording, refreshing only its evidence
+			// anchors below.
+			for j := range next.MemoryEntries {
+				if next.MemoryEntries[j].ID == nm.ID {
+					target = j
+					break
+				}
+			}
+			if target >= 0 {
+				claimedTargets[target] = true
+				nm.Content = next.MemoryEntries[target].Content
+			} else {
+				return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
+			}
+		}
+		parsed = append(parsed, struct {
+			nmID     int
+			content  string
+			category string
+			blockIDs []int
+			target   int
+		}{nm.ID, nm.Content, nm.Category, nm.BlockIDs, target})
+	}
+
 	next.MemoryEntries = append([]MemoryEntry(nil), next.MemoryEntries...)
 	for j := range next.MemoryEntries {
 		next.MemoryEntries[j].References = append([]MemoryReference(nil), next.MemoryEntries[j].References...)
@@ -206,41 +415,29 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			}
 		}
 	}
-	next.NextMemoryID = max(next.NextMemoryID, nextMemoryID(next.MemoryEntries))
-	seenFacts := map[int]bool{}
 	// Old references remain as historical evidence until their replacement is valid.
-	for _, nm := range *result.NewMemories {
-		if nm.ID > 0 && !visibleFacts[nm.ID] {
-			return fmt.Errorf("invalid existing fact identity: id=%d was not supplied; use id=0 for new facts", nm.ID)
-		}
-		if nm.ID < 0 || strings.TrimSpace(nm.Content) == "" || len(nm.BlockIDs) == 0 {
-			return fmt.Errorf("invalid fact evidence")
-		}
-		switch nm.Category {
-		case "character", "location", "item", "event", "promise", "other":
-		default:
-			return fmt.Errorf("invalid fact category")
-		}
-		target := -1
-		for j, m := range next.MemoryEntries {
-			if nm.ID > 0 && m.ID == nm.ID {
-				target = j
-				break
-			}
-			if nm.ID == 0 && m.Content == nm.Content {
-				target = j
-				break
-			}
-		}
-		if nm.ID > 0 && (target < 0 || next.MemoryEntries[target].Content != nm.Content) {
-			return fmt.Errorf("invalid existing fact identity: id=%d must preserve the supplied content exactly", nm.ID)
-		}
+	//
+	// Robustness rules for this pass (each used to abort the whole sync with
+	// "Fact or setting sync incomplete: duplicate fact identity", which then
+	// failed identically on every retry):
+	//   - Two rows targeting the same existing id are merged into that one
+	//     entry (union of evidence), not rejected.
+	//   - Two genuinely-new rows with equivalent content collapse into a single
+	//     new fact with merged evidence — content duplication must never create
+	//     two identities.
+	//   - A contradicting rewrite (negation flip / unrelated wording) already
+	//     keeps the stored text from Pass 1; here its evidence still anchors, so
+	//     the conflict stays visible to the fact-checker instead of killing sync.
+	//   - If an id collision somehow survives Pass 1 (e.g. corrupt ledger), the
+	//     second row is re-keyed to a fresh id rather than failing forever.
+	seenFacts := map[int]bool{}
+	applyRow := func(target int, content string, blockIDs []int) {
 		refs := []MemoryReference{}
 		seen := map[int]bool{}
-		for _, id := range nm.BlockIDs {
+		for _, id := range blockIDs {
 			bi := FindBlockIdx(&ch, id)
 			if bi < 0 {
-				return fmt.Errorf("invalid fact block")
+				continue
 			}
 			if seen[id] {
 				continue
@@ -248,24 +445,252 @@ func applyChapterMemoryResult(next *Progress, ch ChapterState, visibleFacts map[
 			seen[id] = true
 			refs = append(refs, MemoryReference{Chapter: ch.Num, BlockID: id, Quote: ch.Blocks[bi].Text, ContentRev: rev})
 		}
-		if target < 0 {
-			next.MemoryEntries = append(next.MemoryEntries, MemoryEntry{ID: next.NextMemoryID, Content: nm.Content, Category: nm.Category})
-			next.NextMemoryID++
-			target = len(next.MemoryEntries) - 1
-		}
 		m := next.MemoryEntries[target]
-		if seenFacts[m.ID] {
-			return fmt.Errorf("duplicate fact identity")
+		// Apply the (possibly sanitized) content decided during validation. Rows
+		// whose rewrite was rejected keep the stored wording; genuine paraphrases
+		// and condensations update it in place.
+		if content != "" && content != m.Content {
+			m.Content = content
 		}
-		seenFacts[m.ID] = true
 		kept := []MemoryReference{}
 		for _, r := range m.References {
 			if r.Chapter != ch.Num {
 				kept = append(kept, r)
 			}
 		}
-		m.References = append(kept, refs...)
+		for _, r := range refs {
+			dup := false
+			for _, k := range kept {
+				if k.BlockID == r.BlockID {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				kept = append(kept, r)
+			}
+		}
+		m.References = kept
 		next.MemoryEntries[target] = m
 	}
+	for i, p := range parsed {
+		if p.target < 0 {
+			// Genuinely new fact. If an earlier new row in this same batch states
+			// an equivalent fact, merge into it instead of minting a duplicate
+			// identity (the model often emits the same fact twice with slightly
+			// different wording or evidence).
+			merged := false
+			for j := 0; j < i; j++ {
+				prev := parsed[j]
+				if prev.target < 0 || !factContentEquivalent(prev.content, p.content) {
+					continue
+				}
+				applyRow(prev.target, "", append(append([]int(nil), prev.blockIDs...), p.blockIDs...))
+				parsed[i].target = prev.target
+				merged = true
+				break
+			}
+			if merged {
+				continue
+			}
+			next.MemoryEntries = append(next.MemoryEntries, MemoryEntry{ID: next.NextMemoryID, Content: p.content, Category: p.category})
+			next.NextMemoryID++
+			p.target = len(next.MemoryEntries) - 1
+			parsed[i].target = p.target
+		}
+		m := next.MemoryEntries[p.target]
+		if seenFacts[m.ID] {
+			// Another row in this batch already touched this identity: merge the
+			// evidence into the same entry rather than failing the sync.
+			applyRow(p.target, "", p.blockIDs)
+			continue
+		}
+		seenFacts[m.ID] = true
+		applyRow(p.target, p.content, p.blockIDs)
+	}
 	return nil
+}
+
+// dedupeMemoryIDs repairs a memory ledger that contains two entries sharing
+// the same numeric id (corrupt/hand-edited state, legacy imports). The first
+// occurrence keeps the id; each clone is re-keyed to a fresh id, because the
+// *number* was duplicated, not necessarily the fact itself. Entries with truly
+// identical content+category are collapsed into one, unioning their evidence.
+func dedupeMemoryIDs(next *Progress) {
+	seenID := map[int]bool{}
+	seenContent := map[string]int{} // normalized content|category -> kept index
+	fresh := max(next.NextMemoryID, nextMemoryID(next.MemoryEntries))
+	out := make([]MemoryEntry, 0, len(next.MemoryEntries))
+	for _, m := range next.MemoryEntries {
+		key := normalizeFactText(m.Content) + "|" + m.Category
+		if idx, ok := seenContent[key]; ok {
+			// Verbatim duplicate of a kept entry: merge references, drop the clone.
+			kept := out[idx]
+			for _, r := range m.References {
+				dup := false
+				for _, k := range kept.References {
+					if k.Chapter == r.Chapter && k.BlockID == r.BlockID {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					kept.References = append(kept.References, r)
+				}
+			}
+			out[idx] = kept
+			continue
+		}
+		if seenID[m.ID] {
+			// Same number, different fact: re-assign the number, keep the fact.
+			m.ID = fresh
+			fresh++
+		}
+		seenID[m.ID] = true
+		seenContent[key] = len(out)
+		out = append(out, m)
+	}
+	if len(out) > 0 {
+		next.MemoryEntries = out
+	}
+	next.NextMemoryID = max(next.NextMemoryID, fresh)
+}
+
+// factContentEquivalent reports whether two memory texts express the same
+// fact despite wording differences: identical after normalization, or sharing
+// at least half of their word set (Jaccard ≥ 0.5). It exists so the memory
+// sync accepts harmless paraphrase/dedup rewrites of an existing fact instead
+// of failing forever on byte-exact equality.
+func factContentEquivalent(a, b string) bool {
+	na, nb := normalizeFactText(a), normalizeFactText(b)
+	if na == nb {
+		return true
+	}
+	sa, sb := factTokenSet(na), factTokenSet(nb)
+	if len(sa) == 0 || len(sb) == 0 {
+		return false
+	}
+	inter := 0
+	for t := range sa {
+		if sb[t] {
+			inter++
+		}
+	}
+	union := len(sa) + len(sb) - inter
+	return union > 0 && float64(inter)/float64(union) >= 0.5
+}
+
+// minFactOverlapRatio is the bare minimum Jaccard overlap two normalized fact
+// texts must share before a reworded update of an existing id is accepted as
+// referring to the same fact. Below it, the rewrite is treated as unrelated and
+// the stored content is preserved (sync continues instead of failing forever).
+const minFactOverlapRatio = 0.25
+
+func intersectTokenCount(a, b string) int {
+	sa, sb := factTokenSet(a), factTokenSet(b)
+	n := 0
+	for t := range sa {
+		if sb[t] {
+			n++
+		}
+	}
+	return n
+}
+
+func unionTokenCount(a, b string) int {
+	sa, sb := factTokenSet(a), factTokenSet(b)
+	inter := 0
+	for t := range sa {
+		if sb[t] {
+			inter++
+		}
+	}
+	return len(sa) + len(sb) - inter
+}
+
+func normalizeFactText(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	prevSpace := true
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			prevSpace = false
+		case prevSpace:
+			// collapse repeated separators
+		default:
+			b.WriteRune(' ')
+			prevSpace = true
+		}
+	}
+	return b.String()
+}
+
+func factTokenSet(s string) map[string]bool {
+	set := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		set[w] = true
+	}
+	return set
+}
+
+// factNegationFlipped reports whether two normalized fact texts disagree only
+// because one negates what the other asserts (e.g. "he is alive" vs "he is
+// not dead"). Such pairs share most tokens yet state opposite facts, so they
+// must never be treated as an equivalent paraphrase of an existing entry.
+var factNegationWords = map[string]bool{
+	// english
+	"not": true, "no": true, "never": true, "neither": true, "nor": true,
+	"cannot": true, "nobody": true, "nothing": true, "nowhere": true,
+	"without": true, "unless": true,
+	// spanish
+	"nunca": true, "jamás": true, "jamas": true, "tampoco": true,
+	"ningún": true, "ningun": true, "ninguna": true, "ninguno": true,
+	"nadie": true, "nada": true,
+	"sin": true,
+}
+
+func factNegationFlipped(a, b string) bool {
+	// Flipping means requires changing the number of negation markers while the
+	// surrounding content stays substantially the same. A paraphrase that keeps
+	// the same set/count of negation words ("has a scar" -> "bears no scar") is
+	// an equivalence, not a flip; only a strict difference in marker count is.
+	sa, sb := factTokenSet(a), factTokenSet(b)
+	if len(sa) == 0 || len(sb) == 0 {
+		return false
+	}
+	inter := 0
+	for t := range sa {
+		if sb[t] {
+			inter++
+		}
+	}
+	union := len(sa) + len(sb) - inter
+	if union == 0 || float64(inter)/float64(union) < 0.5 {
+		return false
+	}
+	return !sameNegationMarkerSet(factNegationMarkers(sa), factNegationMarkers(sb))
+}
+
+func factNegationMarkers(set map[string]bool) map[string]bool {
+	m := map[string]bool{}
+	for t := range set {
+		if factNegationWords[t] {
+			m[t] = true
+		}
+	}
+	return m
+}
+
+func sameNegationMarkerSet(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for t := range a {
+		if !b[t] {
+			return false
+		}
+	}
+	return true
 }

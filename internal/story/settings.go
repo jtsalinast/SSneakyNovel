@@ -97,12 +97,12 @@ func LoadProjectSettings(path string) (*ProjectSettings, error) {
 		if os.IsNotExist(err) {
 			return &ProjectSettings{}, nil
 		}
-		return nil, fmt.Errorf("读取设定文件失败: %w", err)
+		return nil, fmt.Errorf("leer entrada: %w", err)
 	}
 
 	var ps ProjectSettings
 	if err := json.Unmarshal(data, &ps); err != nil {
-		return nil, fmt.Errorf("解析设定文件失败: %w", err)
+		return nil, fmt.Errorf("analizar entrada: %w", err)
 	}
 
 	return &ps, nil
@@ -111,7 +111,7 @@ func LoadProjectSettings(path string) (*ProjectSettings, error) {
 func SaveProjectSettings(path string, ps *ProjectSettings) error {
 	data, err := json.MarshalIndent(ps, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化设定失败: %w", err)
+		return fmt.Errorf("orderrow: %w", err)
 	}
 	return fsutil.WriteFileAtomic(path, data)
 }
@@ -165,8 +165,8 @@ func (ps *ProjectSettings) NextRelationID() string {
 	return nextID("r", ps.allIDs())
 }
 
-// StripNameMarks removes 「」 wrapping from a name string.
-// "「林小明」" → "林小明", "林小明" → "林小明" (unchanged)
+// StripNameMarks removes "" wrapping from a name string.
+// ""forestsmallbright"" → "forestsmallbright", "forestsmallbright" → "forestsmallbright" (unchanged)
 func StripNameMarks(name string) string {
 	runes := []rune(name)
 	if len(runes) >= 2 && runes[0] == '「' && runes[len(runes)-1] == '」' {

@@ -14,12 +14,9 @@ import (
 )
 
 func TestKnowledgeRetrievalLargeBook(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		t.Run(lang, func(t *testing.T) {
 			name, fact, query := "Alice", "Alice cannot cross the silver bridge without the jade key.", "Alice returns to the silver bridge with the jade key."
-			if lang == "zh" {
-				name, fact, query = "林青", "林青没有玉钥匙就无法通过银桥。", "林青带着玉钥匙重返银桥。"
-			}
 			state := &Progress{MemoryMaxTokens: 2000}
 			settings := &ProjectSettings{Characters: []Character{{ID: "c_1", Name: name, Notes: fact}, {ID: "c_2", Name: "Keeper", Notes: "Knows the bridge password."}}, Relations: []Relation{{ID: "r_1", SourceID: "c_1", TargetID: "c_2", Label: "trust"}}}
 			state.Chapters = append(state.Chapters, factChapter(1, fact))
@@ -60,8 +57,8 @@ func TestKnowledgeRetrievalBoundaries(t *testing.T) {
 	if knowledgeNameMatch("Joanne returns", "Ann") || !knowledgeNameMatch("ANN returns", "Ann") {
 		t.Fatal("English name boundaries")
 	}
-	if !knowledgeNameMatch("林青回来了", "林青") {
-		t.Fatal("Chinese name matching")
+	if knowledgeNameMatch("Annabel arrives", "Ann") {
+		t.Fatal("Latin-name boundary must reject substring inside a longer word")
 	}
 	settings := &ProjectSettings{Characters: []Character{{ID: "c_1", Name: "Alice", Notes: strings.Repeat("x", settingsContextRunes+1)}}}
 	selected, ids := retrieveSettings(settings, "Alice", settingsContextRunes)

@@ -50,14 +50,14 @@ func formatCharacterListForOutline(settings *ProjectSettings, lang string) strin
 		if en {
 			return "(No characters registered yet. You may introduce new characters only when necessary; mark each debut with \"first appearance\" and include a one-line role or relationship to the protagonist.)"
 		}
-		return "（尚未在角色管理中登记角色。仅因剧情需要方可引入新人物；须在其首次出场章节标注「首次登场」，并附一行身份或与主角关系说明。）"
+		return "(Aún no hay personajes registrados. Solo introduce personajes nuevos cuando sea estrictamente necesario; marca cada debut con \"primera aparición\" e incluye una línea sobre su rol o relación con el protagonista.)"
 	}
 
 	var sb strings.Builder
 	if en {
 		sb.WriteString("Registered characters (prefer these; avoid duplicates):\n")
 	} else {
-		sb.WriteString("已登记角色（优先使用，避免功能重复）：\n")
+		sb.WriteString("Personajes registrados (úsolos en primer lugar; evita duplicados):\n")
 	}
 	for _, c := range settings.Characters {
 		sb.WriteString(fmt.Sprintf("- %s", c.Name))
@@ -65,13 +65,13 @@ func formatCharacterListForOutline(settings *ProjectSettings, lang string) strin
 			if en {
 				sb.WriteString(fmt.Sprintf(" — personality: %s", c.Personality))
 			} else {
-				sb.WriteString(fmt.Sprintf(" — 性格：%s", c.Personality))
+				sb.WriteString(fmt.Sprintf(" — grid: %s", c.Personality))
 			}
 		} else if c.Background != "" {
 			if en {
 				sb.WriteString(fmt.Sprintf(" — background: %s", truncateRunes(c.Background, 40)))
 			} else {
-				sb.WriteString(fmt.Sprintf(" — 背景：%s", truncateRunes(c.Background, 40)))
+				sb.WriteString(fmt.Sprintf(" — back: %s", truncateRunes(c.Background, 40)))
 			}
 		}
 		sb.WriteString("\n")
@@ -79,7 +79,7 @@ func formatCharacterListForOutline(settings *ProjectSettings, lang string) strin
 	if en {
 		sb.WriteString("\nOnly add unlisted characters when the plot requires it; mark \"first appearance\" in their debut chapter with a one-line description.")
 	} else {
-		sb.WriteString("\n仅当剧情需要时方可新增未登记角色；在其首次出场章节标注「首次登场」并附一行说明。")
+		sb.WriteString("\nSolo añade personajes no listados cuando la trama lo requiera; marca \"primera aparición\" en su capítulo de debut con una descripción de una línea.")
 	}
 	return sb.String()
 }
@@ -88,14 +88,14 @@ func formatOutlineLengthRequirementBlock(minLen, maxLen int, lang string) string
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("Each chapter outline must be %d–%d characters (not counting the chapter title). Outlines shorter than %d characters are unacceptable.", minLen, maxLen, minLen)
 	}
-	return fmt.Sprintf("每章 outline 字段正文须为 %d–%d 字（不含章节标题）。低于 %d 字视为不合格。", minLen, maxLen, minLen)
+	return fmt.Sprintf("El outline de cada capítulo debe tener entre %d y %d caracteres (sin contar el título del capítulo). No se aceptan outlines de menos de %d caracteres.", minLen, maxLen, minLen)
 }
 
 func formatOutlineStructureRequirementBlock(lang string) string {
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return "Each chapter outline must cover, in order: opening scene/location; core conflict or goal; key turning point or revelation; characters appearing (with roles); how the chapter ends or what hook it leaves."
 	}
-	return "每章大纲须依次包含：开场场景/地点；本章核心冲突或目标；关键转折或信息点；出场人物（及作用）；章末走向或悬念钩子。"
+	return "Cada outline de capítulo debe cubrir, en orden: escena y ubicación de apertura; conflicto o meta central del capítulo; punto de giro o revelación clave; personajes que aparecen (con sus roles); cómo termina el capítulo o qué gancho deja. "
 }
 
 func buildOutlinePromptExtras(cfg *config.Config, settings *ProjectSettings) map[string]string {
@@ -140,7 +140,7 @@ func formatShortOutlineRetryFeedback(shortNums []int, minLen int, lang string) s
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
 		return fmt.Sprintf("\n\nIMPORTANT: Chapters %s have outlines shorter than %d characters. Expand them with concrete plot beats (scene, conflict, turning point, characters, ending hook) and resubmit the full JSON.", joined, minLen)
 	}
-	return fmt.Sprintf("\n\n重要：第 %s 章大纲不足 %d 字。请补充具体情节（场景、冲突、转折、人物、章末钩子）后重新输出完整 JSON。", joined, minLen)
+	return fmt.Sprintf("\n\nImportant: chapter(s) #%s are shorter than %d words. Please expand each section (setting, events, turning point, chapter hook) and re-output the full JSON. ", joined, minLen)
 }
 
 func truncateRunes(s string, maxLen int) string {
@@ -206,9 +206,9 @@ func buildOutlineDerivedCharacterContext(ch ChapterState, settings *ProjectSetti
 				sb.WriteString(fmt.Sprintf("  From outline: %s\n", stub.Description))
 			}
 		} else {
-			sb.WriteString(fmt.Sprintf("【大纲人物：%s】\n", stub.Name))
+			sb.WriteString(fmt.Sprintf("[big: %s]\n", stub.Name))
 			if stub.Description != "" {
-				sb.WriteString(fmt.Sprintf("  大纲描述：%s\n", stub.Description))
+				sb.WriteString(fmt.Sprintf(" big: %s\n", stub.Description))
 			}
 		}
 		sb.WriteString("\n")
@@ -229,12 +229,12 @@ func formatCharactersLine(chars []OutlineChapterCharacter, lang string) string {
 				if en {
 					parts = append(parts, fmt.Sprintf("%s (first appearance: %s)", c.Name, c.Note))
 				} else {
-					parts = append(parts, fmt.Sprintf("%s（首次登场：%s）", c.Name, c.Note))
+					parts = append(parts, fmt.Sprintf("%s(times: %s)", c.Name, c.Note))
 				}
 			} else if en {
 				parts = append(parts, c.Name+" (first appearance)")
 			} else {
-				parts = append(parts, c.Name+"（首次登场）")
+				parts = append(parts, c.Name+"(times)")
 			}
 		} else {
 			parts = append(parts, c.Name)
@@ -243,5 +243,5 @@ func formatCharactersLine(chars []OutlineChapterCharacter, lang string) string {
 	if en {
 		return "Cast: " + strings.Join(parts, "; ")
 	}
-	return "出场人物：" + strings.Join(parts, "、")
+	return "Reparto: " + strings.Join(parts, ", ")
 }

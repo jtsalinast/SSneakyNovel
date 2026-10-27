@@ -2,10 +2,13 @@
   import { onMount, onDestroy } from 'svelte';
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
-  import { apiConfig, config, progress, settings, editingCharID, editingWvID, wvFilter, addToast, showConfirm, taskRunning, apiTestResult } from '../lib/stores.js';
+  import { apiConfig, config, progress, settings, editingCharID, editingWvID, addToast, showConfirm, taskRunning, apiTestResult } from '../lib/stores.js';
   import { t, uiLocale } from '../lib/i18n/index.js';
   import { resolveChatCompletionsURL } from '../lib/apiUrl.js';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
+  import AiGenerateButton from '../components/AiGenerateButton.svelte';
+  import EnhanceWand from '../components/EnhanceWand.svelte';
+  import RandomizeButton from '../components/RandomizeButton.svelte';
   import ComboSelect from '../lib/components/ComboSelect.svelte';
   // Interfaz unificada: los <select> nativos del formulario de historia y de
   // los formularios de lore usan SmartSelect (la variante single-select del
@@ -48,13 +51,13 @@
   let charName = '', charAge = '', charAppearance = '', charPersonality = '', charBackground = '', charMotivation = '', charAbilities = '', charNotes = '';
   let wvName = '', wvCategory = 'other', wvDescription = '', wvTags = '';
 
-  // 组织管理
+  // Organization management
   let showOrgForm = false;
   let orgName = '', orgType = '', orgDescription = '';
   let orgMembers = [];
   let editingOrgID = null;
 
-  // 关系管理
+  // Relation management
   let showRelForm = false;
   let relSource = '', relTarget = '', relLabel = '';
   let editingRelID = null;
@@ -64,7 +67,7 @@
   $: cfgKey = $apiConfig?.api_key || '';
   $: cfgTimeout = $apiConfig?.http_timeout_seconds || 600;
 
-  let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, max_tokens: 32768, context_budget_tokens: 900000 };
+  let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, task_duration_minutes: 0, max_tokens: 32768, context_budget_tokens: 900000 };
   // —— Cross-tab state (module level): both workspace tabs ("Config" and "Novel
   // parameters") render this same component, but Svelte destroys and recreates it
   // when switching. Keep unsaved form edits, per-section busy flags and undo
@@ -72,7 +75,7 @@
   // what the user typed).
   let sharedStoryDraft = null;   // last localStoryCfg value
 
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '' };
+  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', philosophical_dilemma: '', reader_expectation: '', forces_in_tension: '', elevator_pitch: '', lighthouse_sentence: '', differentiating_idea: '', creativity_level: 0 };
   // Preserve unsaved edits across workspace-tab switches (this component is
   // recreated on every tab change; without this the Genre field and friends
   // would silently reset to whatever was last saved on the server).
@@ -171,44 +174,44 @@ western: ['frontier_setting', 'lawlessness', 'honor_code', 'survival_focus', 'ho
 drama: ['interiority_over_plot', 'multi_generational_timeline', 'quiet_realism', 'moral_ambiguity_no_cartoon_villains', 'time_nonlinear_or_elided', 'open_or_bittersweet_endings_ok', 'found_family_or_bloodline', 'institution_as_stage', 'letters_or_messages_format', 'everyday_life_texture'],
 };
 const GENRE_KEYWORDS = [
-['fantasy', ['fantasy', '奇幻', '玄幻', '魔幻']],
-['scifi', ['sci-fi', 'scifi', 'science fiction', '科幻']],
-['mystery', ['mystery', 'detective', '悬疑', '推理', '侦探']],
-['romance', ['romance', '言情', '爱情']],
-['thriller', ['thriller', 'spy', '惊悚', '谍战']],
-['horror', ['horror', '恐怖', '灵异']],
-['historical', ['historical', 'history', '历史']],
-['western', ['western', '西部']],
+['fantasy', ['fantasy']],
+['scifi', ['sci-fi', 'scifi', 'science fiction']],
+['mystery', ['mystery', 'detective']],
+['romance', ['romance']],
+['thriller', ['thriller', 'spy']],
+['horror', ['horror']],
+['historical', ['historical', 'history']],
+['western', ['western']],
 // round 3 — keep in sync with backend config.MatchGenreKey (specific keys first)
-['xianxia', ['xianxia', '仙侠', '修仙']],
-['wuxia', ['wuxia', '武侠', '江湖']],
-['litrpg', ['litrpg', 'lit rpg', 'game novel', 'system flow', '游戏文', '系统流', '无限流']],
-['cyberpunk', ['cyberpunk', 'cyber-punk', '赛博朋克', '赛博']],
-['solarpunk', ['solarpunk', 'solar punk', '太阳朋克']],
-['space_opera', ['space opera', '星际歌剧', '太空歌剧']],
-['romantasy', ['romantasy', 'romantic fantasy', 'epic romance', '浪漫奇幻']],
-['dystopian', ['dystopia', 'dystopian', '反乌托邦']],
-['postapo', ['post-apocalyp', 'post apocalyp', 'postapoc', 'zombie', '末日', '废土', '丧尸']],
-['military', ['military', 'war novel', '军旅', '战争', '军事']],
-['heist', ['heist', 'caper', 'robbery', '劫案', '千门']],
-['cozy', ['cozy', 'comfort read', '治愈系', '温馨推理', '田园']],
-['urban', ['urban', 'contemporary fantasy', 'city', '都市', '现代异能']],
-['middle_grade', ['middle grade', 'middle-grade', 'mg novel', '儿童文学', '少儿']],
-['ya', ['young adult', 'ya fantasy', 'ya romance', '青春', 'teen']],
-['steampunk', ['steampunk', 'steam punk', '蒸汽朋克']],
-['superhero', ['superhero', 'super hero', 'supervillain', '超级英雄', '超人']],
-['dark_academia', ['dark academia', '暗黑学院', '校园秘密社团']],
-['swashbuckler', ['swashbuckl', 'pirate', 'corsair', '海盗', '大航海']],
-['nautical', ['nautical', 'seafaring', 'voyage at sea', '航海', '海难']],
-['picaresque', ['picaresque', 'rogue tale', '流浪汉', '骗子冒险']],
-['gothic', ['gothic', '哥特']],
-['time_travel', ['time travel', 'time-travel', '穿越时空', '时间旅行']],
-['cli_fi', ['cli-fi', 'clifi', 'climate fiction', '气候小说']],
-['afrofuturism', ['afrofuturism', 'afro-futurism', '非洲未来主义']],
-['hard_scifi', ['hard scifi', 'hard sci-fi', 'hard science fiction', '硬科幻']],
-['graphic_novel', ['graphic novel', 'comic', 'manga script', '图像小说', '漫画']],
-['mystery_police', ['police procedural', 'detective squad', 'cold case', '警匪剧', '刑侦', '罪案小组']],
-['adventure', ['adventure', 'survival', 'expedition', 'quest', '冒险', '求生', '探险']],
+['xianxia', ['xianxia']],
+['wuxia', ['wuxia']],
+['litrpg', ['litrpg', 'lit rpg', 'game novel', 'system flow']],
+['cyberpunk', ['cyberpunk', 'cyber-punk']],
+['solarpunk', ['solarpunk', 'solar punk']],
+['space_opera', ['space opera']],
+['romantasy', ['romantasy', 'romantic fantasy', 'epic romance']],
+['dystopian', ['dystopia', 'dystopian']],
+['postapo', ['post-apocalyp', 'post apocalyp', 'postapoc', 'zombie']],
+['military', ['military', 'war novel']],
+['heist', ['heist', 'caper', 'robbery']],
+['cozy', ['cozy', 'comfort read']],
+['urban', ['urban', 'contemporary fantasy', 'city']],
+['middle_grade', ['middle grade', 'middle-grade', 'mg novel']],
+['ya', ['young adult', 'ya fantasy', 'ya romance', 'teen']],
+['steampunk', ['steampunk', 'steam punk']],
+['superhero', ['superhero', 'super hero', 'supervillain']],
+['dark_academia', ['dark academia']],
+['swashbuckler', ['swashbuckl', 'pirate', 'corsair']],
+['nautical', ['nautical', 'seafaring', 'voyage at sea']],
+['picaresque', ['picaresque', 'rogue tale']],
+['gothic', ['gothic']],
+['time_travel', ['time travel', 'time-travel']],
+['cli_fi', ['cli-fi', 'clifi', 'climate fiction']],
+['afrofuturism', ['afrofuturism', 'afro-futurism']],
+['hard_scifi', ['hard scifi', 'hard sci-fi', 'hard science fiction']],
+['graphic_novel', ['graphic novel', 'comic', 'manga script']],
+['mystery_police', ['police procedural', 'detective squad', 'cold case']],
+['adventure', ['adventure', 'survival', 'expedition', 'quest']],
 ];
 function matchGenreKey(t) {
 const s = (t || '').toLowerCase().trim();
@@ -633,18 +636,9 @@ const LENGTH_BLURBS = {
     novel: 'Standard novel (~60k–90k words): full multi-chapter arc; ~4,000-word chapters balance pace and depth.',
     epic: 'Epic novel (100k+ words): multiple POVs/subplots and world-scale stakes; longer ~5,000-word chapters.',
   },
-  zh: {
-    flash: '微型小说：一篇连续完成（约1500字内），聚焦一个瞬间与一次反转。',
-    short: '短篇小说（约1500–7500词）：单一线索、少量角色、迅速收束。',
-    novelette: '中短篇（约7500–17500词）：主线之外可容纳一条副线与更多成长。',
-    novella: '中篇（约17500–40000词）：情节集中、人物精简，具备长篇质感。',
-    light_novel: '轻小说：日式连载文体——短章节（约3500词）、对白密集、以篇章推进。',
-    anthology: '短篇集：多篇独立故事以主题或世界观串联，各自成篇。',
-    novel: '标准长篇（约6–9万词）：完整多章结构，单章约4000词平衡节奏与深度。',
-    epic: '史诗长篇（10万词以上）：多视角多支线、世界级冲突，单章约5000词。',
-  },
+
 };
-$: lengthDescFor = (k) => ((LENGTH_BLURBS[get(uiLocale) === 'zh' ? 'zh' : 'en'] || LENGTH_BLURBS.en)[k]) || '';
+$: lengthDescFor = (k) => (LENGTH_BLURBS.en[k]) || '';
 $: lengthComboOpts = (() => {
   void novelParamsTick;
   return LENGTH_KEYS.map((k) => ({ value: k, label: $t('config.story.length.' + k), desc: lengthDescFor(k) }));
@@ -741,7 +735,7 @@ function protagFamKey(text) {
   return '';
 }
 function itemDesc(text, fams, keyFn) {
-  const lang = get(uiLocale) === 'zh' ? 'es' : 'en'; // UI catalog ships EN + ES
+  const lang = 'en'; // UI catalog ships English only
   const k = keyFn(text);
   return k ? (fams[lang] || fams.en)[k] || '' : '';
 }
@@ -774,22 +768,10 @@ const GENRE_BLURBS = {
     drama: 'Character-first literary fiction: family sagas, coming-of-age, psychorealism, metafiction, existentialist and philosophical stories.',
     adventure: 'Movement-driven fiction: quests, exploration, survival and treasure hunts where the journey and its dangers are the plot — includes martial-arts, superhero and battle-royale action.',
   },
-  zh: {
-    fantasy: '幻想世界：魔法、神话生物或超自然规则——从史诗第二世界到都市隐秘社会。',
-    scifi: '以科技、科学或未来社会为根基的推想小说：太空歌剧、赛博朋克、反乌托邦、初次接触……',
-    mystery: '以罪案与谜团为核心：调查推动情节，从乡村安乐椅推理到硬汉黑色电影式侦探与劫案故事。',
-    romance: '爱情故事即主线情节——情感弧线、关系障碍与令读者满意的结局是这类作品的承诺。',
-    thriller: '节奏、危险与悬念：追逐、阴谋与高风险，无论是谍战、律政、家庭还是动作向。',
-    horror: '以制造恐惧与不安为目的：超自然惊悚、宇宙性渺小、肉体恐怖或身边的怪物。',
-    historical: '扎根于真实历史时期的小说，时代风物、习俗与事件塑造人物命运。',
-    western: '边疆故事：无法无天、荣誉准则与旷野——经典、意大利面式、怪异或移植到太空的西部片。',
-    drama: '以人物为先的文学小说：家族史诗、成长、心理写实、元小说、存在主义与哲思故事。',
-    adventure: '以行动驱动的虚构：冒险、探索、求生与寻宝——旅程与危险即情节，含武术、超级英雄与大逃杀等动作向子类。',
-  },
+
 };
 function genreBlurb(key) {
-  const lang = get(uiLocale) === 'zh' ? 'zh' : 'en';
-  return (GENRE_BLURBS[lang] || GENRE_BLURBS.en)[key] || '';
+  return (GENRE_BLURBS.en)[key] || '';
 }
 
 // Info-box lines: one blurb per selected parent genre (multi-select aware).
@@ -826,82 +808,22 @@ const cur = (localStoryCfg.specific_settings || '').split('\n').map((x) => x.tri
 if (!cur.includes(s)) localStoryCfg.specific_settings = [...cur, s].join('\n');
 }
 
-// —— Randomize (Story parameters) —
-// Fill the story-parameter fields with a coherent random combination. The
-// genre is picked FIRST because everything downstream depends on it: the
-// subgenre list comes from the chosen genre, and conflicts / protagonists /
-// tones / specific-setting suggestions come from the chosen subgenre (with a
-// genre-level fallback, mirroring the reactive option lists above).
-function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-function maybePick(arr, p = 0.75) { return (arr && arr.length && Math.random() < p) ? pick(arr) : ''; }
-
-async function fetchNovelParams() {
-try {
-const p = await api('GET', '/api/novel-params');
-if (p && p.conflict_scales) {
-for (const k of Object.keys(p.conflict_scales)) GENRE_CONFLICTS[k] = p.conflict_scales[k].filter((x) => x !== 'other');
-for (const k of Object.keys(p.protagonist_types)) GENRE_PROTAGONISTS[k] = p.protagonist_types[k].filter((x) => x !== 'other');
-if (p.specific_settings) for (const k of Object.keys(p.specific_settings)) GENRE_SETTINGS[k] = p.specific_settings[k];
-if (p.subgenre_hints) SUBGENRE_HINTS = p.subgenre_hints;
-// Round 18: authoritative single-parent taxonomy computed by the backend
-// (snake_case token -> canonical genre key). Consulted by canonicalParentFor()
-// for presets that only exist server-side.
-if (p.subgenre_parents && typeof p.subgenre_parents === 'object') SUBGENRE_PARENT_TABLE = p.subgenre_parents;
-// Backend per-subgenre catalogs (conflicts/protagonists/settings + canonical
-// parent). The UI filters everything client-side from these lists.
-if (p.subgenre_catalogs && typeof p.subgenre_catalogs === 'object') SUBGENRE_CATALOGS = p.subgenre_catalogs;
-if (p.structure_hints) STRUCTURE_HINTS = p.structure_hints;
-if (Array.isArray(p.subgenre_presets)) SUBGENRE_PRESETS = p.subgenre_presets;
-// Backend is the source of truth for length/structure catalogs and the
-// target-words-per-chapter presets applied when the length changes.
-if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
-if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
-if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
-// Round 7: cross-cutting modifier presets ("Isekai", "Wuxia", "Cozy"...) are
-// now exposed by the backend regardless of the selected genre, so the user
-// can stack them on any combination via checkboxes.
-if (p.modifier_presets) MODIFIER_PRESETS = p.modifier_presets;
-// Round 19: keep the RAW payload — the new cascade modules (subgenreTaxonomy
-// + GenreSubgenrePicker) build their merged single-parent index directly from
-// it, and re-run automatically whenever this assignment happens.
-novelParamsPayload = p;
-novelParamsTick++;
-}
-} catch (e) {}
-}
-
-// —— Modifier stacking (round 7) —
-// Subgenre-style modifiers that can be layered on top of ANY genre/subgenre
-// selection (isekai, wuxia, cyberpunk, cozy...). Filled from
-// /api/novel-params -> modifier_presets ({modifier: [setting tokens]}). The UI
-// renders each as a collapsible group of checkboxes; checking one appends its
-// settings to specific_settings (deduped), unchecking removes exactly those
-// lines again without touching custom entries.
-let MODIFIER_PRESETS = {};
-function modifierGroups() {
-return Object.keys(MODIFIER_PRESETS).sort((a, b) => a.localeCompare(b)).map((name) => ({ name, settings: MODIFIER_PRESETS[name] || [] }));
-}
-function currentSettingsList() {
-return (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
-}
-function modifierChecked(name) {
-const list = currentSettingsList();
-const s = MODIFIER_PRESETS[name] || [];
-return s.length > 0 && s.every((x) => list.includes(x));
-}
-function toggleModifier(name) {
-const s = MODIFIER_PRESETS[name] || [];
-if (!s.length) return;
-const cur = currentSettingsList();
-if (modifierChecked(name)) {
-localStoryCfg.specific_settings = cur.filter((x) => !s.includes(x)).join('\n');
-} else {
-localStoryCfg.specific_settings = [...new Set([...cur, ...s])].join('\n');
-}
-refreshCheckedSettings();
-}
+// Randomize tick: bumped whenever randomizeStoryParams() rewrites the form.
+// Passed into GenreCascadeFields as `bump` so its SmartCombobox widgets
+// (Genre/Subgenre/Conflict/Protagonist) re-sync from cfg instead of keeping
+// the value they were seeded with — without this the cascade fields never
+// visibly changed and Randomize looked dead.
+let cascadeBumpTick = 0;
+function cascadeBump() { void cascadeBumpTick; }
 
 // —— Randomize (Story parameters) —
+// Return a random element from an array (empty-safe). Used by the randomizer
+// below; without it every click threw ReferenceError and silently did nothing.
+function pick(arr) {
+  if (!Array.isArray(arr) || !arr.length) return '';
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 // Fill the story-parameter fields with a coherent random combination. The
 // genre is picked FIRST because everything downstream depends on it: the
 // subgenre list comes from the chosen genre, and conflicts / protagonists /
@@ -918,17 +840,21 @@ function randomizeStoryParams() {
   const sg = pick(g.subgenres);
   localStoryCfg.subgenre = sg;
   lastAutoSubgenre = sg;
-  // 3) Fields that depend on the chosen genre/subgenre.
+  // 3) Fields that depend on the chosen genre/subgenre. Prefer the SAME
+  //    reactive option lists the UI renders (subgenreCfg → genreUnion), so the
+  //    randomized values always exist in the visible dropdowns; fall back to
+  //    the raw static tables when a list is empty.
   const sd = SUBGENRE_DATA[sg] || null;
-  const conflicts = sd ? sd.conflicts : (GENRE_CONFLICTS[g.key] || []);
-  const protags = sd ? sd.protagonists : (GENRE_PROTAGONISTS[g.key] || []);
-  const settings = sd ? sd.settings : (GENRE_SETTINGS[g.key] || []);
+  const conflicts = (conflictOpts && conflictOpts.length) ? conflictOpts : (sd ? sd.conflicts : (GENRE_CONFLICTS[g.key] || []));
+  const protags = (protagonistOpts && protagonistOpts.length) ? protagonistOpts : (sd ? sd.protagonists : (GENRE_PROTAGONISTS[g.key] || []));
+  const settings = (settingSuggestions && settingSuggestions.length) ? settingSuggestions : (sd ? sd.settings : (GENRE_SETTINGS[g.key] || []));
   const tones = sd ? sd.tones : [];
   localStoryCfg.conflict_scale = pick(conflicts);
   localStoryCfg.conflict_other = '';
   localStoryCfg.protagonist_type = pick(protags);
   localStoryCfg.protagonist_other = '';
   localStoryCfg.specific_settings = (() => {
+    if (!settings.length) return '';
     const shuffled = [...settings].sort(() => Math.random() - 0.5);
     const n = 2 + Math.floor(Math.random() * Math.min(3, Math.max(1, shuffled.length)));
     return shuffled.slice(0, n).join('\n');
@@ -948,6 +874,10 @@ function randomizeStoryParams() {
   localStoryCfg.story_length = len;
   const structOptsForLen = structureOptions(len);
   localStoryCfg.structure = structOptsForLen.length ? pick(structOptsForLen) : DEFAULT_STRUCTURE[len];
+  // Mirror the onLengthChange side effect the user would have gotten: the
+  // target-words-per-chapter preset for the new length.
+  const wpcPreset = TARGET_WORDS_BY_LENGTH[len];
+  if (wpcPreset) localStoryCfg.target_words_per_chapter = wpcPreset;
   // 5) Independent enum selects — option values copied verbatim from the UI.
   localStoryCfg.gender_bias = pick(['random', 'balanced', 'male', 'female']);
   localStoryCfg.target_audience = pick(['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages']);
@@ -956,6 +886,10 @@ function randomizeStoryParams() {
   localStoryCfg.gore_level = pick(['random', 'none', 'mid', 'explicit']);
   localStoryCfg.world_darkness = pick(['idyllic', 'temperate', 'gritty', 'grim', 'abyssal']);
   novelParamsTick++;
+  // 6) Re-sync the GenreCascadeFields widgets with the freshly written cfg
+  //    values (they intentionally ignore external edits after their one-shot
+  //    seed unless we bump them here).
+  cascadeBumpTick++;
 }
   let testingApi = false;
 
@@ -966,7 +900,23 @@ function randomizeStoryParams() {
   const DEFAULT_STRUCTURE = { flash: 'three_act', short: 'three_act', novelette: 'three_act', novella: 'three_act', light_novel: 'kishotenketsu', anthology: 'episodic', novel: 'six_act', epic: 'six_act' };
   function structureOptions() { return ALL_STRUCTURE_KEYS; }
   $: structOpts = structureOptions();
-  function onLengthChange() {
+  // UI-reorder (novel-params): SmartSelect option lists for the Length &
+  // Structure cells now rendered directly in the Story grid (under Gore
+  // Level). Same data pipeline as lengthComboOpts/structureComboOpts but with
+  // the `description` field SmartSelect reads for its two-line rows.
+  $: lengthOpts = (() => {
+    void novelParamsTick;
+    return LENGTH_KEYS.map((k) => ({ value: k, label: $t('config.story.length.' + k), description: lengthDescFor(k) }));
+  })();
+  $: structureOpts = (() => {
+    void novelParamsTick;
+    return ALL_STRUCTURE_KEYS.map((k) => ({ value: k, label: $t('config.story.structure.' + k), description: structHint(k) || '' }));
+  })();
+  function onLengthChange(e) {
+    // The Story-length SmartSelect also binds cfg.story_length directly; when
+    // called from a change event make sure the preset logic sees the final
+    // value regardless of bind/on:change ordering.
+    if (e && e.detail) localStoryCfg.story_length = String(e.detail.value || '').trim();
     // 1) Apply the target-words-per-chapter preset for the new length. The
     //    field stays freely editable afterwards; unknown lengths keep it as is.
     const preset = TARGET_WORDS_BY_LENGTH[localStoryCfg.story_length];
@@ -977,6 +927,10 @@ function randomizeStoryParams() {
     const firstPart = cur.split(',')[0].trim();
     const wasAuto = !cur || Object.values(DEFAULT_STRUCTURE).includes(firstPart);
     if (wasAuto) localStoryCfg.structure = DEFAULT_STRUCTURE[localStoryCfg.story_length] || 'three_act';
+  }
+
+  function onStructureChange(e) {
+    if (e && e.detail) localStoryCfg.structure = String(e.detail.value || '').trim();
   }
 
   // AI section generation (based on the story parameters currently in the form)
@@ -1015,14 +969,19 @@ function randomizeStoryParams() {
       const st = cfg?.story || {};
       const owned = new Set();
       for (const sec of finishedSections) {
-        if (sec === 'motif') { owned.add('theme'); owned.add('motif'); }
+        // Theme & Motif card now generates theme/motif/tone/dilemma only —
+        // reader_expectation moved to the "Ideal reader profile" card.
+        if (sec === 'motif') { owned.add('theme'); owned.add('motif'); owned.add('tone'); owned.add('philosophical_dilemma'); }
         else if (sec === 'inspirational_pieces') owned.add('inspirational_pieces');
-        else if (sec === 'story_idea') owned.add('story_idea');
-        else if (sec === 'audience_profile') owned.add('audience_profile');
+        else if (sec === 'story_idea') { owned.add('story_idea'); owned.add('forces_in_tension'); owned.add('elevator_pitch'); owned.add('lighthouse_sentence'); }
+        // Ideal reader profile card fills BOTH its fields together (user request).
+        else if (sec === 'audience_profile') { owned.add('audience_profile'); owned.add('reader_expectation'); }
+        else if (sec === 'reader_expectation') owned.add('reader_expectation');
+        else if (sec === 'differentiating_idea') owned.add('differentiating_idea');
         else if (sec === 'style') { owned.add('writing_style'); owned.add('writing_pov'); }
       }
       const merged = {};
-      for (const k of ['theme', 'motif', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov']) {
+      for (const k of ['theme', 'motif', 'tone', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov', 'philosophical_dilemma', 'reader_expectation', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence', 'differentiating_idea']) {
         const sv = (st[k] || '').trim();
         if (!sv) continue;
         if (owned.has(k) || !(localStoryCfg[k] || '').trim()) merged[k] = st[k];
@@ -1276,17 +1235,22 @@ function randomizeStoryParams() {
     if (section === 'characters') captureSnapshot(undoKey, { type: 'all', entityType: 'character' });
     else if (section === 'organizations') captureSnapshot(undoKey, { type: 'all', entityType: 'organization' });
     else if (section === 'relations') captureSnapshot(undoKey, extra.source_id ? { type: 'pair', entityType: 'relation', srcId: extra.source_id, tgtId: extra.target_id } : { type: 'all', entityType: 'relation' });
-    else if (section === 'worldview') captureSnapshot(undoKey, { type: 'entity', entityType: 'worldview', entityId: extra.entry_id || '__new__' });
+    else if (section === 'worldview') captureSnapshot(undoKey, extra.entry_id || extra.name ? { type: 'entity', entityType: 'worldview', entityId: extra.entry_id || '__new__' } : { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
     else if (section === 'locations') captureSnapshot(undoKey, { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
+    else if (section.startsWith('wv_')) captureSnapshot(undoKey, { type: 'all', entityType: 'worldview', ids: allWvs.map(w => w.id) });
     else if (section === 'style') captureStoryFields(undoKey, ['writing_style', 'writing_pov']);
-    else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif']);
+    else if (section === 'motif') captureStoryFields(undoKey, ['theme', 'motif', 'tone', 'philosophical_dilemma']);
     else if (section === 'inspirational_pieces') captureStoryFields(undoKey, ['inspirational_pieces']);
-    else if (section === 'story_idea') captureStoryFields(undoKey, ['story_idea']);
-    else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile']);
+    else if (section === 'story_idea') captureStoryFields(undoKey, ['story_idea', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence']);
+    // The Ideal reader profile card now owns both fields (reader_expectation
+    // moved here from Theme & Motif — user request).
+    else if (section === 'audience_profile') captureStoryFields(undoKey, ['audience_profile', 'reader_expectation']);
+    else if (section === 'reader_expectation') captureStoryFields(undoKey, ['reader_expectation']);
+    else if (section === 'differentiating_idea') captureStoryFields(undoKey, ['differentiating_idea']);
     await persistStoryBeforeGenerate();
     const story = storyPayload();
     const idea = (story.story_idea || '').trim() || ($config?.story?.story_idea || '').trim();
-    if (!idea && section !== 'motif' && section !== 'inspirational_pieces' && section !== 'story_idea' && section !== 'audience_profile' && section !== 'style') { addToast($t('config.story_idea.required'), 'error'); discardUndo(undoKey); return; }
+    if (!idea && section !== 'motif' && section !== 'inspirational_pieces' && section !== 'story_idea' && section !== 'audience_profile' && section !== 'style' && section !== 'reader_expectation' && section !== 'differentiating_idea') { addToast($t('config.story_idea.required'), 'error'); discardUndo(undoKey); return; }
     // Section-level Generate buttons now go through the chat assistant: the
     // message below is matched by the agent's system prompt, which MUST call
     // the generate_section tool with this exact section key. The tool reuses
@@ -1299,12 +1263,25 @@ function randomizeStoryParams() {
       relations: $t('config.generate.chat.relations'),
       locations: $t('config.generate.chat.locations'),
       worldview: $t('config.generate.chat.worldview'),
+      wv_geography: $t('config.generate.chat.wv_geography'),
+      wv_location: $t('config.generate.chat.wv_location'),
+      wv_faction: $t('config.generate.chat.wv_faction'),
+      wv_rule: $t('config.generate.chat.wv_rule'),
+      wv_knowledge: $t('config.generate.chat.wv_knowledge'),
+      wv_history: $t('config.generate.chat.wv_history'),
+      wv_other: $t('config.generate.chat.wv_other'),
       motif: $t('config.generate.chat.motif'),
       inspirational_pieces: $t('config.generate.chat.inspirational_pieces'),
       story_idea: $t('config.generate.chat.story_idea'),
       audience_profile: $t('config.generate.chat.audience_profile'),
+      reader_expectation: $t('config.generate.chat.reader_expectation'),
     };
-    const msg = chatMsgs[section];
+    const msg = section === 'differentiating_idea'
+      // Story appeal: the creativity level travels through the deterministic
+      // chat fast path — the agent parses [generate-section:X;creativity=N]
+      // and forwards N to the generator (prompt ambition + sampling temp).
+      ? `${$t('config.generate.chat.differentiating_idea')} [creativity=${appealCreativity}]`
+      : chatMsgs[section];
     console.log('[generate] dispatching via chat?', section, 'msg found:', !!msg);
     if (msg) {
       genBusy = { ...genBusy, [section]: true };
@@ -1343,22 +1320,128 @@ function randomizeStoryParams() {
   // is NEVER wired as an event listener — that is why every Generate button
   // was a dead no-op (nothing in DevTools Network, no toast). The helpers
   // below now only return visual props; each <button> binds on:click directly.
-  function genBtnProps(section) {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy[section],
-      title: genBusy[section] ? '' : (genLastError || $t('common.generate')),
-    };
+  // NOTE: do NOT call e.stopPropagation() here. The click already reaches us
+  // via Svelte component event forwarding from <AiGenerateButton>, whose inner
+  // <button> stops native propagation. Calling stopPropagation on the forwarded
+  // (non-native) event throws a TypeError, which previously made every section
+  // Generate button silently fail ("sections no longer load/generate").
+  // —— Story appeal (differentiating idea) ——
+  // The aurora "Suggest" bulb dispatches the differentiating_idea section
+  // through the chat assistant (generateSection), exactly like every other
+  // Generate button: same busy/undo/polling machinery and — critically — the
+  // same SSE token_usage pipeline, so the sent/received token chip shows up.
+  // The slider level travels inside the chat message ([creativity=N]).
+  let appealCreativity = 3;      // 1 Pragmatic .. 5 Disruptive (default Balanced)
+  let appealPanelOpen = false;   // "Sugerir" collapsible bar state
+
+  $: appealLevelLabel = $t('config.appeal.level' + appealCreativity);
+
+  function toggleAppealPanel() { appealPanelOpen = !appealPanelOpen; }
+
+  // The aurora bulb button now goes through the SAME chat path as every other
+  // section Generate button — generateSection('differentiating_idea'):
+  //   - the message carries the [generate-section:differentiating_idea] tag
+  //     plus the slider level ([creativity=N]); the agent's deterministic fast
+  //     path (internal/agent/agent.go parseGenerateSectionTag) forces the
+  //     generate_section tool with that creativity, so no extra LLM round-trip
+  //     is burned and the background generator still receives the level;
+  //   - because it runs as a chat task, the SSE token_usage events fire and
+  //     the sent/received token chip appears like for the other buttons (the
+  //     old synchronous POST /api/generate/differentiating_idea/suggest call
+  //     bypassed the chat/task pipeline entirely, which is why no chip showed);
+  //   - busy state, undo snapshot, toasts and result refresh all come from the
+  //     shared machinery (genBusy['differentiating_idea'] + startGenPolling).
+  function suggestDifferentiatingIdea() {
+    if (appealSuggesting) return;
+    generateSection('differentiating_idea');
   }
-  const genClick = (section) => (e) => { e.stopPropagation(); generateSection(section); };
-  function undoBtnProps(key) {
-    return {
-      class: 'btn btn-ghost btn-xs border border-base-content/25',
-      disabled: !$taskRunning && !genUndo[key],
-      title: $t('config.generate.undoHint'),
-    };
+
+  // Reactive alias so the markup keeps a single source of truth for the
+  // in-flight state (spinner inside the bulb, width lock, disabled).
+  $: appealSuggesting = !!genBusy['differentiating_idea'];
+
+  // —— Wand "Enhance" button (user request) — GENERIC version ——
+  // The wand now lives on EVERY "Novel parameters" textarea of this tab AND on
+  // the Tone input. It appears while its field has focus (or while its own
+  // generation is in flight) and each field works INDEPENDENTLY: clicking it
+  // sends that field's current draft to the LLM through the chat pipeline as
+  //   [generate-section:<field>;enhance=<urlencoded draft>]
+  // which the deterministic fast path (internal/agent parseGenerateSectionTag +
+  // internal/httpapi forcedSectionEnhancePair) routes to enhanceStoryField —
+  // a rewrite that touches ONLY that field. A pre-generation undo snapshot is
+  // captured per field so the normal Generate-undo machinery restores the
+  // author's original text.
+  const ENHANCE_FIELDS = ['theme', 'motif', 'philosophical_dilemma', 'tone',
+    'inspirational_pieces', 'audience_profile', 'reader_expectation', 'differentiating_idea'];
+  let focusedField = '';            // novel-param field currently on focus
+  let enhancingField = '';          // field whose enhance generation is running
+
+  function isFieldFocused(f) { return focusedField === f; }
+  function isFieldBusy(f) { return enhancingField === f || !!genBusy[f]; }
+  function showWandFor(f) { return (focusedField === f || enhancingField === f); }
+  // Reactive alias for the appeal-box markup: the wand shows its spinner while
+  // ITS OWN enhance runs — a plain Suggest/CREATE of differentiating_idea must
+  // not freeze the wand (user request: per-field independent behavior).
+  $: appealEnhancing = enhancingField === 'differentiating_idea';
+
+  async function enhanceField(field) {
+    if (enhancingField || genBusy[field]) return;
+    const current = String(localStoryCfg[field] || '').trim();
+    if (!current) {
+      addToast($t('config.appeal.enhanceEmpty'), 'info');
+      return;
+    }
+    await persistStoryBeforeGenerate();
+    // Keep the wand visible while its own generation runs: clicking it moves
+    // focus out of the field (focusout fires), but the in-flight state must
+    // still show the spinner instead of making the button vanish mid-request.
+    enhancingField = field;
+    genBusy = { ...genBusy, [field]: true };
+    sharedGenBusy[field] = true;
+    captureStoryFields(field, [field]);
+    try {
+      // The tag travels inside the message: everything after "[generate-" was
+      // stripped by App.svelte before hitting the model, so the draft rides
+      // URL-encoded with no spaces or brackets (parseGenerateSectionTag
+      // query-unescapes it server-side).
+      const msg = `${$t('config.generate.chat.differentiating_idea')} [generate-section:${field};enhance=${encodeURIComponent(current)}]`;
+      await sendToChat(msg);
+      startGenPolling();
+      addToast($t('config.appeal.enhanced'), 'success');
+    } catch (e) {
+      console.log('[enhance] dispatch failed', e?.message || String(e));
+      delete sharedGenBusy[field];
+      genBusy = { ...genBusy, [field]: false };
+      if (!Object.values(sharedGenBusy).some(Boolean)) taskRunning.set(false);
+      addToast(e?.message || String(e), 'error');
+    } finally {
+      enhancingField = '';
+    }
   }
-  const undoClick = (key) => (e) => { e.stopPropagation(); undoGenerate(key); };
+
+  // Click-flash state for the wand button (the magic border glow from the
+  // design preview) and the click handler that refocuses the field so the
+  // author can keep editing right after the enhanced text lands in the box.
+  let enhanceFlash = false;
+  function onEnhanceClick(field) {
+    enhanceField(field);
+    enhanceFlash = true;
+    setTimeout(() => { enhanceFlash = false; }, 700);
+    const el = document.querySelector(`[data-enhance-field="${field}"] textarea, [data-enhance-field="${field}"] input`);
+    if (el) el.focus();
+  }
+
+  // Shared helpers for the per-field wand "Enhance" buttons (user request):
+  // one instance per ENHANCE_FIELDS entry, shown while its field has focus (or
+  // its own enhance is in flight). Each SVG gradient id must be unique per
+  // mount, hence `field` in the id. Spinner replaces the icon while busy.
+  function focusField(f) { return () => { focusedField = f; }; }
+  // Which fields share a wrapper: the motif card wraps theme/motif/
+  // philosophical_dilemma/tone inside ONE relative container, so every field's
+  // wand needs its own positioned inner wrapper (see markup below).
+  const wandClick = (f) => () => onEnhanceClick(f);
+
+  const genClick = (section) => () => { generateSection(section); };
 
   $: resolvedChatURL = resolveChatCompletionsURL(localApiCfg.base_url, !!localApiCfg.url_strict);
 
@@ -1369,7 +1452,7 @@ function randomizeStoryParams() {
     const snap = JSON.stringify($apiConfig);
     if (snap !== apiCfgSnapshot) {
       localApiCfg = {
-        base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, max_tokens: 32768, context_budget_tokens: 900000,
+        base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, task_duration_minutes: 0, max_tokens: 32768, context_budget_tokens: 900000,
         ...$apiConfig,
         url_strict: !!$apiConfig.url_strict,
       };
@@ -1409,13 +1492,12 @@ function randomizeStoryParams() {
 
   $: chars = ($settings?.characters || []);
   $: allWvs = ($settings?.worldview || []);
-  $: filteredWvs = $wvFilter === 'all' ? allWvs : allWvs.filter(w => w.category === $wvFilter);
   $: orgs = ($settings?.organizations || []);
   $: rels = ($settings?.relations || []);
 
   const entityIcons = { character: '', organization: '', worldview: '' };
 
-  // 关系双方可选实体（角色 / 组织 / 世界观条目）
+  // Selectable entities for both relation endpoints (characters / organizations / worldview entries)
   $: entityOptions = [
     ...chars.map(c => ({ key: 'character:' + c.id, label: '' + c.name })),
     ...orgs.map(o => ({ key: 'organization:' + o.id, label: '' + o.name })),
@@ -1438,22 +1520,54 @@ function randomizeStoryParams() {
     history: $t('config.wv.cat.history'),
     other: $t('config.wv.cat.other'),
   };
-  $: wvTabs = [
-    ['all', $t('config.wv.cat.all')],
-    ['geography', $t('config.wv.cat.geography')],
-    ['location', $t('config.wv.cat.location')],
-    ['faction', $t('config.wv.cat.faction')],
-    ['rule', $t('config.wv.cat.rule')],
-    ['knowledge', $t('config.wv.cat.knowledge')],
-    ['history', $t('config.wv.cat.history')],
-    ['other', $t('config.wv.cat.other')],
-  ];
+  // Worldview card: instead of a horizontal category filter, every category is
+  // now a vertical section with its OWN Generate button (wv_geography,
+  // wv_faction, ... backend sections), so each generation only produces what
+  // the author actually asked for — and in the number of entries the story
+  // needs, not a fixed batch. "location" only shows when LocationsEnabled.
+  $: wvSections = [
+    { cat: 'geography', section: 'wv_geography' },
+    { cat: 'location', section: 'wv_location' },
+    { cat: 'faction', section: 'wv_faction' },
+    { cat: 'rule', section: 'wv_rule' },
+    { cat: 'knowledge', section: 'wv_knowledge' },
+    { cat: 'history', section: 'wv_history' },
+    { cat: 'other', section: 'wv_other' },
+  ].filter(s => s.cat !== 'location' || !!localStoryCfg.locations_enabled);
+
+  $: wvsByCat = (() => {
+    const m = {};
+    for (const w of allWvs) (m[w.category] = m[w.category] || []).push(w);
+    return m;
+  })();
+
+  function openWvFormIn(cat) {
+    wvCategory = cat;
+    requestNewWv();
+  }
 
   onMount(async () => {
     try { apiConfig.set(await api('GET', '/api/config/api')); } catch (e) {}
     try { config.set(await api('GET', '/api/config')); } catch (e) {}
     try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
-    fetchNovelParams();
+    // Load the novel-parameter catalogs from the backend (single source of
+    // truth for subgenre hints, length/structure keys and word targets).
+    // NOTE: this call site used to reference an undefined `fetchNovelParams`,
+    // which threw a ReferenceError inside onMount and killed every handler
+    // that depends on it (including the Story-parameters randomizer).
+    try {
+      const p = await api('GET', '/api/novel-params');
+      novelParamsPayload = p;
+      novelParamsTick++;
+      if (p.subgenre_catalogs && typeof p.subgenre_catalogs === 'object') SUBGENRE_CATALOGS = p.subgenre_catalogs;
+      if (p.subgenre_parents && typeof p.subgenre_parents === 'object') SUBGENRE_PARENT_TABLE = p.subgenre_parents;
+      if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
+      if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
+      if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
+      SUBGENRE_HINTS = p.subgenre_hints || {};
+      STRUCTURE_HINTS = p.structure_hints || {};
+      SUBGENRE_PRESETS = p.subgenre_presets || [];
+    } catch (e) { /* fall back to the local mirrors above */ }
     // A generation may still be running (it was started fire-and-forget, and
     // this component gets destroyed/recreated on every workspace-tab switch).
     // Re-adopt its busy flags, keep the global spinner honest, and make sure
@@ -1487,7 +1601,7 @@ function randomizeStoryParams() {
     } catch (e) { addToast(e.message, 'error'); }
   }
 
-  // 影响连接测试的字段签名；配置改动后据此自动清除持久化的测试结果
+  // Field signature affecting the connection test; clears persisted test results after config changes
   const apiTestSig = c => JSON.stringify([c.base_url, !!c.url_strict, c.model, c.api_key, c.http_timeout_seconds, c.max_tokens]);
   $: if ($apiTestResult && apiTestSig(localApiCfg) !== $apiTestResult.sig) apiTestResult.set(null);
 
@@ -1506,7 +1620,7 @@ function randomizeStoryParams() {
     }
   }
 
-  // 直接保存故事配置（不经过 AI），存在已确认章节且关键设定有变化时提示协调
+  // Save story config directly (no AI); when confirmed chapters exist and key settings changed, prompt to reconcile
   async function saveStoryConfig() {
     const prev = $config?.story || {};
     const story = {
@@ -1685,12 +1799,12 @@ function randomizeStoryParams() {
     await startGeneration('worldview', { entry_id: savedId }, 'wvform');
   }
 
-  function wvGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['worldview'],
-    };
-  }
+  // The per-form generate buttons now use the shared <AiGenerateButton />;
+  // these helpers just expose the right busy flag for each entry form.
+  function charGenBusy() { return !!genBusy['characters']; }
+  function wvGenBusy() { return !!genBusy['worldview']; }
+  function orgGenBusy() { return !!genBusy['organizations']; }
+  function relGenBusy() { return !!genBusy['relations']; }
 
   async function deleteWorldview(id) {
     showConfirm($t('config.wv.deleteConfirm'), async () => {
@@ -1712,7 +1826,7 @@ function randomizeStoryParams() {
     } catch (e) { addToast(e?.message || String(e), 'error'); }
   }
 
-  // —— 组织 CRUD ——
+  // -- Organization CRUD --
   let orgFormSnapshot = '';
   function orgFormSnapshotNow() {
     return JSON.stringify({ name: orgName, type: orgType, description: orgDescription, members: orgMembers });
@@ -1805,25 +1919,6 @@ function randomizeStoryParams() {
     await startGeneration('relations', { source_id: s.id, target_id: tt.id }, 'relform');
   }
 
-  function charGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['characters'],
-    };
-  }
-  function orgGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['organizations'],
-    };
-  }
-  function relGenBtnProps() {
-    return {
-      class: 'btn btn-accent btn-xs',
-      disabled: !!genBusy['relations'],
-    };
-  }
-
   async function deleteOrganization(id) {
     showConfirm($t('config.org.deleteConfirm'), async () => {
       try {
@@ -1834,7 +1929,7 @@ function randomizeStoryParams() {
     });
   }
 
-  // —— 关系 CRUD ——
+  // -- Relation CRUD --
   function parseEntityKey(key) {
     const i = key.indexOf(':');
     return { type: key.slice(0, i), id: key.slice(i + 1) };
@@ -1940,6 +2035,10 @@ function randomizeStoryParams() {
             <input type="number" class="input input-sm w-full" bind:value={localApiCfg.http_timeout_seconds} disabled={$taskRunning || testingApi} />
           </div>
           <div>
+            <span class="field-label">{$t('config.api.taskDuration')}</span>
+            <input type="number" class="input input-sm w-full" bind:value={localApiCfg.task_duration_minutes} placeholder="30" title={$t('config.api.taskDuration.tooltip')} disabled={$taskRunning || testingApi} />
+          </div>
+          <div>
             <span class="field-label">{$t('config.api.maxTokens')}</span>
             <input type="number" class="input input-sm w-full" bind:value={localApiCfg.max_tokens} placeholder="{$t('config.api.maxTokens.placeholder')}" disabled={$taskRunning || testingApi} title={$t('config.api.maxTokens.tooltip')} />
           </div>
@@ -1972,11 +2071,14 @@ function randomizeStoryParams() {
     {/if}
 
     {#if tab === 'novelParams'}
-    <div class="card bg-base-200">
+    <div class="card bg-base-200 group/card">
       <div class="card-body p-4 gap-2">
-        <h3 class="card-title text-base flex items-center gap-2">{$t('config.story.paramsTitle')}
-          <button type="button" class="btn btn-outline btn-xs" on:click={(e) => { e.stopPropagation(); randomizeStoryParams(); }} disabled={$taskRunning} title={$t('config.story.randomize.hint')}>🎲 {$t('config.story.randomize')}</button>
-        </h3>
+        <div class="flex justify-between items-center">
+          <h3 class="card-title text-base">{$t('config.story.paramsTitle')}</h3>
+          <div class="hover-target">
+            <RandomizeButton disabled={$taskRunning} title={$t('config.story.randomize.hint')} on:click={randomizeStoryParams} />
+          </div>
+        </div>
         {#if hasAccepted}
           <div class="alert alert-warning text-xs py-1.5 px-3">
             <span>{$t('config.story.acceptedHint')}</span>
@@ -2010,6 +2112,290 @@ function randomizeStoryParams() {
             />
           </div>
           -->
+          <!-- UI-reorder: GenreCascadeFields now sits directly under the
+               Subgenre-modifiers textarea; the segmented content fields come
+               next, then the Length/Target-words and Structure/Language rows,
+               then Title/Author. Length & Structure render here (not inside
+               the cascade block) using its exported option lists/handlers. -->
+          <GenreCascadeFields
+            flat={true}
+            showTone={false}
+            dividerBeforeSettings={true}
+            paramsPayload={novelParamsPayload}
+              genreKeys={selectedGenreKeys}
+              bump={cascadeBump}
+              bind:cfg={localStoryCfg}
+              disabled={$taskRunning}
+              otherLabel={$t('config.story.other')}
+              placeholderGenre={$t('config.story.type.placeholder')}
+              placeholderSub={$t('config.story.subgenre.placeholder')}
+              placeholderConflict={$t('config.story.conflict.placeholder')}
+              placeholderProtag={$t('config.story.protagonist.placeholder')}
+              emptyLabel={$t('config.story.auto')}
+              clearLabel={$t('config.story.clear')}
+              hints={SUBGENRE_HINTS}
+              tips={{
+                genre: $t('config.tip.genre'),
+                subgenre: $t('config.tip.subgenre'),
+                conflict: $t('config.tip.conflict'),
+                protagonist: $t('config.tip.protagonist'),
+                specificSettings: $t('config.tip.specificSettings'),
+                tone: $t('config.tip.tone'),
+                length: $t('config.tip.length'),
+                structure: $t('config.tip.structure'),
+              }}
+              labels={{
+                sectionTitle: $t('config.story.genreFilteredSection'),
+                genre: $t('config.story.type'),
+                subgenre: $t('config.story.subgenre'),
+                conflict: $t('config.story.conflict'),
+                protagonist: $t('config.story.protagonist'),
+                settings: $t('config.story.specificSettings'),
+                settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
+                // Former ⓘ tooltip text now lives in the textarea placeholder
+                // (user request): passed via labels so the component can join
+                // it with the "one per line" instruction.
+                settingsTip: $t('config.tip.specificSettings'),
+                modifiers: $t('config.story.modifiers'),
+                pickGenre: $t('config.settings.pickGenre'),
+                pickSubgenre: $t('config.settings.pickSubgenre'),
+                tone: $t('config.story.tone'),
+                tonePlaceholder: $t('config.story.tone.placeholder'),
+                length: $t('config.story.length'),
+                lengthNone: $t('config.story.length.none'),
+                structure: $t('config.story.structure'),
+                structurePlaceholder: $t('config.story.structure.placeholder'),
+                fromSubgenre: $t('config.story.fromSubgenre'),
+                fromGenres: $t('config.story.fromGenres'),
+              }}
+              on:genreChange={(e) => {
+                // Keep the derived legacy state in sync when the NEW block
+                // changes the genre selection (cfg.type is already written by
+                // the component; this only refreshes selectedGenreKeys so the
+                // info box / randomize stay coherent).
+                const keys = (e.detail.keys || []).filter(Boolean);
+                selectedGenreKeys = keys.length ? keys : [];
+                lastGenreText = localStoryCfg.type;
+                initGenreCascade();
+              }}
+              on:subChange={onSubgenrePickerChange}
+              on:settingsChange={() => refreshCheckedSettings()}
+            />
+
+          <div class="divider col-span-2 my-0 py-6 h-px"></div>
+
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.targetAudience')}</span>
+            <!-- Revolut-style segmented control (same chrome as Gore Level):
+                 6 segments + external Auto button. The stored value keeps the
+                 SAME vocabulary as before — kid / middle_grade / ya /
+                 new_adult / adult / all_ages — so the backend contract is
+                 untouched; '' (unset) renders as auto mode. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'kid', label: $t('config.story.targetAudience.kid'), description: $t('config.story.targetAudience.desc.kid') },
+                { value: 'middle_grade', label: $t('config.story.targetAudience.middle_grade'), description: $t('config.story.targetAudience.desc.middle_grade') },
+                { value: 'ya', label: $t('config.story.targetAudience.ya'), description: $t('config.story.targetAudience.desc.ya') },
+                { value: 'new_adult', label: $t('config.story.targetAudience.new_adult'), description: $t('config.story.targetAudience.desc.new_adult') },
+                { value: 'adult', label: $t('config.story.targetAudience.adult'), description: $t('config.story.targetAudience.desc.adult') },
+                { value: 'all_ages', label: $t('config.story.targetAudience.all_ages'), description: $t('config.story.targetAudience.desc.all_ages') },
+              ]}
+              autoValue=""
+              emptyLabel={$t('config.story.targetAudience.none')}
+              disabled={$taskRunning}
+              title={$t('config.tip.targetAudience')}
+              ariaLabel={$t('config.story.targetAudience')}
+              width="100%"
+              bind:value={localStoryCfg.target_audience}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.worldDarkness')}</span>
+            <!-- Segmented control (no SmartSelect header inside the cell: the
+                 component no longer renders its own label, so this is the only
+                 one). 'random' maps to the external Auto button and
+                 idyllic/temperate/gritty/grim/abyssal become the segments —
+                 same stored values as before. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'].map((d) => ({ value: d, label: $t('config.story.worldDarkness.' + d) }))}
+              autoValue=""
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.worldDarkness')}
+              ariaLabel={$t('config.story.worldDarkness')}
+              width="100%"
+              bind:value={localStoryCfg.world_darkness}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.genderBias')}</span>
+            <!-- Sin opción vacía explícita: el género siempre mantiene un valor
+                 (el backend normaliza '' → 'random'), así que 'random' es el
+                 valor del botón Auto externo y balanced/male/female son los
+                 segmentos — mismos valores guardados que antes. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={['random', 'balanced', 'male', 'female'].map((g) => ({ value: g, label: $t('config.story.genderBias.' + g) }))}
+              autoValue="random"
+              emptyLabel={$t('config.story.genderBias.random')}
+              disabled={$taskRunning}
+              title={$t('config.tip.genderBias')}
+              ariaLabel={$t('config.story.genderBias')}
+              width="80%"
+              bind:value={localStoryCfg.gender_bias}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.romanceLevel')}</span>
+            <!-- Segmented control; 'random' maps to the external Auto button
+               and the remaining levels (none/subplot/moderate/central) become
+               the segments — same stored values as before. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'random', label: $t('config.story.romanceLevel.random') },
+                { value: 'none', label: $t('config.story.romanceLevel.none') },
+                { value: 'subplot', label: $t('config.story.romanceLevel.subplot') },
+                { value: 'moderate', label: $t('config.story.romanceLevel.moderate') },
+                { value: 'central', label: $t('config.story.romanceLevel.central') },
+              ]}
+              autoValue="random"
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.romanceLevel')}
+              ariaLabel={$t('config.story.romanceLevel')}
+              width="80%"
+              bind:value={localStoryCfg.romance_level}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.sexualContent')}</span>
+            <!-- Segmented control; 'random' maps to the external Auto button
+               and clean/fade_to_black/explicit become the segments — same
+               stored values as before. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'random', label: $t('config.story.sexualContent.random') },
+                { value: 'clean', label: $t('config.story.sexualContent.clean') },
+                { value: 'fade_to_black', label: $t('config.story.sexualContent.fade_to_black') },
+                { value: 'explicit', label: $t('config.story.sexualContent.explicit') },
+              ]}
+              autoValue="random"
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.sexualContent')}
+              ariaLabel={$t('config.story.sexualContent')}
+              width="60%"
+              bind:value={localStoryCfg.sexual_content}
+            />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.story.goreLevel')}</span>
+            <!-- Revolut-style segmented control (ported from the Alpine
+                 prototype): 3 segments + external Auto button. The stored
+                 value keeps the SAME vocabulary as before — random / none /
+                 mid / explicit — so the backend contract is untouched; the
+                 Auto button maps to 'random' and the header shows the
+                 current selection name. -->
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SegmentedControl
+              options={[
+                { value: 'none', label: $t('config.story.goreLevel.none'), description: '[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.' },
+                { value: 'mid', label: $t('config.story.goreLevel.mid'), description: '[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.' },
+                { value: 'explicit', label: $t('config.story.goreLevel.explicit'), description: '[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.' },
+              ]}
+              autoValue="random"
+              emptyLabel={$t('config.story.content.unset')}
+              disabled={$taskRunning}
+              title={$t('config.tip.goreLevel')}
+              ariaLabel={$t('config.story.goreLevel')}
+              width="60%"
+              bind:value={localStoryCfg.gore_level}
+            />
+          </div>
+
+          <div class="divider col-span-2 my-0 py-6 h-px"></div>
+
+          <!-- UI-reorder: Story length | Target words per chapter -->
+          <div>
+            <span class="field-label flex items-center gap-1">
+              {$t('config.story.length')}
+            </span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={lengthOpts}
+              allowCustom={false}
+              placeholder={$t('config.story.length.none')}
+              emptyLabel={$t('config.story.length.none')}
+              disabled={$taskRunning}
+              title={$t('config.tip.length')}
+              ariaLabel={$t('config.story.length')}
+              bind:value={localStoryCfg.story_length}
+              on:change={onLengthChange}
+            />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.targetWords')}</span>
+            <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} disabled={$taskRunning} />
+          </div>
+
+          <!-- UI-reorder: Story structure | Story language -->
+          <div>
+            <span class="field-label flex items-center gap-1">
+              {$t('config.story.structure')}
+            </span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={structureOpts}
+              allowCustom={true}
+              otherLabel={$t('config.story.other')}
+              placeholder={$t('config.story.structure.placeholder')}
+              emptyLabel={$t('config.story.auto')}
+              disabled={$taskRunning}
+              title={$t('config.tip.structure')}
+              ariaLabel={$t('config.story.structure')}
+              bind:value={localStoryCfg.structure}
+              on:change={onStructureChange}
+            />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.language')}</span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={[
+                { value: 'en', label: 'EN — ' + $t('config.story.language.en') },
+                { value: 'es', label: 'ES — ' + $t('config.story.language.es') },
+              ]}
+              allowCustom={false}
+              emptyLabel={$t('config.story.language.auto')}
+              disabled={$taskRunning}
+              title={$t('config.tip.language')}
+              ariaLabel={$t('config.story.language')}
+              bind:value={localStoryCfg.output_language}
+            />
+          </div>
+
+          <div>
+            <span class="field-label">{$t('config.story.titleField')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder={$t('config.story.title.placeholder')} disabled={$taskRunning} />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.author')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
+          </div>
+          <!-- LEGACY TONE FIELD (round 23 — replaced by the tone input + chips
+               inside GenreCascadeFields):
+          <div>
+            <span class="field-label">{$t('config.story.titleField')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder={$t('config.story.title.placeholder')} disabled={$taskRunning} />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.author')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
+          </div>
           <!-- LEGACY SUBGENRE FIELD (round 23 — replaced by GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.subgenre')}<InfoTip text={fieldTip('subgenre')} label={$t('config.story.subgenre')} /></span>
@@ -2072,148 +2458,9 @@ function randomizeStoryParams() {
                 </div>
               </details>
             {/if}
-            <textarea class="textarea textarea-sm w-full h-12 text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
+            <textarea class="textarea textarea-sm w-full text-xs font-mono mt-1" bind:value={customSettingsText} on:blur={rebuildSpecificSettings} placeholder={$t('config.story.specificSettings.placeholder')} disabled={$taskRunning} title={$t('config.tip.specificSettings')}></textarea>
           </div>
           -->
-          <!-- Round 29: the "genre-filtered" block is no longer nested inside
-               its own bordered card — it renders flat (no wrapper divs, no
-               section header) so its fields sit at the same level as the rest
-               of the "Story parameters" grid content. -->
-          <GenreCascadeFields
-            flat={true}
-            paramsPayload={novelParamsPayload}
-              genreKeys={selectedGenreKeys}
-              bind:cfg={localStoryCfg}
-              disabled={$taskRunning}
-              otherLabel={$t('config.story.other')}
-              placeholderGenre={$t('config.story.type.placeholder')}
-              placeholderSub={$t('config.story.subgenre.placeholder')}
-              placeholderConflict={$t('config.story.conflict.placeholder')}
-              placeholderProtag={$t('config.story.protagonist.placeholder')}
-              emptyLabel={$t('config.story.auto')}
-              clearLabel={$t('config.story.clear')}
-              hints={SUBGENRE_HINTS}
-              tips={{
-                genre: $t('config.tip.genre'),
-                subgenre: $t('config.tip.subgenre'),
-                conflict: $t('config.tip.conflict'),
-                protagonist: $t('config.tip.protagonist'),
-                specificSettings: $t('config.tip.specificSettings'),
-                tone: $t('config.tip.tone'),
-                length: $t('config.tip.length'),
-                structure: $t('config.tip.structure'),
-              }}
-              labels={{
-                sectionTitle: $t('config.story.genreFilteredSection'),
-                genre: $t('config.story.type'),
-                subgenre: $t('config.story.subgenre'),
-                conflict: $t('config.story.conflict'),
-                protagonist: $t('config.story.protagonist'),
-                settings: $t('config.story.specificSettings'),
-                settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
-                modifiers: $t('config.story.modifiers'),
-                pickGenre: $t('config.settings.pickGenre'),
-                pickSubgenre: $t('config.settings.pickSubgenre'),
-                tone: $t('config.story.tone'),
-                tonePlaceholder: $t('config.story.tone.placeholder'),
-                length: $t('config.story.length'),
-                lengthNone: $t('config.story.length.none'),
-                structure: $t('config.story.structure'),
-                structurePlaceholder: $t('config.story.structure.placeholder'),
-                fromSubgenre: $t('config.story.fromSubgenre'),
-                fromGenres: $t('config.story.fromGenres'),
-              }}
-              on:genreChange={(e) => {
-                // Keep the derived legacy state in sync when the NEW block
-                // changes the genre selection (cfg.type is already written by
-                // the component; this only refreshes selectedGenreKeys so the
-                // info box / randomize stay coherent).
-                const keys = (e.detail.keys || []).filter(Boolean);
-                selectedGenreKeys = keys.length ? keys : [];
-                lastGenreText = localStoryCfg.type;
-                initGenreCascade();
-              }}
-              on:subChange={onSubgenrePickerChange}
-              on:settingsChange={() => refreshCheckedSettings()}
-            />
-          <div>
-            <span class="field-label">{$t('config.story.titleField')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder={$t('config.story.title.placeholder')} disabled={$taskRunning} />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.author')}</span>
-            <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.language')}</span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={[
-                { value: 'en', label: 'EN — ' + $t('config.story.language.en') },
-                { value: 'es', label: 'ES — ' + $t('config.story.language.es') },
-              ]}
-              allowCustom={false}
-              emptyLabel={$t('config.story.language.auto')}
-              disabled={$taskRunning}
-              title={$t('config.tip.language')}
-              ariaLabel={$t('config.story.language')}
-              bind:value={localStoryCfg.output_language}
-            />
-          </div>
-          <!-- LEGACY TONE FIELD (round 23 — replaced by the tone input + chips
-               inside GenreCascadeFields):
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.tone')}</span>
-            <input type="text" class="input input-sm w-full mb-1" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
-            {#if toneOpts.length}
-              <div class="flex flex-wrap gap-x-3 gap-y-1">
-                {#each toneOpts as t}
-                  <label class="flex items-center gap-1.5 text-xs cursor-pointer" >
-                    <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(t)} on:change={() => toggleTone(t)} disabled={$taskRunning} />
-                    {t}
-                  </label>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          -->
-          <!-- LEGACY LENGTH / STRUCTURE / CONFLICT / PROTAGONIST COMBOBOXES
-               (round 23 — replaced by the filtered comboboxes inside
-               GenreCascadeFields; target-words stays editable below):
-          <div>
-            <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.length')}<InfoTip text={fieldTip('length')} label={$t('config.story.length')} /></span>
-            <ComboSelect
-              options={lengthComboOpts}
-              allowOther={false}
-              placeholder={$t('config.story.length.none')}
-              emptyLabel={$t('config.story.length.none')}
-              clearLabel={$t('config.story.clear')}
-              disabled={$taskRunning}
-              title={$t('config.tip.length')}
-              bind:value={localStoryCfg.story_length}
-              on:change={onLengthChange}
-            />
-          </div>
-          <div>
-            <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.structure')}<InfoTip text={fieldTip('structure')} label={$t('config.story.structure')} /></span>
-            <ComboSelect
-              options={structureComboOpts}
-              allowOther={true}
-              otherLabel={$t('config.story.other')}
-              placeholder={$t('config.story.structure.placeholder')}
-              emptyLabel={$t('config.story.auto')}
-              clearLabel={$t('config.story.clear')}
-              disabled={$taskRunning}
-              title={fieldTip('structure')}
-              bind:value={localStoryCfg.structure}
-              on:change={onStructureComboChange}
-            />
-          </div>
-          -->
-          <div>
-            <span class="field-label">{$t('config.story.targetWords')}</span>
-            <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} disabled={$taskRunning} />
-          </div>
           <!-- LEGACY CONFLICT / PROTAGONIST (round 23 — now inside GenreCascadeFields):
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 flex items-center gap-1">{$t('config.story.conflict')}<InfoTip text={fieldTip('conflict')} label={$t('config.story.conflict')} /></span>
@@ -2246,103 +2493,15 @@ function randomizeStoryParams() {
             />
           </div>
           -->
-          <div>
-            <span class="field-label">{$t('config.story.targetAudience')}</span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['kid', 'middle_grade', 'ya', 'new_adult', 'adult', 'all_ages'].map((a) => ({ value: a, label: $t('config.story.targetAudience.' + a) }))}
-              allowCustom={false}
-              emptyLabel={$t('config.story.targetAudience.none')}
-              disabled={$taskRunning}
-              title={$t('config.tip.targetAudience')}
-              ariaLabel={$t('config.story.targetAudience')}
-              bind:value={localStoryCfg.target_audience}
-            />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.romanceLevel')}</span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['random', 'none', 'subplot', 'moderate', 'central'].map((r) => ({ value: r, label: $t('config.story.romanceLevel.' + r) }))}
-              allowCustom={false}
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.romanceLevel')}
-              ariaLabel={$t('config.story.romanceLevel')}
-              bind:value={localStoryCfg.romance_level}
-            />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.sexualContent')}</span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['random', 'clean', 'fade_to_black', 'explicit'].map((s) => ({ value: s, label: $t('config.story.sexualContent.' + s) }))}
-              allowCustom={false}
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.sexualContent')}
-              ariaLabel={$t('config.story.sexualContent')}
-              bind:value={localStoryCfg.sexual_content}
-            />
-          </div>
-          <div class="col-span-2">
-            <span class="field-label">{$t('config.story.goreLevel')}</span>
-            <!-- Revolut-style segmented control (ported from the Alpine
-                 prototype): 3 segments + external Auto button. The stored
-                 value keeps the SAME vocabulary as before — random / none /
-                 mid / explicit — so the backend contract is untouched; the
-                 Auto button maps to 'random' and the header shows the
-                 current selection name. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SegmentedControl
-              options={[
-                { value: 'none', label: $t('config.story.goreLevel.none'), description: '[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.' },
-                { value: 'mid', label: $t('config.story.goreLevel.mid'), description: '[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.' },
-                { value: 'explicit', label: $t('config.story.goreLevel.explicit'), description: '[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.' },
-              ]}
-              autoValue="random"
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.goreLevel')}
-              ariaLabel={$t('config.story.goreLevel')}
-              bind:value={localStoryCfg.gore_level}
-            />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.worldDarkness')}</span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['idyllic', 'temperate', 'gritty', 'grim', 'abyssal'].map((d) => ({ value: d, label: $t('config.story.worldDarkness.' + d) }))}
-              allowCustom={false}
-              emptyLabel={$t('config.story.content.unset')}
-              disabled={$taskRunning}
-              title={$t('config.tip.worldDarkness')}
-              ariaLabel={$t('config.story.worldDarkness')}
-              bind:value={localStoryCfg.world_darkness}
-            />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.genderBias')}</span>
-            <!-- Sin opción vacía: el género siempre mantiene un valor (el
-                 backend normaliza '' → 'random'), así que allowClear=false
-                 oculta el botón ✕ y el control se comporta como el <select>
-                 cerrado original. -->
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={['random', 'balanced', 'male', 'female'].map((g) => ({ value: g, label: $t('config.story.genderBias.' + g) }))}
-              allowCustom={false}
-              allowClear={false}
-              disabled={$taskRunning}
-              title={$t('config.tip.genderBias')}
-              ariaLabel={$t('config.story.genderBias')}
-              bind:value={localStoryCfg.gender_bias}
-            />
-          </div>
         </div>
         <label class="flex items-center gap-2 text-sm cursor-pointer" title={$t('config.tip.locationsEnabled')}>
           <input type="checkbox" class="toggle toggle-sm toggle-primary" bind:checked={localStoryCfg.locations_enabled} disabled={$taskRunning} />
           {$t('config.story.locationsEnabled')}
         </label>
+
+        <div class="flex justify-end gap-1.5">
+          <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+        </div>
 
         <!-- ===== Round 23: the standalone duplicate of the cascade block is
              REMOVED. The single GenreCascadeFields instance now lives inside
@@ -2353,72 +2512,245 @@ function randomizeStoryParams() {
              Legacy markup preserved as comments above; save path unchanged
              (same localStoryCfg -> PUT /api/config). -->
 
-        <div class="flex justify-end">
-          <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
-        </div>
       </div>
     </div>
     {/if}
 
     <!-- Novel parameters tab: Theme & Motif card, below the full-width Story config card -->
     {#if tab === 'novelParams'}
-  <div class="card bg-base-200">
+  <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
-      <div class="flex justify-between items-center">
-        <h3 class="card-title text-base">{$t('config.theme.title')}</h3>
-        <div class="flex items-center gap-1.5">
-          <button {...genBtnProps('motif')} on:click={genClick('motif')}>
-            {#if genBusy['motif']}
-              <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-            {:else}✨ {$t('common.generate')}{/if}
-          </button>
-          <button {...undoBtnProps('motif')} on:click={undoClick('motif')}>↩ {$t('common.undo')}</button>
-        </div>
-      </div>
-      <div class="space-y-1.5">
-        <div>
-          <span class="field-label">{$t('config.story.theme')}</span>
-          <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning} title={$t('config.theme.hint')}></textarea>
-        </div>
-        <div>
-          <span class="field-label">{$t('config.motif.title')}</span>
-          <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
-        </div>
-        <div class="divider my-0.5 py-0 h-px"></div>
-        <div class="flex items-center justify-between gap-2 flex-wrap">
-          <span class="text-xs text-base-content/65">{$t('config.inspiration.title')}</span>
+      <div class="group/hover-section">
+        <div class="flex justify-between items-center">
+          <h3 class="card-title text-base">{$t('config.theme.title')}</h3>
           <div class="flex items-center gap-1.5">
-            <button class="btn btn-accent btn-xs" disabled={!!genBusy['inspirational_pieces']}
-              on:click={(e) => { e.stopPropagation(); generateSection('inspirational_pieces'); }}>
-              {#if genBusy['inspirational_pieces']}
-                <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-              {:else}✨ {$t('common.generate')}{/if}
-            </button>
-            <button {...undoBtnProps('inspirational_pieces')} on:click={undoClick('inspirational_pieces')}>↩ {$t('common.undo')}</button>
+            <AiGenerateButton hoverReveal={true} busy={!!genBusy['motif']} title={genLastError || $t('common.generate')} on:click={genClick('motif')} />
           </div>
         </div>
-        <textarea class="textarea textarea-sm w-full h-20 text-xs" bind:value={localStoryCfg.inspirational_pieces}
-          placeholder={$t('config.inspiration.placeholder')} disabled={$taskRunning} title={$t('config.tip.inspiration')}></textarea>
-        <div class="text-xs opacity-60">{$t('config.inspiration.hint')}</div>
-      </div>
-      <div class="divider my-0.5 py-0 h-px"></div>
-      <div class="flex items-center justify-between gap-2 flex-wrap">
-        <span class="text-xs text-base-content/65">{$t('config.audience.profileTitle')}</span>
-        <div class="flex items-center gap-1.5">
-          <button class="btn btn-accent btn-xs" disabled={!!genBusy['audience_profile']}
-            on:click={(e) => { e.stopPropagation(); generateSection('audience_profile'); }}>
-            {#if genBusy['audience_profile']}
-              <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-            {:else}✨ {$t('common.generate')}{/if}
-          </button>
-          <button {...undoBtnProps('audience_profile')} on:click={undoClick('audience_profile')}>↩ {$t('common.undo')}</button>
+        <div class="space-y-1.5">
+          <div class="relative" data-enhance-field="theme"
+               on:focusin={focusField('theme')} on:focusout={() => focusedField = ''}>
+            <!-- Target reader's expectation moved to the "Ideal reader profile"
+                 card (user request): that card's Generate button now writes it
+                 together with the audience profile. -->
+            <span class="field-label">{$t('config.story.theme')}</span>
+            <textarea class="textarea textarea-sm w-full text-sm pr-11" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning}></textarea>
+            {#if showWandFor('theme')}
+              <EnhanceWand field="theme" busy={isFieldBusy('theme')} flash={enhanceFlash && focusedField === 'theme'}
+                label={$t('config.appeal.enhance')} onclick={wandClick('theme')} />
+            {/if}
+          </div>
+          <div class="relative" data-enhance-field="motif"
+               on:focusin={focusField('motif')} on:focusout={() => focusedField = ''}>
+            <span class="field-label">{$t('config.motif.title')}</span>
+            <textarea class="textarea textarea-sm w-full text-sm pr-11" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
+            {#if showWandFor('motif')}
+              <EnhanceWand field="motif" busy={isFieldBusy('motif')} flash={enhanceFlash && focusedField === 'motif'}
+                label={$t('config.appeal.enhance')} onclick={wandClick('motif')} />
+            {/if}
+          </div>
+          <div class="relative" data-enhance-field="philosophical_dilemma"
+               on:focusin={focusField('philosophical_dilemma')} on:focusout={() => focusedField = ''}>
+            <!-- Philosophical / operational dilemma: filled together with
+                 theme/motif/tone by THIS card's Generate button (motif section
+                 now returns five fields). No ⓘ tooltip (user request): the
+                 explanation lives in the placeholder. -->
+            <span class="field-label">{$t('config.dilemma.title')}</span>
+            <textarea class="textarea textarea-sm w-full text-sm pr-11" rows="2" bind:value={localStoryCfg.philosophical_dilemma} placeholder={$t('config.dilemma.placeholder')} disabled={$taskRunning}></textarea>
+            {#if showWandFor('philosophical_dilemma')}
+              <EnhanceWand field="philosophical_dilemma" busy={isFieldBusy('philosophical_dilemma')} flash={enhanceFlash && focusedField === 'philosophical_dilemma'}
+                label={$t('config.appeal.enhance')} onclick={wandClick('philosophical_dilemma')} />
+            {/if}
+          </div>
+          <div>
+            <span class="field-label">{$t('config.story.tone')}</span>
+            <div class="relative" data-enhance-field="tone"
+                 on:focusin={focusField('tone')} on:focusout={() => focusedField = ''}>
+              <input type="text" class="input input-sm w-full mb-1 pr-11" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
+              {#if showWandFor('tone')}
+                <EnhanceWand field="tone" busy={isFieldBusy('tone')} flash={enhanceFlash && focusedField === 'tone'}
+                  label={$t('config.appeal.enhance')} onclick={wandClick('tone')} />
+              {/if}
+            </div>
+            {#if toneOpts.length}
+              <div class="flex flex-wrap gap-x-3 gap-y-1">
+                {#each toneOpts as tname}
+                  <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+                    <input type="checkbox" class="checkbox checkbox-xs" checked={toneChecked(tname)} on:change={() => toggleTone(tname)} disabled={$taskRunning} />
+                    {tname}
+                  </label>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
       </div>
-      <textarea class="textarea textarea-sm w-full h-16 text-xs" bind:value={localStoryCfg.audience_profile}
-        placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
-      <div class="text-xs opacity-60">{$t('config.theme.hint')}</div>
-      <div class="flex justify-end">
-        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+      <div class="group/hover-section">
+          <div class="divider my-0 py-6 h-px"></div>
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <h3 class="card-title text-base">{$t('config.inspiration.title')}</h3>
+            <AiGenerateButton hoverReveal={true} busy={!!genBusy['inspirational_pieces']} title={genLastError || $t('common.generate')}
+              on:click={() => generateSection('inspirational_pieces')} />
+          </div>
+          <div class="relative" data-enhance-field="inspirational_pieces"
+               on:focusin={focusField('inspirational_pieces')} on:focusout={() => focusedField = ''}>
+            <span class="field-label">{$t('config.inspiration.subtitle')}</span>
+            <textarea class="textarea textarea-sm w-full text-xs pr-11" bind:value={localStoryCfg.inspirational_pieces}
+              placeholder={$t('config.inspiration.placeholder')} disabled={$taskRunning} title={$t('config.tip.inspiration')}></textarea>
+            {#if showWandFor('inspirational_pieces')}
+              <EnhanceWand field="inspirational_pieces" busy={isFieldBusy('inspirational_pieces')} flash={enhanceFlash && focusedField === 'inspirational_pieces'}
+                label={$t('config.appeal.enhance')} onclick={wandClick('inspirational_pieces')} />
+            {/if}
+          </div>
+        </div>
+        <div class="group/hover-section">
+          <div class="divider my-0 py-6 h-px"></div>
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <h3 class="card-title text-base">{$t('config.audience.profileTitle')}</h3>
+            <AiGenerateButton hoverReveal={true} busy={!!genBusy['audience_profile']} title={genLastError || $t('common.generate')}
+              on:click={() => generateSection('audience_profile')} />
+          </div>
+          <div class="relative" data-enhance-field="audience_profile"
+               on:focusin={focusField('audience_profile')} on:focusout={() => focusedField = ''}>
+            <span class="field-label">{$t('config.audience.profileSubtitle')}</span>
+            <textarea class="textarea textarea-sm w-full text-xs pr-11" bind:value={localStoryCfg.audience_profile}
+              placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
+            {#if showWandFor('audience_profile')}
+              <EnhanceWand field="audience_profile" busy={isFieldBusy('audience_profile')} flash={enhanceFlash && focusedField === 'audience_profile'}
+                label={$t('config.appeal.enhance')} onclick={wandClick('audience_profile')} />
+            {/if}
+          </div>
+          <div>
+            <!-- Target reader's expectation: moved here from the Theme & Motif
+                 card (user request). No own Generate button anymore — it is
+                 filled TOGETHER with the audience profile by THIS card's
+                 Generate button (audience_section returns both fields). The
+                 "Genre conventions & obligatory motifs" subtitle was removed;
+                 its guidance now lives in the placeholder. -->
+            <div class="relative" data-enhance-field="reader_expectation"
+                 on:focusin={focusField('reader_expectation')} on:focusout={() => focusedField = ''}>
+              <span class="field-label">{$t('config.readerExp.title')}</span>
+              <textarea class="textarea textarea-sm w-full text-xs pr-11" rows="3" bind:value={localStoryCfg.reader_expectation}
+                placeholder={$t('config.readerExp.placeholder')} disabled={$taskRunning}></textarea>
+              {#if showWandFor('reader_expectation')}
+                <EnhanceWand field="reader_expectation" busy={isFieldBusy('reader_expectation')} flash={enhanceFlash && focusedField === 'reader_expectation'}
+                  label={$t('config.appeal.enhance')} onclick={wandClick('reader_expectation')} />
+              {/if}
+            </div>
+          </div>
+      </div>
+      <div class="group/hover-section">
+        <!-- Story appeal: the differentiating idea. Divider separates it from
+             "Ideal reader profile". Its Suggest/Generate flow is completely
+             independent (own synchronous endpoint + own background section):
+             no other Generate button writes this field. -->
+        <div class="divider my-0 py-6 h-px"></div>
+        <!-- Story appeal (user request): no ⓘ tooltip next to the title and NO
+             standalone Generate button — the only generator is the aurora
+             "Suggest" bulb inside the bar revealed by the grey "Suggest"
+             toggle below the textarea. -->
+        <h3 class="card-title text-base">{$t('config.appeal.title')}</h3>
+        <!-- Differentiating idea: label OUTSIDE the box, like every other
+             textarea field in this page (user request). -->
+        <span class="field-label">{$t('config.appeal.ideaTitle')}</span>
+        <!-- Focus chrome (user request): the wrapper must NOT paint a black
+             border on focus-within (`focus-within:border-[#191919]` removed) and
+             the textarea must not show any focus outline/ring. Both are handled
+             here: Tailwind utility removal + `.appeal-box` scoped rules in the
+             style block below (they also neutralize the global app.css
+             `:focus-visible` outline and daisyUI textarea focus styles). -->
+        <div class="appeal-box relative bg-[#FAFAFA] border border-[#E5E5E5] transition-all duration-200 shadow-sm dark:bg-base-100 dark:border-base-300"
+             data-enhance-field="differentiating_idea"
+             on:focusin={() => focusedField = 'differentiating_idea'} on:focusout={() => focusedField = ''}>
+          <textarea class="appeal-textarea w-full bg-transparent p-4 pr-12 text-sm leading-relaxed focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
+            bind:value={localStoryCfg.differentiating_idea} placeholder={$t('config.appeal.placeholder')}></textarea>
+          <!-- Wand "Enhance" (user request): appears TOP-RIGHT INSIDE the box
+               while the textarea has focus (or its own generation is in
+               flight). Expands left-to-right on hover exactly like the design
+               preview; sends the current draft to the LLM through the chat
+               fast path. `overflow` must stay visible on the wrapper for the
+               expanding width animation, so the button lives here as an
+               absolutely-positioned sibling of the textarea. -->
+          {#if showWandFor('differentiating_idea')}
+            <EnhanceWand field="differentiating_idea" busy={appealEnhancing} flash={enhanceFlash && focusedField === 'differentiating_idea'}
+              label={$t('config.appeal.enhance')} onclick={wandClick('differentiating_idea')} />
+          {/if}
+          <div class="appeal-footer border-t border-[#EFEFEF] bg-white p-3 flex flex-col gap-1 dark:bg-base-100 dark:border-base-300">
+            <!-- Collapsible creativity bar (grid 0fr->1fr + fade, per design) -->
+            <div class="appeal-collapsible" class:appeal-open={appealPanelOpen}>
+              <div class="appeal-collapsible-inner grid grid-cols-[auto_1fr_auto] items-center gap-3">
+                <div class="flex justify-start">
+                  <!-- Svelte 4: event directives MUST be `on:click`. A plain
+                       `onclick={handler}` attribute is treated as a static
+                       property on elements and is NEVER wired as a listener —
+                       that is why these buttons were dead no-ops. -->
+                  <button type="button" on:click={toggleAppealPanel}
+                    class="w-7 h-7 rounded-lg border border-[#E5E5E5] text-[#777777] hover:text-[#191919] hover:border-[#CCCCCC] bg-[#FAFAFA] text-xs font-mono transition-all duration-150 flex items-center justify-center"
+                    title={$t('config.appeal.close')}>✕</button>
+                </div>
+                <div class="flex flex-col gap-1.5 w-full max-w-[280px] sm:max-w-[320px] mx-auto px-2">
+                  <div class="flex items-center justify-between text-xs font-mono">
+                    <span class="text-[11px] text-[#888888] flex items-center gap-1.5">
+                      <span class="w-1.5 h-1.5 rounded-full bg-[#191919] inline-block"></span>
+                      {$t('config.appeal.creativity')}
+                    </span>
+                    <span class="text-[11px] font-semibold text-[#191919] dark:text-base-content">{appealLevelLabel}</span>
+                  </div>
+                  <div class="flex items-center gap-2 w-full">
+                    <span class="text-[10px] text-[#AAAAAA]">1</span>
+                    <input type="range" min="1" max="5" step="1" bind:value={appealCreativity} class="appeal-range w-full cursor-pointer" />
+                    <span class="text-[10px] text-[#AAAAAA]">5</span>
+                  </div>
+                </div>
+                <div class="flex justify-end">
+                  <!-- Aurora "Suggest" bulb: mirrors AiGenerateButton.svelte's
+                       layout so the icon stays centered while collapsed (the
+                       old `pl-2` wrapper + absolute label pushed everything a
+                       few px to the right and let the expanded content spill
+                       out of the fixed-width button). The icon lives in a
+                       fixed 36px square; the label is absolutely positioned
+                       OUTSIDE that square and only becomes visible on hover,
+                       when the button grows to its open width. -->
+                  <button type="button" class="appeal-suggest-btn shrink-0" class:appeal-open={appealSuggesting}
+                    disabled={appealSuggesting} on:click={suggestDifferentiatingIdea} title={$t('config.appeal.suggest')}>
+                    <span class="appeal-icon relative z-[2] flex items-center justify-center shrink-0">
+                      {#if appealSuggesting}
+                        <span class="loading loading-spinner loading-xs text-white"></span>
+                      {:else}
+                        <svg class="w-[18px] h-[18px] overflow-visible" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <defs>
+                            <linearGradient id="auroraGlowCfg" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+                              <stop offset="0%" class="appeal-stop1" />
+                              <stop offset="50%" class="appeal-stop2" />
+                              <stop offset="100%" class="appeal-stop3" />
+                            </linearGradient>
+                          </defs>
+                          <g class="appeal-analemma">
+                            <path d="M12 3C8.13401 3 5 6.13401 5 10C5 12.83 7.2 15.2 8.5 16.3C9.2 16.9 9.5 17.3 9.5 18V18.5C9.5 18.8866 9.8134 19.2 10.2 19.2H13.8C14.1866 19.2 14.5 18.8866 14.5 18.5V18C14.5 17.3 14.8 16.9 15.5 16.3C16.8 15.2 19 12.83 19 10C19 6.13401 15.866 3 12 3Z" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                            <path d="M13 5L8.5 11.5H12.5L11 16.5L16 10H12L13 5Z" fill="url(#auroraGlowCfg)" stroke="url(#auroraGlowCfg)" stroke-width="0.5" stroke-linejoin="round" />
+                            <path d="M10 20.8H14" stroke="url(#auroraGlowCfg)" stroke-width="1.8" stroke-linecap="round" />
+                          </g>
+                        </svg>
+                      {/if}
+                    </span>
+                    <span class="appeal-label font-semibold text-[13px] whitespace-nowrap select-none">{$t('config.appeal.suggest')}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center justify-end">
+              {#if !appealPanelOpen}
+                <button type="button" on:click={toggleAppealPanel}
+                  class="px-3 py-1.5 rounded-lg border border-[#E5E5E5] text-[#555555] hover:text-[#191919] hover:border-[#CCCCCC] bg-[#FAFAFA] text-xs font-mono font-medium transition-all duration-150 flex items-center gap-1.5 dark:bg-base-100 dark:text-base-content/60">
+                  <span>{$t('config.appeal.suggest')}</span>
+                </button>
+              {/if}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-1.5">
+        <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>
     </div>
   </div>
@@ -2426,43 +2758,51 @@ function randomizeStoryParams() {
 
     {#if tab === 'novelParams'}
   <!-- Story idea (AI generation seed) — comes first so the style generator can use it -->
-  <div class="card bg-base-200">
+  <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.story_idea.title')}</h3>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['story_idea']} title={genLastError || $t('common.generate')} on:click={genClick('story_idea')} />
       </div>
-      <textarea class="textarea w-full h-32 text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
-      <div class="text-xs opacity-60">{$t('config.story_idea.hint')}</div>
+      <div>
+        <span class="field-label">{$t('config.story_idea.subtitle')}</span>
+        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
+      </div>
+      <div>
+        <span class="field-label">{$t('config.forces.title')}</span>
+        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.forces_in_tension} placeholder={$t('config.forces.placeholder')} disabled={$taskRunning}></textarea>
+      </div>
+      <div>
+        <span class="field-label">{$t('config.elevator.title')}</span>
+        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.elevator_pitch} placeholder={$t('config.elevator.placeholder')} disabled={$taskRunning}></textarea>
+      </div>
+      <div>
+        <span class="field-label">{$t('config.lighthouse.title')}</span>
+        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.lighthouse_sentence} placeholder={$t('config.lighthouse.placeholder')} disabled={$taskRunning}></textarea>
+      </div>
       <div class="flex justify-end gap-1.5">
-        <button {...genBtnProps('story_idea')} on:click={genClick('story_idea')}>
-          {#if genBusy['story_idea']}
-            <span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}
-          {:else}✨ {$t('common.generate')}{/if}
-        </button>
-        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+        <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>
     </div>
   </div>
 
   <!-- Writing Style & POV -->
-  <div class="card bg-base-200">
+  <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
       <div class="flex justify-between items-center">
         <h3 class="card-title text-base">{$t('config.style.title')}</h3>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['style']} title={genLastError || $t('common.generate')} on:click={genClick('style')} />
       </div>
       <div>
         <span class="field-label">{$t('config.style.label')}</span>
-        <textarea class="textarea w-full h-28 text-base" bind:value={localStoryCfg.writing_style} placeholder={$t('config.style.placeholder')} disabled={$taskRunning}></textarea>
+        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.writing_style} placeholder={$t('config.style.placeholder')} disabled={$taskRunning}></textarea>
       </div>
       <div>
         <span class="field-label">{$t('config.pov.label')}</span>
-        <textarea class="textarea w-full h-20 text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}></textarea>
+        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}></textarea>
       </div>
       <div class="flex justify-end gap-1.5">
-        <button {...genBtnProps('style')} on:click={genClick('style')}>
-          {#if genBusy['style']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-        </button>
-        <button class="btn btn-primary btn-xs" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
+        <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
       </div>
     </div>
   </div>
@@ -2471,17 +2811,13 @@ function randomizeStoryParams() {
 
     {#if tab === 'lore'}
   <!-- Characters -->
-  <div class="card bg-base-200">
+  <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
-        <div class="flex items-center gap-2">
-          <h3 class="card-title text-base">{$t('config.char.title')} <span class="text-xs font-normal text-base-content/65">({chars.length})</span></h3>
-          <button {...genBtnProps('characters')} on:click={genClick('characters')}>
-            {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-          </button>
-        </div>
+        <h3 class="card-title text-base">{$t('config.char.title')} <span class="text-xs font-normal text-base-content/65">({chars.length})</span></h3>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['characters']} title={genLastError || $t('common.generate')} on:click={genClick('characters')} />
       </div>
       
         <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
@@ -2489,7 +2825,7 @@ function randomizeStoryParams() {
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.char.empty')}</p>
           {:else}
             {#each chars as c}
-              <div class="flex items-start gap-2.5 bg-base-300 rounded-lg p-2.5 group">
+              <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
                 <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold shrink-0">{stripNameMarks(c.name)[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{stripNameMarks(c.name)}</div>
@@ -2505,7 +2841,7 @@ function randomizeStoryParams() {
         </div>
 
         {#if showCharForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.char.name')}</span>
@@ -2519,35 +2855,32 @@ function randomizeStoryParams() {
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.char.appearance')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charAppearance} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charAppearance} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.personality')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charPersonality} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charPersonality} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.background')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charBackground} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charBackground} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.motivation')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charMotivation} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charMotivation} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.abilities')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charAbilities} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charAbilities} disabled={$taskRunning}></textarea>
               </div>
               <div>
                 <span class="field-label">{$t('config.char.notes')}</span>
-                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charNotes} disabled={$taskRunning}></textarea>
+                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charNotes} disabled={$taskRunning}></textarea>
               </div>
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveCharacter} disabled={$taskRunning}>{$t('config.char.save')}</button>
-              <button {...charGenBtnProps()} on:click={() => generateCharacterEntry()}>
-                {#if genBusy['characters']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-              </button>
-              <button {...undoBtnProps('charform')} on:click={undoClick('charform')}>↩ {$t('common.undo')}</button>
+              <AiGenerateButton busy={charGenBusy()} labelKey="common.generate" on:click={() => generateCharacterEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeCharForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2563,51 +2896,47 @@ function randomizeStoryParams() {
   </div>
 
   <!-- Worldview -->
-  <div class="card bg-base-200">
+  <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="flex justify-between items-center">
-        <h3 class="card-title text-base">{$t('config.wv.title')} <span class="text-xs font-normal text-base-content/65">({filteredWvs.length})</span></h3>
-        <div class="flex items-center gap-2">
-          {#if localStoryCfg.locations_enabled}
-            <button {...genBtnProps('locations')} on:click={genClick('locations')}>
-              {#if genBusy['locations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-            </button>
-          {/if}
-        </div>
-      </div>
-      
-        <div class="tabs tabs-box tabs-xs bg-base-300 w-fit">
-          {#each wvTabs as [cat, label]}
-            <button class="tab tab-xs {$wvFilter === cat ? 'tab-active' : ''}" on:click={() => wvFilter.set(cat)}>
-              {label}
-            </button>
-          {/each}
-        </div>
+      <h3 class="card-title text-base">{$t('config.wv.title')} <span class="text-xs font-normal text-base-content/65">({allWvs.length})</span></h3>
 
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
-          {#if filteredWvs.length === 0}
-            <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.wv.empty')}</p>
-          {:else}
-            {#each filteredWvs as w}
-              <div class="flex items-start gap-2.5 bg-base-300 rounded-lg p-2.5 group">
-                <div class="w-8 h-8 rounded-lg bg-accent/20 text-accent flex items-center justify-center text-xs font-bold shrink-0">{w.name[0]}</div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-sm font-medium truncate">{w.name} <span class="text-xs font-normal text-base-content/30">[{catLabels[w.category] || w.category}]</span></div>
-                  <div class="text-xs text-base-content/65 line-clamp-1">{w.description}</div>
-                </div>
-                <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                  <button class="btn btn-outline btn-xs px-1" on:click={() => openWvForm(w)} disabled={$taskRunning}>{$t('common.edit')}</button>
-                  <button class="btn btn-error btn-outline btn-xs px-1" on:click={() => deleteWorldview(w.id)} disabled={$taskRunning}>{$t('common.delete')}</button>
-                </div>
+        {#each wvSections as sec (sec.cat)}
+          {@const list = wvsByCat[sec.cat] || []}
+          <!-- Each category is its own hover-section: its Generate button only
+               appears when the pointer is over that specific section. -->
+          <div class="group/hover-section border-t border-base-300 pt-2">
+            <div class="flex justify-between items-center">
+              <span class="field-label">{$t('config.wv.cat.' + sec.cat)} <span class="text-base-content/50">({list.length})</span></span>
+              <div class="flex gap-1.5 items-center">
+                <button class="btn btn-ghost btn-xs hover-target" on:click={() => openWvFormIn(sec.cat)}>+ {$t('config.wv.create')}</button>
+                <AiGenerateButton hoverReveal={true} busy={!!genBusy[sec.section]} title={genLastError || $t('common.generate')} on:click={genClick(sec.section)} />
               </div>
-            {/each}
-          {/if}
-        </div>
+            </div>
+
+            {#if list.length === 0}
+              <p class="text-xs text-base-content/65 py-1">{$t('config.wv.empty')}</p>
+            {:else}
+              <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 mt-1">
+                {#each list as w (w.id)}
+                  <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
+                    <div class="w-8 h-8 rounded-lg bg-accent/20 text-accent flex items-center justify-center text-xs font-bold shrink-0">{w.name[0]}</div>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm font-medium truncate">{w.name}</div>
+                      <div class="text-xs text-base-content/65 line-clamp-1">{w.description}</div>
+                    </div>
+                    <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                      <button class="btn btn-outline btn-xs px-1" on:click={() => openWvForm(w)} disabled={$taskRunning}>{$t('common.edit')}</button>
+                      <button class="btn btn-error btn-outline btn-xs px-1" on:click={() => deleteWorldview(w.id)} disabled={$taskRunning}>{$t('common.delete')}</button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
 
         {#if showWvForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.wv.name')}</span>
@@ -2628,7 +2957,7 @@ function randomizeStoryParams() {
             </div>
             <div>
               <span class="field-label">{$t('config.wv.description')}</span>
-              <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={wvDescription} disabled={$taskRunning}></textarea>
+              <textarea class="textarea textarea-sm w-full text-sm" bind:value={wvDescription} disabled={$taskRunning}></textarea>
             </div>
             <div>
               <span class="field-label">{$t('config.wv.tags')}</span>
@@ -2636,8 +2965,7 @@ function randomizeStoryParams() {
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveWorldview} disabled={$taskRunning}>{$t('common.save')}</button>
-              <button {...wvGenBtnProps()} on:click={() => generateWorldviewEntry()}>✨ {$t('config.generate.worldview')}</button>
-              <button {...undoBtnProps('wvform')} on:click={undoClick('wvform')}>↩ {$t('common.undo')}</button>
+              <AiGenerateButton busy={wvGenBusy()} labelKey="config.generate.worldview" on:click={() => generateWorldviewEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeWvForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2653,17 +2981,13 @@ function randomizeStoryParams() {
   </div>
 
   <!-- Organizations -->
-  <div class="card bg-base-200">
+  <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
-        <div class="flex items-center gap-2">
-          <h3 class="card-title text-base">{$t('config.org.title')} <span class="text-xs font-normal text-base-content/65">({orgs.length})</span></h3>
-          <button {...genBtnProps('organizations')} on:click={genClick('organizations')}>
-            {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-          </button>
-        </div>
+        <h3 class="card-title text-base">{$t('config.org.title')} <span class="text-xs font-normal text-base-content/65">({orgs.length})</span></h3>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['organizations']} title={genLastError || $t('common.generate')} on:click={genClick('organizations')} />
       </div>
       
         <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
@@ -2671,7 +2995,7 @@ function randomizeStoryParams() {
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.org.empty')}</p>
           {:else}
             {#each orgs as o}
-              <div class="flex items-start gap-2.5 bg-base-300 rounded-lg p-2.5 group">
+              <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
                 <div class="w-8 h-8 rounded-lg bg-warning/20 text-warning flex items-center justify-center text-xs font-bold shrink-0">{o.name[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{o.name} {#if o.type}<span class="text-xs font-normal text-base-content/30">[{o.type}]</span>{/if}</div>
@@ -2690,7 +3014,7 @@ function randomizeStoryParams() {
         </div>
 
         {#if showOrgForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
                 <span class="field-label">{$t('config.org.name')}</span>
@@ -2703,7 +3027,7 @@ function randomizeStoryParams() {
             </div>
             <div>
               <span class="field-label">{$t('config.org.description')}</span>
-              <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={orgDescription} disabled={$taskRunning}></textarea>
+              <textarea class="textarea textarea-sm w-full text-sm" bind:value={orgDescription} disabled={$taskRunning}></textarea>
             </div>
             {#if chars.length > 0}
               <div>
@@ -2720,10 +3044,7 @@ function randomizeStoryParams() {
             {/if}
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveOrganization} disabled={$taskRunning}>{$t('config.org.save')}</button>
-              <button {...orgGenBtnProps()} on:click={() => generateOrganizationEntry()}>
-                {#if genBusy['organizations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-              </button>
-              <button {...undoBtnProps('orgform')} on:click={undoClick('orgform')}>↩ {$t('common.undo')}</button>
+              <AiGenerateButton busy={orgGenBusy()} labelKey="common.generate" on:click={() => generateOrganizationEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeOrgForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2736,17 +3057,13 @@ function randomizeStoryParams() {
   </div>
 
   <!-- Relations -->
-  <div class="card bg-base-200">
+  <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
-        <div class="flex items-center gap-2">
-          <h3 class="card-title text-base">{$t('config.rel.title')} <span class="text-xs font-normal text-base-content/65">({rels.length})</span></h3>
-          <button {...genBtnProps('relations')} on:click={genClick('relations')}>
-            {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-          </button>
-        </div>
+        <h3 class="card-title text-base">{$t('config.rel.title')} <span class="text-xs font-normal text-base-content/65">({rels.length})</span></h3>
+        <AiGenerateButton hoverReveal={true} busy={!!genBusy['relations']} title={genLastError || $t('common.generate')} on:click={genClick('relations')} />
       </div>
       
         <div class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2">
@@ -2754,7 +3071,7 @@ function randomizeStoryParams() {
             <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.rel.empty')}</p>
           {:else}
             {#each rels as r}
-              <div class="flex items-center gap-2 bg-base-300 rounded-lg p-2.5 group">
+              <div class="flex items-center gap-2 bg-base-100 rounded-lg p-2.5 group">
                 <div class="flex-1 min-w-0 text-sm">
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="font-medium">{entityIcons[r.source_type] || ''} {nameById[r.source_id] || r.source_id}</span>
@@ -2773,7 +3090,7 @@ function randomizeStoryParams() {
         </div>
 
         {#if showRelForm}
-          <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
+          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
               <div>
                 <span class="field-label">{$t('config.rel.source')}</span>
@@ -2811,10 +3128,7 @@ function randomizeStoryParams() {
             </div>
             <div class="flex gap-1.5">
               <button class="btn btn-success btn-xs" on:click={saveRelation} disabled={$taskRunning}>{$t('config.rel.save')}</button>
-              <button {...relGenBtnProps()} on:click={() => generateRelationEntry()}>
-                {#if genBusy['relations']}<span class="loading loading-spinner loading-xs"></span>{$t('config.generating')}{:else}✨ {$t('common.generate')}{/if}
-              </button>
-              <button {...undoBtnProps('relform')} on:click={undoClick('relform')}>↩ {$t('common.undo')}</button>
+              <AiGenerateButton busy={relGenBusy()} labelKey="common.generate" on:click={() => generateRelationEntry()} />
               <button class="btn btn-ghost btn-xs" on:click={closeRelForm}>{$t('common.cancel')}</button>
             </div>
           </div>
@@ -2830,3 +3144,478 @@ function randomizeStoryParams() {
   </div>
     {/if}
 </div>
+
+<style>
+  /* Generate/Save buttons stay hidden until the pointer is over their card
+     (group/card) or their grouped section (group/hover-section); the opacity
+     transition gives a smooth fade between states. */
+  .hover-target {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px);
+    transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  /* A grouped section (group/hover-section) owns its buttons exclusively:
+     hovering the outer card must NOT reveal them — only hovering that
+     specific section does. Keep this rule in sync with the base state above
+     so re-hiding also fades smoothly instead of snapping to invisible. */
+  :is(.group\/card, .group\/hover-section):has(.group\/hover-section) .hover-target {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px);
+    transition: opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
+                transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .group\/hover-section:hover .hover-target,
+  .group\/hover-section:focus-within .hover-target {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  :is(.group\/card, .group\/hover-section):not(:has(.group\/hover-section)):hover .hover-target,
+  :is(.group\/card, .group\/hover-section):not(:has(.group\/hover-section)):focus-within .hover-target {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  /* —— Story appeal (differentiating idea) — component styles ported from the
+     Notion x Revolut design: fluid grid 0fr->1fr collapsible, custom range
+     thumb and the aurora-animated "Suggest" bulb button. Scoped to this page. */
+
+  /* Focus chrome (user request):
+     - The wrapper div must NOT show a black border on focus-within. The
+       `focus-within:border-[#191919]` utility was removed from the markup; the
+       rule below is a safety net so no global/utility focus style can repaint
+       the border while its contents are focused (border stays #E5E5E5).
+     - The textarea must not show ANY focus outline/ring. `focus:outline-none`
+       only covers Tailwind's own utility; the browser default outline, the
+       global app.css `:focus-visible { outline: ... }` rule and daisyUI's
+       `.textarea` focus treatment are all neutralized here. Declared outside
+       any layer with explicit selectors so it wins over those rules. */
+  /* Corner fix (user request): `rounded-2xl` was removed from the markup and
+     replaced by an explicit .5rem radius. The inner footer div paints its own
+     opaque background (#fff / base-100) over the wrapper's rounded corners,
+     which made the bottom corners look "erased" (soft white blobs at each
+     corner). We cannot use overflow:hidden on .appeal-box because the expand
+     button/glow render outside the box, so instead the footer inherits a
+     slightly inset bottom radius that matches the wrapper's inner curve
+     (.5rem minus the 1px border). */
+  .appeal-box {
+    border-radius: .5rem;
+  }
+  .appeal-box > .appeal-footer {
+    border-bottom-left-radius: calc(.5rem - 1px);
+    border-bottom-right-radius: calc(.5rem - 1px);
+  }
+  .appeal-box:focus-within {
+    border-color: #E5E5E5;
+    outline: none;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); /* keep the resting shadow-sm */
+  }
+  .appeal-box .appeal-textarea,
+  .appeal-box .appeal-textarea:focus,
+  .appeal-box .appeal-textarea:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    border: none;
+  }
+  /* Font (user request): the appeal textarea must use the same sans font as
+     the other fields of this tab (body's var(--font-sans) = Inter / Noto Sans
+     fallback stack), NOT the monospace it inherited via `font-mono`. Textareas
+     default to the browser monospace font, so set it explicitly. */
+  .appeal-box .appeal-textarea {
+    font-family: var(--font-sans);
+  }
+
+  .appeal-collapsible {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    visibility: hidden;
+    overflow: hidden;
+    transition: grid-template-rows 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+                visibility 0.45s ease,
+                padding 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+    padding-top: 0px;
+    padding-bottom: 0px;
+  }
+  .appeal-collapsible.appeal-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    visibility: visible;
+    padding-top: 2px;
+    padding-bottom: 4px;
+  }
+  .appeal-collapsible-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+  .appeal-range {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    height: 16px;
+  }
+  .appeal-range:focus { outline: none; }
+  .appeal-range::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: #EFEFEF;
+    border-radius: 9999px;
+  }
+  .appeal-range::-webkit-slider-thumb {
+    height: 14px;
+    width: 14px;
+    border-radius: 50%;
+    background: #191919;
+    cursor: pointer;
+    -webkit-appearance: none;
+    margin-top: -5px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    transition: transform 0.15s ease;
+  }
+  .appeal-range::-webkit-slider-thumb:hover { transform: scale(1.2); }
+  .appeal-range::-moz-range-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: #EFEFEF;
+    border-radius: 9999px;
+  }
+  .appeal-range::-moz-range-thumb {
+    height: 14px;
+    width: 14px;
+    border: none;
+    border-radius: 50%;
+    background: #191919;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  }
+  .appeal-suggest-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    /* Collapsed: the ONLY in-flow child is the fixed 36px icon square, so
+       justify-content:center keeps the bulb perfectly centered inside the
+       36x36 button (no `pl-2` offset). Open (hover/busy): content is pinned
+       to the left edge, exactly like AiGenerateButton's `.btn-content`. */
+    justify-content: center;
+    height: 36px;
+    width: 36px;
+    padding: 0;
+    background: #0f1115;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    color: #ffffff;
+    cursor: pointer;
+    outline: none;
+    overflow: hidden;
+    transition: width 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+                justify-content 0s,
+                border-color 0.25s ease,
+                box-shadow 0.35s ease,
+                background-color 0.25s ease,
+                transform 0.1s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12),
+                0 8px 16px -4px rgba(0, 0, 0, 0.18),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+  /* The label is absolutely positioned (out of flow) so it never competes
+     with the icon for space — this is what previously spilled past the
+     right edge when the button expanded. */
+  .appeal-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .appeal-suggest-btn:hover:not(:disabled),
+  .appeal-suggest-btn.appeal-open {
+    width: 120px;
+    justify-content: flex-start;
+    border-color: rgba(255, 255, 255, 0.22);
+    background: #14171d;
+    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.25),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  }
+  .appeal-suggest-btn:active:not(:disabled) { transform: scale(0.96); }
+  .appeal-suggest-btn:disabled { opacity: 0.8; cursor: wait; }
+  /* —— "Suggest" label + bulb share ONE fill (user request) ——
+     The label already had the aurora gradient but NOT the bulb's signature
+     behaviour: its three SVG stops fade to WHITE together (45%-70% of an 8s
+     cycle) while the label only slid a static gradient back and forth. Both
+     are now driven by the SAME registered custom properties (--appeal-c1/c2/
+     c3) animated through identical keyframe timing, so the text literally
+     carries the exact same fill as the icon — including the synchronized
+     fade-to-white. @property makes the colors interpolatable inside a CSS
+     gradient; browsers without @property support keep the static gradient +
+     white fallback below. */
+  @property --appeal-c1 { syntax: '<color>'; inherits: true; initial-value: #fef08a; }
+  @property --appeal-c2 { syntax: '<color>'; inherits: true; initial-value: #f472b6; }
+  @property --appeal-c3 { syntax: '<color>'; inherits: true; initial-value: #a78bfa; }
+  .appeal-suggest-btn {
+    animation: appealSharedFill 8s ease-in-out infinite;
+  }
+  @keyframes appealSharedFill {
+    0%, 20% { --appeal-c1: #fef08a; --appeal-c2: #f472b6; --appeal-c3: #a78bfa; }
+    45%, 70% { --appeal-c1: #ffffff; --appeal-c2: #ffffff; --appeal-c3: #ffffff; }
+    95%, 100% { --appeal-c1: #fef08a; --appeal-c2: #f472b6; --appeal-c3: #a78bfa; }
+  }
+  .appeal-label {
+    position: absolute;
+    left: 36px;
+    right: 8px;
+    top: 50%;
+    transform: translate(6px, -50%);
+    letter-spacing: -0.1px;
+    opacity: 0;
+    transition: opacity 0.2s ease 0.06s, transform 0.3s ease 0.06s;
+    pointer-events: none;
+    /* Text (user request): EXACTLY the bulb's fill — the shared animated
+       --appeal-c1/c2/c3 gradient (#fef08a -> #f472b6 -> #a78bfa, fading to
+       white on the same schedule as the SVG stops) clipped to the glyphs.
+       `color` stays as a fallback for browsers without background-clip:text. */
+    color: var(--appeal-c2, #f472b6);
+    background: linear-gradient(135deg, var(--appeal-c1, #fef08a) 0%, var(--appeal-c2, #f472b6) 50%, var(--appeal-c3, #a78bfa) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .appeal-suggest-btn:hover:not(:disabled) .appeal-label,
+  .appeal-suggest-btn.appeal-open .appeal-label {
+    opacity: 1;
+    transform: translate(0, -50%);
+  }
+  .appeal-analemma {
+    animation: appealAnalemmaOrbit 5s ease-in-out infinite;
+    filter: drop-shadow(0 0 3px rgba(254, 240, 138, 0.35));
+  }
+  @keyframes appealAnalemmaOrbit {
+    0%   { transform: translate(0px, 0px) rotate(0deg); }
+    25%  { transform: translate(0.4px, -1.2px) rotate(0.5deg); }
+    50%  { transform: translate(0px, -2px) rotate(0deg); }
+    75%  { transform: translate(-0.4px, -1.2px) rotate(-0.5deg); }
+    100% { transform: translate(0px, 0px) rotate(0deg); }
+  }
+  /* The bulb stops read the SAME shared animated colors as the label (see
+     --appeal-c1/c2/c3 above), so icon and text always show one identical
+     fill. The old per-stop keyframes are gone — the parent button drives the
+     single schedule. Fallback values keep the bulb colored if @property is
+     unsupported. */
+  .appeal-stop1 { stop-color: var(--appeal-c1, #fef08a); }
+  .appeal-stop2 { stop-color: var(--appeal-c2, #f472b6); }
+  .appeal-stop3 { stop-color: var(--appeal-c3, #a78bfa); }
+
+  /* —— Wand "Enhance" button (user request) — ported from the HTML design
+     preview to this Svelte 4 component. Lives absolutely positioned at the
+     TOP-RIGHT INSIDE the .appeal-box textarea area, rendered only while the
+     box has focus (or its own generation is in flight). Collapsed 32px pill
+     that expands to the left-to-right "Enhance" label on hover, with the
+     neon pink / fuchsia / electric indigo / cyan aurora gradient shared by
+     icon and text, floating particles, a continuously-spinning tip star on
+     hover, and the magic border flash on click (.clicked). */
+  .appeal-enhance-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    height: 32px;
+    width: 32px;
+    padding: 0;
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 16px;
+    color: #111827;
+    cursor: pointer;
+    outline: none;
+    overflow: visible;
+    transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 0.25s ease,
+                box-shadow 0.35s ease,
+                transform 0.1s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06),
+                0 8px 16px -4px rgba(0, 0, 0, 0.08);
+    animation: enhancePopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes enhancePopIn {
+    from { opacity: 0; transform: scale(0.8); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .appeal-enhance-btn:hover:not(:disabled) {
+    width: 108px;
+    border-color: rgba(0, 0, 0, 0.2);
+    background: #ffffff;
+    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12),
+                0 2px 8px rgba(0, 0, 0, 0.04);
+  }
+  .appeal-enhance-btn:active:not(:disabled) { transform: scale(0.96); }
+  .appeal-enhance-btn:disabled { opacity: 0.85; cursor: wait; }
+  .appeal-enhance-btn .btn-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    height: 100%;
+    padding-left: 8px;
+  }
+  .enhance-label {
+    position: absolute;
+    left: 31px;
+    font-weight: 600;
+    font-size: 11.5px;
+    letter-spacing: -0.1px;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-8px);
+    /* Hidden immediately when hover ends; revealed with a soft delay on hover
+       (mirrors the design preview's asymmetric transitions). */
+    transition: opacity 0.12s ease 0s, transform 0.15s ease 0s, visibility 0s linear 0.15s;
+    user-select: none;
+    /* Vibrant palette: Neon Pink / Fuchsia / Electric Indigo / Cyan, animated
+       exactly like the wand icon so text and icon share one living gradient. */
+    color: #8b5cf6;
+    background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 50%, #06b6d4 100%);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: vibrantAuroraShift 4s ease infinite alternate;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .enhance-label {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+    transition: opacity 0.25s ease 0.12s,
+                transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) 0.12s,
+                visibility 0s linear 0s;
+  }
+  .appeal-enhance-btn .icon-container {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .appeal-enhance-btn .wand-svg {
+    width: 16px;
+    height: 16px;
+    overflow: visible;
+  }
+  /* Gradient stops always bright & colorfully animated (SVG stop-color). */
+  .aurora-stop1 { stop-color: #ec4899; animation: vibrantStop1 4s ease-in-out infinite alternate; }
+  .aurora-stop2 { stop-color: #8b5cf6; animation: vibrantStop2 4s ease-in-out infinite alternate; }
+  .aurora-stop3 { stop-color: #06b6d4; animation: vibrantStop3 4s ease-in-out infinite alternate; }
+  @keyframes vibrantAuroraShift {
+    0%   { background-position: 0% 50%; }
+    100% { background-position: 100% 50%; }
+  }
+  @keyframes vibrantStop1 {
+    0%   { stop-color: #ec4899; }
+    50%  { stop-color: #f43f5e; }
+    100% { stop-color: #8b5cf6; }
+  }
+  @keyframes vibrantStop2 {
+    0%   { stop-color: #8b5cf6; }
+    50%  { stop-color: #6366f1; }
+    100% { stop-color: #06b6d4; }
+  }
+  @keyframes vibrantStop3 {
+    0%   { stop-color: #06b6d4; }
+    50%  { stop-color: #3b82f6; }
+    100% { stop-color: #ec4899; }
+  }
+  /* Big linear star at the wand tip + small filled particles. */
+  .star-tip-linear {
+    transform-origin: 17px 6.15px;
+    transition: transform 0.3s ease;
+    animation: starFloatTip 2.5s ease-in-out infinite alternate;
+  }
+  .particle-filled-1 {
+    transform-origin: 5px 6px;
+    transition: transform 0.3s ease;
+    animation: particleFloat1 2.2s ease-in-out infinite alternate;
+  }
+  .particle-filled-2 {
+    transform-origin: 20px 14px;
+    transition: transform 0.3s ease;
+    animation: particleFloat2 2.8s ease-in-out infinite alternate;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .star-tip-linear {
+    animation: starContinuousRotate 2.5s linear infinite;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .particle-filled-1 {
+    animation: particlePulse1 0.75s ease-in-out infinite alternate;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .particle-filled-2 {
+    animation: particlePulse2 0.9s ease-in-out 0.15s infinite alternate;
+  }
+  @keyframes starFloatTip {
+    0%   { transform: scale(0.95) rotate(-5deg); }
+    100% { transform: scale(1.1) rotate(12deg); }
+  }
+  /* Continuous one-direction spin while hovering the button. */
+  @keyframes starContinuousRotate {
+    0%   { transform: rotate(0deg) scale(1.1); }
+    100% { transform: rotate(360deg) scale(1.1); }
+  }
+  @keyframes particleFloat1 {
+    0%   { transform: scale(0.85) translate(0, 0); }
+    100% { transform: scale(1.15) translate(-0.5px, -1px); }
+  }
+  @keyframes particleFloat2 {
+    0%   { transform: scale(0.8) translate(0, 0); }
+    100% { transform: scale(1.2) translate(0.5px, 0.8px); }
+  }
+  @keyframes particlePulse1 {
+    0%   { transform: scale(0.8) rotate(0deg); }
+    100% { transform: scale(1.4) rotate(20deg); }
+  }
+  @keyframes particlePulse2 {
+    0%   { transform: scale(0.75) rotate(0deg); }
+    100% { transform: scale(1.35) rotate(-25deg); }
+  }
+  .wand-body {
+    transform-origin: 5px 19px;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .wand-body {
+    transform: rotate(-6deg) translateY(-0.5px);
+  }
+  /* Magic gradient border flash on click (.clicked toggled for 700ms). */
+  .magic-border-glow {
+    position: absolute;
+    inset: -1px;
+    border-radius: 16px;
+    border: 1.5px solid transparent;
+    background: linear-gradient(135deg, #ec4899, #8b5cf6, #06b6d4) border-box;
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: destination-out;
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .appeal-enhance-btn.clicked .magic-border-glow {
+    opacity: 1;
+    animation: borderFlash 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  @keyframes borderFlash {
+    0%   { opacity: 1; transform: scale(0.98); }
+    50%  { opacity: 0.9; transform: scale(1.03); }
+    100% { opacity: 0; transform: scale(1.05); }
+  }
+  /* In-flight spinner inherits the same aurora via currentColor-free CSS:
+     keep it subtle dark so it reads on the white pill. */
+  .appeal-enhance-btn.busy .loading-spinner,
+  .appeal-enhance-btn .icon-container .loading { color: #8b5cf6; }
+</style>

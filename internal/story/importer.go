@@ -28,7 +28,12 @@ const (
 
 // —— local splitting ——
 
-var importHeadingRe = regexp.MustCompile(`(?m)^[ \t]*(第[0-9一二三四五六七八九十百千万零两]+[章回]|Chapter[ \t]*\d+|#{1,3}[ \t]*Chapter[ \t]*\d+|序章|楔子|尾声|Prologue|Epilogue)[^\n]*`)
+// Matches English chapter headings: "Chapter 12", "# Chapter 12",
+// "Chapter Twelve", "Chapter twenty-three", and the standalone section
+// markers "Prologue" and "Epilogue". Non-English heading forms are
+// intentionally not matched; heading-less text falls back to size-based
+// chunking.
+var importHeadingRe = regexp.MustCompile(`(?m)^[ \t]*(Chapter[ \t]+[0-9A-Za-z\-]+|#{1,3}[ \t]*Chapter[ \t]+[0-9A-Za-z\-]+|Prologue|Epilogue)[^\n]*`)
 
 type ImportChapterPreview struct {
 	Num       int    `json:"num"`
@@ -92,7 +97,7 @@ func chunkBySize(content string) []importedChapter {
 			return
 		}
 		out = append(out, importedChapter{
-			Title:   fmt.Sprintf("第%d章", len(out)+1),
+			Title:   fmt.Sprintf("Chapter %d", len(out)+1),
 			Content: strings.TrimSpace(buf.String()),
 		})
 		buf.Reset()
@@ -176,11 +181,11 @@ func ImportStartAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 		return err
 	}
 	if len(state.Chapters) > 0 {
-		return fmt.Errorf("项目已有章节，无法导入。请在空项目中导入")
+		return fmt.Errorf("el proyecto ya tiene capítulos; la importación solo funciona en proyectos vacíos")
 	}
 	chapters, preamble := SplitImportContent(content)
 	if len(chapters) == 0 {
-		return fmt.Errorf("未能从文本中切分出任何章节")
+		return fmt.Errorf("no se pudieron detectar capítulos en el contenido importado")
 	}
 
 	state.Chapters = make([]ChapterState, len(chapters))
@@ -195,11 +200,11 @@ func ImportStartAction(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 	state.CurrentChapterIndex = len(chapters)
 	state.Phase = "outline"
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("保存进度失败: %w", err)
+		return fmt.Errorf("guardar progreso: %w", err)
 	}
 	st := &ImportState{Active: true, Total: len(chapters), Preamble: Truncate(preamble, 2000)}
 	if err := SaveImportState(importPath, st); err != nil {
-		return fmt.Errorf("保存导入状态失败: %w", err)
+		return fmt.Errorf("insuredepositenterposture: %w", err)
 	}
 	logger.InfoKey("log.import_split_done", len(chapters))
 
@@ -213,7 +218,7 @@ func ImportResumeAction(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	}
 	st := LoadImportState(importPath)
 	if st == nil {
-		return fmt.Errorf("没有待恢复的导入任务")
+		return fmt.Errorf("haswait enter")
 	}
 	logger.InfoKey("log.import_resuming", st.Cursor, st.Total)
 	return runImportPipeline(ctx, apiCfg, cfg, state, st, progressPath, cfgPath, importPath, logger)
@@ -248,7 +253,7 @@ func runImportPipeline(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 		if r := []rune(body); len(r) > importHeadRunes {
 			// ponytail: head-only truncation; outline quality on ultra-long
 			// chapters could improve with head+tail, upgrade if it matters.
-			body = string(r[:importHeadRunes]) + "\n……（后文略）"
+			body = string(r[:importHeadRunes]) + "\n……(laterslightly)"
 		}
 		userPrompt := config.RenderPrompt(cfg.Prompts.ImportChapterAnalysis, map[string]string{
 			"Title":           preferUserValue(cfg.Story.Title, state.Title),
@@ -264,7 +269,7 @@ func runImportPipeline(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 				logger.WarnKey("log.import_cancelled", st.Cursor, st.Total)
 				return ctx.Err()
 			}
-			return fmt.Errorf("第 %d 章分析失败：API 调用失败", ch.Num)
+			return fmt.Errorf("# %d chapterdivide: API use", ch.Num)
 		}
 		var resp struct {
 			Outline    string                    `json:"outline"`
@@ -272,7 +277,7 @@ func runImportPipeline(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 			Characters []OutlineChapterCharacter `json:"characters"`
 		}
 		if err := json.Unmarshal([]byte(cleanJSONResponse(rawResp)), &resp); err != nil {
-			return fmt.Errorf("第 %d 章分析结果解析失败: %w", ch.Num, err)
+			return fmt.Errorf("failed to parse analysis result for chapter %d: %w", ch.Num, err)
 		}
 		if resp.Outline != "" {
 			ch.Outline = strings.TrimSpace(resp.Outline)
@@ -284,7 +289,7 @@ func runImportPipeline(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 			ch.Characters = normalizeOutlineCharacters(resp.Characters)
 		}
 		if err := SaveProgress(progressPath, state); err != nil {
-			return fmt.Errorf("保存进度失败: %w", err)
+			return fmt.Errorf("guardar progreso: %w", err)
 		}
 		st.Cursor = i + 1
 		SaveImportState(importPath, st)
@@ -315,7 +320,7 @@ func importMetaAnalysis(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	})
 	rawResp := llm.CallAPIWithRetryLog(ctx, apiCfg, i18n.SystemPromptFor(cfg.Language, "content_analyst_json"), userPrompt, logger)
 	if rawResp == "" {
-		return fmt.Errorf("API 调用失败或被取消")
+		return fmt.Errorf("API call failed or was canceled")
 	}
 	var meta struct {
 		Title        string `json:"title"`
@@ -325,7 +330,7 @@ func importMetaAnalysis(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		WritingPOV   string `json:"writing_pov"`
 	}
 	if err := json.Unmarshal([]byte(cleanJSONResponse(rawResp)), &meta); err != nil {
-		return fmt.Errorf("元信息解析失败: %w", err)
+		return fmt.Errorf("parse source: %w", err)
 	}
 
 	state.Title = meta.Title

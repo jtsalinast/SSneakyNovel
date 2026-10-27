@@ -59,10 +59,43 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/knowledge/sync", h.PostKnowledgeSync)
 	mux.HandleFunc("POST /api/settings/story-changes", h.PostSettingChange)
 	mux.HandleFunc("POST /api/generate/{section}", h.PostSectionGenerate)
+	mux.HandleFunc("POST /api/generate/differentiating_idea/suggest", h.PostDifferentiatingIdeaSuggest)
+	mux.HandleFunc("POST /api/generate/differentiating_idea/enhance", h.PostDifferentiatingIdeaEnhance)
 	mux.HandleFunc("DELETE /api/progress", h.DeleteProgress)
 	mux.HandleFunc("GET /api/status", h.GetStatus)
 
 	mux.HandleFunc("POST /api/outline/revise", h.PostOutlineRevise)
+	mux.HandleFunc("POST /api/outline/analyze", h.PostOutlineAnalyze)
+	mux.HandleFunc("POST /api/outline/analysis/apply", h.PostOutlineAnalysisApply)
+	mux.HandleFunc("POST /api/outline/analysis/edit-recommendation", h.PostOutlineAnalysisEditRecommendation)
+	mux.HandleFunc("POST /api/outline/analysis/propose", h.PostOutlineAnalysisPropose)
+	mux.HandleFunc("DELETE /api/outline/analysis", h.DeleteOutlineAnalysis)
+
+	// Bestseller critic: scene plans (pre-writing beat sheets).
+	mux.HandleFunc("POST /api/scene-plan/analyze", h.PostScenePlanAnalyze)
+	mux.HandleFunc("POST /api/scene-plan/analysis/propose", h.PostScenePlanAnalysisPropose)
+	mux.HandleFunc("POST /api/scene-plan/analysis/apply", h.PostScenePlanAnalysisApply)
+	mux.HandleFunc("POST /api/scene-plan/analysis/edit-recommendation", h.PostScenePlanAnalysisEditRecommendation)
+	mux.HandleFunc("DELETE /api/scene-plan/analysis", h.DeleteScenePlanAnalysis)
+
+	// Bestseller critic: finished acts (post-writing, trope-level interventions).
+	mux.HandleFunc("POST /api/acts/analyze", h.PostActAnalyze)
+	mux.HandleFunc("POST /api/acts/analysis/propose-interventions", h.PostActInterventionsPropose)
+	mux.HandleFunc("POST /api/acts/analysis/apply-interventions", h.PostActInterventionsApply)
+	mux.HandleFunc("POST /api/acts/reconfirm", h.PostActReconfirm)
+	mux.HandleFunc("DELETE /api/acts/analysis", h.DeleteActAnalysis)
+
+	// Bestseller critic: individual drafted chapters.
+	mux.HandleFunc("POST /api/chapters/{num}/analyze", h.PostChapterAnalyze)
+	mux.HandleFunc("POST /api/chapters/{num}/analysis/propose-interventions", h.PostChapterInterventionsPropose)
+	mux.HandleFunc("POST /api/chapters/{num}/analysis/apply-interventions", h.PostChapterInterventionsApply)
+	mux.HandleFunc("POST /api/chapters/{num}/analysis/intervention-apply", h.PostChapterInterventionApplyOne)
+	mux.HandleFunc("POST /api/chapters/{num}/analysis/intervention-dismiss", h.PostChapterInterventionDismiss)
+	mux.HandleFunc("PUT /api/chapters/{num}/sheet", h.PutChapterSheet)
+	mux.HandleFunc("POST /api/chapters/{num}/resync-ui", h.PostChapterResyncUI)
+	mux.HandleFunc("POST /api/chapters/{num}/subdivide-beats", h.PostChapterSubdivideBeats)
+	mux.HandleFunc("GET /api/chapters/{num}/iv-locator", h.GetChapterIVLocator)
+	mux.HandleFunc("DELETE /api/chapters/{num}/critique", h.DeleteChapterAnalysis)
 	mux.HandleFunc("POST /api/outline/generate-continuation", h.PostOutlineGenerateContinuation)
 	mux.HandleFunc("POST /api/outline/preplan/generate", h.PostPrePlanGenerate)
 	mux.HandleFunc("GET /api/outline/preplan", h.GetPrePlan)
@@ -78,9 +111,19 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("DELETE /api/chapters/{num}/blocks/{id}", h.DeleteChapterBlock)
 	mux.HandleFunc("POST /api/chapters/{num}/blocks", h.PostChapterBlockInsert)
 	mux.HandleFunc("POST /api/chapters/{num}/blocks/{id}/revise", h.PostChapterBlockRevise)
+	mux.HandleFunc("POST /api/chapters/{num}/resume", h.PostChapterResume)
+	mux.HandleFunc("POST /api/chapters/{num}/factcheck", h.PostChapterFactCheck)
+	mux.HandleFunc("POST /api/chapters/{num}/reset", h.PostChapterReset)
 	mux.HandleFunc("GET /api/export/txt", h.GetBookExport)
 	mux.HandleFunc("GET /api/export/outline", h.GetOutlineExport)
 	mux.HandleFunc("POST /api/chapter/generate", h.PostChapterGenerate)
+	mux.HandleFunc("GET /api/chapters/{num}/scene-plan", h.GetScenePlan)
+	mux.HandleFunc("PUT /api/chapters/{num}/scene-plan", h.PutScenePlan)
+	mux.HandleFunc("POST /api/chapters/{num}/scene-plan/approve", h.PostScenePlanApprove)
+	mux.HandleFunc("POST /api/chapters/{num}/scene-plan/analyze", h.PostChapterScenePlanAnalyze)
+	mux.HandleFunc("POST /api/chapters/{num}/scene-plan/regenerate", h.PostScenePlanRegenerate)
+	mux.HandleFunc("POST /api/chapters/{num}/register-unplanned-cast", h.PostUnplannedCastRegister)
+	mux.HandleFunc("PUT /api/scene-plan/auto", h.PutAutoScenePlan)
 	mux.HandleFunc("GET /api/chapter/conflict", h.GetChapterConflict)
 	mux.HandleFunc("POST /api/chapter/conflict-resolve", h.PostChapterConflictResolve)
 	mux.HandleFunc("POST /api/foreshadows/outline-check", h.PostForeshadowOutlineCheck)
@@ -103,7 +146,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/proofread/chapters/{num}/blocks", h.PostProofreadBlock)
 	mux.HandleFunc("GET /api/proofread/export", h.GetProofreadExport)
 	mux.HandleFunc("DELETE /api/chapter", h.DeleteChapter)
-	mux.HandleFunc("DELETE /api/chapters/from/{num}", h.DeleteChaptersFrom)
+	mux.HandleFunc("DELETE /api/chapters-from/{num}", h.DeleteChaptersFrom)
 	mux.HandleFunc("DELETE /api/outline", h.DeleteOutline)
 
 	mux.HandleFunc("POST /api/task/stop", h.PostTaskStop)
@@ -192,15 +235,15 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 		IdleTimeout:  120 * time.Second,
 	}
 
-	fmt.Printf(" [系统] AI 小说写手 Web UI 启动中...\n")
-	fmt.Printf(" [系统] 访问地址: http://localhost%s\n", port)
-	fmt.Printf(" [系统] 程序目录: %s\n", progDir)
-	fmt.Printf(" [系统] 项目目录: %s\n", filepath.Join(progDir, "storys"))
+	fmt.Printf(" [is] AI smallsaywritehand Web UI enablemovemiddle...\n")
+	fmt.Printf(" [is] ask : http://localhost%s\n", port)
+	fmt.Printf(" [is] order: %s\n", progDir)
+	fmt.Printf(" [is] item: %s\n", filepath.Join(progDir, "storys"))
 
 	go openBrowser(fmt.Sprintf("http://localhost%s", port))
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, " [错误] 服务器启动失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, " [] clothesdeviceenablemove: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -242,7 +285,7 @@ func (h *Handlers) GetProjects(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Project language comes from config.json; old projects default to zh.
-		lang := i18n.LangZH
+		lang := i18n.LangEN
 		if data, err := os.ReadFile(filepath.Join(projectDir, "config.json")); err == nil {
 			var probe struct {
 				Language string `json:"language"`

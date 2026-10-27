@@ -4,7 +4,7 @@
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
   import { onMount, onDestroy } from 'svelte';
-  import { t, uiLocale, setLocale } from './lib/i18n/index.js';
+  import { t, uiLocale } from './lib/i18n/index.js';
   import TaskTokenBadge from './components/TaskTokenBadge.svelte';
   import Projects from './pages/Projects.svelte';
   import Config from './pages/Config.svelte';
@@ -28,6 +28,24 @@
   let assistantOpen = false;
   let navigationButton;
   let assistantButton;
+  // Collapsible lateral bar (desktop): persisted so the choice survives reloads.
+  // Guarded for SSR / non-browser contexts.
+  function readPersistedFlag(key) {
+    try { return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1'; } catch (_) { return false; }
+  }
+  let navCollapsed = readPersistedFlag('navCollapsed');
+  function toggleNavCollapsed() {
+    navCollapsed = !navCollapsed;
+    try { localStorage.setItem('navCollapsed', navCollapsed ? '1' : '0'); } catch (_) {}
+  }
+  // Chat panel collapses into an "agent" pill docked at the bottom-right of
+  // the chat column width (desktop only). Also persisted.
+  let chatCollapsed = readPersistedFlag('chatCollapsed');
+  function toggleChatCollapsed() {
+    chatCollapsed = !chatCollapsed;
+    try { localStorage.setItem('chatCollapsed', chatCollapsed ? '1' : '0'); } catch (_) {}
+    if (chatCollapsed) assistantOpen = false;
+  }
 
   $: if ($taskRunning && !$currentProject) restoreCurrentProject();
 
@@ -49,7 +67,6 @@
         initializing = false;
         if (cur.language) {
           projectLanguage.set(cur.language);
-          setLocale(cur.language);
         }
         if ($taskRunning) navigate('writing');
         await Promise.allSettled([
@@ -168,17 +185,13 @@
     config.set(null);
   }
 
-  function toggleLocale() {
-    setLocale($uiLocale === 'en' ? 'zh' : 'en');
-  }
-
   function openNavigation() {
     navigationOpen = true;
-    requestAnimationFrame(() => document.querySelector('#workspace-navigation button')?.focus());
+    requestAnimationFrame(() => document.querySelector('#LateralBar button')?.focus());
   }
   function openAssistant() {
     assistantOpen = true;
-    requestAnimationFrame(() => document.querySelector('#writing-assistant button')?.focus());
+    requestAnimationFrame(() => document.querySelector('#AgentChat button')?.focus());
   }
   function closeNavigation() {
     if (!navigationOpen) return;
@@ -197,7 +210,7 @@
   function handleShellKeydown(event) {
     if (event.key === 'Escape') { closeNavigation(); closeAssistant(); return; }
     if (event.key !== 'Tab') return;
-    const panel = document.getElementById(navigationOpen ? 'workspace-navigation' : assistantOpen ? 'writing-assistant' : '');
+    const panel = document.getElementById(navigationOpen ? 'LateralBar' : assistantOpen ? 'AgentChat' : '');
     if (!panel) return;
     const controls = [...panel.querySelectorAll('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')];
     if (!controls.length) return;
@@ -209,11 +222,11 @@
 
 <svelte:window on:keydown={handleShellKeydown} />
 
-<div class="app-shell flex flex-col bg-base-300 text-base-content overflow-hidden">
+<div class="app-shell flex flex-col bg-base-100 text-base-content overflow-hidden">
   <!-- Header -->
-  <header class="app-header navbar bg-base-200 border-b border-base-content/10 px-3 min-h-14 shrink-0 gap-2">
+  <header id="TopBar" class="app-header navbar bg-base-200 border-b border-base-content/10 px-3 min-h-14 shrink-0 gap-2">
     {#if $currentProject}
-      <button bind:this={navigationButton} class="btn btn-ghost btn-sm lg:hidden" on:click={openNavigation} aria-expanded={navigationOpen} aria-controls="workspace-navigation" aria-label={$t('app.navigation.open')}>{$t('app.navigation')}</button>
+      <button bind:this={navigationButton} class="btn btn-ghost btn-sm lg:hidden" on:click={openNavigation} aria-expanded={navigationOpen} aria-controls="LateralBar" aria-label={$t('app.navigation.open')}>{$t('app.navigation')}</button>
     {/if}
     <span class="app-brand text-base font-semibold whitespace-nowrap">{$t('app.title')}</span>
     {#if appVersion}
@@ -226,7 +239,7 @@
     {/if}
     {#if $currentProject}
       <span class="app-project-title min-w-0 text-sm font-medium leading-snug">{$config?.story?.title?.trim() || $t('app.untitled')}</span>
-      <span class="badge badge-sm badge-outline uppercase max-sm:hidden" title={$projectLanguage === 'en' ? 'English' : '中文'}>
+      <span class="badge badge-sm badge-outline uppercase max-sm:hidden" title="English">
         {$projectLanguage === 'en' ? 'EN' : 'ZH'}
       </span>
       <button
@@ -250,25 +263,18 @@
       {/if}
     {/if}
     <span class="flex-1"></span>
-    <button
-      class="btn btn-ghost btn-xs gap-1"
-      on:click={toggleLocale}
-      title={$t('app.uiLang.label')}
-    >
-      {$uiLocale === 'en' ? $t('app.uiLang.en') : $t('app.uiLang.zh')}
-    </button>
     {#if $currentProject}
-      <button bind:this={assistantButton} class="btn btn-outline btn-sm xl:hidden" on:click={openAssistant} aria-expanded={assistantOpen} aria-controls="writing-assistant">{$t('app.assistant')}</button>
+      <button bind:this={assistantButton} class="btn btn-outline btn-sm xl:hidden" on:click={openAssistant} aria-expanded={assistantOpen} aria-controls="AgentChat">{$t('app.assistant')}</button>
     {/if}
   </header>
 
   {#if initializing || ($taskRunning && !$currentProject)}
-    <main class="flex-1 flex items-center justify-center" aria-busy="true">
+    <main id="AppLoadingScreen" class="flex-1 flex items-center justify-center" aria-busy="true">
       <span class="loading loading-spinner loading-lg"></span>
     </main>
   {:else if !$currentProject}
     <!-- Project selection -->
-    <main class="project-picker flex-1 overflow-y-auto p-4 sm:p-8">
+    <main id="ProjectPickerMain" class="project-picker flex-1 overflow-y-auto p-4 sm:p-8">
       <Projects />
     </main>
   {:else}
@@ -276,9 +282,21 @@
       {#if navigationOpen || assistantOpen}
         <button class="workspace-scrim" aria-label={$t('common.close')} on:click={() => { if (navigationOpen) closeNavigation(); if (assistantOpen) closeAssistant(); }}></button>
       {/if}
-      <!-- Left: vertical nav -->
-      <nav id="workspace-navigation" class:drawer-open={navigationOpen} class="app-navigation flex flex-col w-48 shrink-0 bg-base-200 border-r border-base-content/10 py-4 px-3 gap-1" aria-label={$t('app.navigation')}>
-        <button class="btn btn-ghost btn-sm mb-2 lg:hidden" on:click={closeNavigation}>{$t('common.close')}</button>
+      <!-- Left: vertical nav (collapsible on desktop) -->
+      <nav id="LateralBar" class:drawer-open={navigationOpen} class:nav-collapsed={navCollapsed} class="app-navigation flex flex-col w-48 shrink-0 bg-base-200 border-r border-base-content/10 py-4 px-3 gap-1" aria-label={$t('app.navigation')}>
+        <div class="flex items-center justify-between gap-1">
+          <button class="btn btn-ghost btn-sm mb-2 lg:hidden" on:click={closeNavigation}>{$t('common.close')}</button>
+          <span class="flex-1 lg:hidden"></span>
+          <button
+            class="nav-collapse-btn btn btn-ghost btn-xs hidden lg:inline-flex mb-2 self-start"
+            on:click={toggleNavCollapsed}
+            aria-expanded={!navCollapsed}
+            aria-controls="LateralBar"
+            title={navCollapsed ? $t('app.navigation.expand') : $t('app.navigation.collapse')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform duration-200" class:rotate-180={navCollapsed} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+          </button>
+        </div>
         {#each [
           ['config', 'nav.config'],
           ['novel-params', 'nav.novelParams'],
@@ -295,15 +313,16 @@
           <button
             class="nav-item btn btn-sm justify-start w-full px-3 text-sm {$currentPage === page ? 'btn-primary font-medium' : 'btn-ghost'}"
             aria-current={$currentPage === page ? 'page' : undefined}
+            title={$t(labelKey)}
             on:click={() => goTo(page)}
           >
-            {$t(labelKey)}
+            <span class="nav-item-label whitespace-nowrap truncate min-w-0">{$t(labelKey)}</span>
           </button>
         {/each}
       </nav>
 
       <!-- Center: page content -->
-      <main class="workspace-main @container flex-[2] min-w-0 overflow-y-auto p-3 sm:p-5 xl:border-r xl:border-base-content/10">
+      <main id="WorkspaceMain" class="workspace-main @container flex-[2] min-w-0 overflow-y-auto p-3 sm:p-5 xl:border-r xl:border-base-content/10">
         {#if $currentPage === 'config'}
           <Config tab="api" {sendToChat} />
         {:else if $currentPage === 'novel-params'}
@@ -327,16 +346,38 @@
         {/if}
       </main>
 
-      <!-- Right: Chat Panel -->
-      <aside id="writing-assistant" class:drawer-open={assistantOpen} class="assistant-panel flex-1 min-w-72 max-w-md bg-base-200 overflow-hidden" aria-label={$t('app.assistant')}>
+      <!-- Right: Chat Panel (collapsible into an "agent" pill at the bottom-right) -->
+      <aside id="AgentChat" class:drawer-open={assistantOpen} class:chat-collapsed={chatCollapsed} class="assistant-panel relative flex-1 min-w-72 max-w-md bg-base-200 overflow-hidden" aria-label={$t('app.assistant')}>
         <button class="btn btn-ghost btn-sm m-2 mb-0 xl:hidden" on:click={closeAssistant}>{$t('common.close')}</button>
-        <ChatPanel bind:this={chatPanel} contextPage={$currentPage} />
+        <div class="chat-panel-body h-full">
+          <ChatPanel bind:this={chatPanel} contextPage={$currentPage} />
+        </div>
+        <button
+          id="ChatCollapsePill"
+          class="chat-pill btn btn-primary btn-sm rounded-full gap-1.5 shadow-lg absolute right-3 z-40 hidden xl:inline-flex"
+          class:bottom-3={!chatCollapsed}
+          class:fixed={chatCollapsed}
+          class:bottom-6={chatCollapsed}
+          class:right-6={chatCollapsed}
+          class:z-50={chatCollapsed}
+          on:click={toggleChatCollapsed}
+          aria-expanded={!chatCollapsed}
+          aria-controls="AgentChat"
+          title={chatCollapsed ? $t('app.assistant.expand') : $t('app.assistant.collapse')}
+        >
+          {#if chatCollapsed}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8m-8 4h5m-9 6V6a2 2 0 012-2h12a2 2 0 012 2v9a2 2 0 01-2 2H7l-4 3z" /></svg>
+          {:else}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform duration-200 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7-7-7m14-7l-7 7-7-7" /></svg>
+          {/if}
+          agent
+        </button>
       </aside>
     </div>
   {/if}
 
   <!-- Toasts -->
-  <div class="fixed top-5 right-5 z-50 flex flex-col gap-2">
+  <div id="ToastNotifications" class="fixed top-5 right-5 z-50 flex flex-col gap-2">
     {#each $toastStore as t (t.id)}
       <div class="alert alert-sm {t.type === 'success' ? 'alert-success' : t.type === 'error' ? 'alert-error' : 'alert-info'} toast-enter  max-w-sm">
         <span>{t.msg}</span>

@@ -232,20 +232,20 @@
   }
 </script>
 
-<div class="space-y-4">
-  <!-- 统计与操作 -->
-  <div class="card bg-base-200">
+<div id="ForeshadowsPage" class="space-y-4">
+  <!-- Stats and actions -->
+  <div id="CardSection_ForeshadowOverview" class="card bg-base-200">
     <div class="card-body py-4 gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="card-title text-base">{$t('fs.title')}</h2>
         <div class="flex flex-wrap gap-2">
-          <button class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={suggestForeshadows}>
+          <button id="DesignForeshadowsAiButton" class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={suggestForeshadows}>
             {$t('fs.designAi')}
           </button>
-          <button class="btn btn-outline btn-sm" disabled={$taskRunning} on:click={openCreate}>
+          <button id="AddManualForeshadowButton" class="btn btn-outline btn-sm" disabled={$taskRunning} on:click={openCreate}>
             {$t('fs.addManual')}
           </button>
-          <button class="btn btn-outline btn-sm" on:click={() => switchView('markdown')}>
+          <button id="ViewRoadmapButton" class="btn btn-outline btn-sm" on:click={() => switchView('markdown')}>
             {$t('fs.viewRoadmap')}
           </button>
         </div>
@@ -265,13 +265,13 @@
   </div>
 
   {#if outlineReport?.has_conflicts}
-    <div class="card bg-warning/10 border border-warning/30 ">
+    <div id="CardSection_ForeshadowOutlineConflict" class="card bg-warning/10 border border-warning/30 ">
       <div class="card-body py-4 gap-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="font-semibold text-warning">{$t('fs.outlineConflict.title')}</h3>
           <div class="flex gap-2">
-            <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={runOutlineCheck}>{$t('fs.outlineConflict.recheck')}</button>
-            <button class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoOutline}>{$t('fs.outlineConflict.gotoOutline')}</button>
+            <button id="RecheckOutlineConflictsButton" class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={runOutlineCheck}>{$t('fs.outlineConflict.recheck')}</button>
+            <button id="GotoOutlineFromConflictButton" class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoOutline}>{$t('fs.outlineConflict.gotoOutline')}</button>
           </div>
         </div>
         {#if outlineReport.summary}
@@ -279,7 +279,7 @@
         {/if}
         <div class="space-y-2 max-h-56 overflow-y-auto text-sm">
           {#each (outlineReport.conflicts || []) as c}
-            <div class="rounded-lg bg-base-300/50 p-3">
+            <div class="rounded-lg bg-base-100/50 p-3">
               <div class="font-medium">#{c.foreshadow_id} {c.foreshadow_name}</div>
               <div class="text-base-content/70 mt-1">{c.description}</div>
               <div class="text-xs text-base-content/65 mt-1">{$t('fs.outlineConflict.suggestedFix')}：{c.suggested_fix}</div>
@@ -290,15 +290,15 @@
     </div>
   {/if}
 
-  <!-- AI 建议确认 -->
+  <!-- AI AI suggestion confirmation -->
   {#if $foreshadowShowSuggestions && $foreshadowSuggestions.length > 0}
-    <div class="card bg-base-200 border border-primary/30 ">
+    <div id="CardSection_ForeshadowSuggestions" class="card bg-base-200 border border-primary/30 ">
       <div class="card-body py-4 gap-3">
         <h3 class="font-semibold">{$t('fs.suggestions.title', { n: $foreshadowSuggestions.length })}</h3>
         <p class="text-sm text-base-content/60">{$t('fs.suggestions.hint')}</p>
         <div class="space-y-2 max-h-72 overflow-y-auto">
           {#each $foreshadowSuggestions as s, i}
-            <label class="flex gap-3 p-3 rounded-lg bg-base-300/50 cursor-pointer">
+            <label class="flex gap-3 p-3 rounded-lg bg-base-100/50 cursor-pointer">
               <input type="checkbox" class="checkbox checkbox-sm mt-1" bind:checked={s._selected} />
               <div class="min-w-0 flex-1">
                 <div class="font-medium">{s.name}</div>
@@ -311,16 +311,16 @@
           {/each}
         </div>
         <div class="flex gap-2">
-          <button class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={confirmSuggestions}>{$t('fs.suggestions.adopt')}</button>
-          <button class="btn btn-ghost btn-sm" on:click={dismissSuggestions}>{$t('fs.suggestions.dismiss')}</button>
+          <button id="AdoptForeshadowSuggestionsButton" class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={confirmSuggestions}>{$t('fs.suggestions.adopt')}</button>
+          <button id="DismissForeshadowSuggestionsButton" class="btn btn-ghost btn-sm" on:click={dismissSuggestions}>{$t('fs.suggestions.dismiss')}</button>
         </div>
       </div>
     </div>
   {/if}
 
-  <!-- 超期告警 -->
+  <!-- Overdue warnings -->
   {#if overdueList.length > 0}
-    <div class="alert alert-warning py-3 text-sm">
+    <div id="ForeshadowOverdueAlert" class="alert alert-warning py-3 text-sm">
       <div>
         <div class="font-medium">{$t('fs.overdue.title')}</div>
         <ul class="list-disc list-inside mt-1">
@@ -332,24 +332,24 @@
     </div>
   {/if}
 
-  <!-- 视图切换 -->
-  <div class="tabs tabs-box bg-base-200 w-fit">
-    <button class="tab tab-sm" class:tab-active={viewMode === 'list'} on:click={() => viewMode = 'list'}>{$t('fs.tabs.list')}</button>
-    <button class="tab tab-sm" class:tab-active={viewMode === 'timeline'} on:click={() => viewMode = 'timeline'}>{$t('fs.tabs.timeline')}</button>
-    <button class="tab tab-sm" class:tab-active={viewMode === 'markdown'} on:click={() => switchView('markdown')}>{$t('fs.tabs.markdown')}</button>
+  <!-- View switch -->
+  <div id="ForeshadowViewTabs" class="tabs tabs-box bg-base-200 w-fit">
+    <button id="ForeshadowTabList" class="tab tab-sm" class:tab-active={viewMode === 'list'} on:click={() => viewMode = 'list'}>{$t('fs.tabs.list')}</button>
+    <button id="ForeshadowTabTimeline" class="tab tab-sm" class:tab-active={viewMode === 'timeline'} on:click={() => viewMode = 'timeline'}>{$t('fs.tabs.timeline')}</button>
+    <button id="ForeshadowTabMarkdown" class="tab tab-sm" class:tab-active={viewMode === 'markdown'} on:click={() => switchView('markdown')}>{$t('fs.tabs.markdown')}</button>
   </div>
 
   {#if foreshadows.length === 0}
-    <div class="card bg-base-200">
+    <div id="ForeshadowEmptyState" class="card bg-base-200">
       <div class="card-body items-center text-center py-12 text-base-content/65">
         <p>{$t('fs.empty.title')}</p>
         <p class="text-sm">{$t('fs.empty.hint')}</p>
       </div>
     </div>
   {:else if viewMode === 'list'}
-    <div class="grid gap-3">
+    <div id="ForeshadowListContainer" class="grid gap-3">
       {#each foreshadows as fs}
-        <div class="card bg-base-200">
+        <div id="ForeshadowCard_{fs.id}" class="card bg-base-200">
           <div class="card-body py-4 gap-2">
             <div class="flex flex-wrap items-start justify-between gap-2">
               <div>
@@ -361,8 +361,8 @@
                 {#if fs.inherited}<span class="badge badge-outline badge-sm ml-2">{$t('fs.inherited')}</span>{/if}
               </div>
               <div class="flex gap-1">
-                <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={() => openEdit(fs)}>{$t('common.edit')}</button>
-                <button class="btn btn-error btn-outline btn-xs" disabled={$taskRunning} on:click={() => deleteForeshadow(fs)}>{$t('common.delete')}</button>
+                <button id="EditForeshadowButton_{fs.id}" class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={() => openEdit(fs)}>{$t('common.edit')}</button>
+                <button id="DeleteForeshadowButton_{fs.id}" class="btn btn-error btn-outline btn-xs" disabled={$taskRunning} on:click={() => deleteForeshadow(fs)}>{$t('common.delete')}</button>
               </div>
             </div>
             <p class="text-sm text-base-content/70">{fs.description}</p>
@@ -390,9 +390,9 @@
       {/each}
     </div>
   {:else if viewMode === 'timeline'}
-    <div class="space-y-3">
+    <div id="ForeshadowTimelineContainer" class="space-y-3">
       {#each timelineChapters as row}
-        <div class="card bg-base-200">
+        <div id="ForeshadowTimelineChapter_{row.num}" class="card bg-base-200">
           <div class="card-body py-3 gap-2">
             <h3 class="font-medium text-sm">{$t('fs.timeline.chapter', { num: row.num })}</h3>
             {#if row.plant.length}
@@ -424,50 +424,50 @@
       {/each}
     </div>
   {:else}
-    <div class="card bg-base-200">
+    <div id="CardSection_ForeshadowRoadmap" class="card bg-base-200">
       <div class="card-body py-4 gap-3">
         <div class="flex flex-wrap gap-2 justify-between items-center">
           <span class="text-sm text-base-content/60">
             {#if roadmapPath}{$t('fs.markdown.file', { name: roadmapPath.split('/').pop() })}{/if}
           </span>
           <div class="flex gap-2">
-            <button class="btn btn-outline btn-xs" disabled={loadingRoadmap} on:click={loadRoadmap}>{$t('common.refresh')}</button>
-            <button class="btn btn-outline btn-xs" disabled={!roadmapMarkdown} on:click={copyRoadmap}>{$t('common.copy')}</button>
-            <button class="btn btn-outline btn-xs" disabled={!roadmapMarkdown} on:click={downloadRoadmap}>{$t('common.download')}</button>
+            <button id="RefreshRoadmapButton" class="btn btn-outline btn-xs" disabled={loadingRoadmap} on:click={loadRoadmap}>{$t('common.refresh')}</button>
+            <button id="CopyRoadmapButton" class="btn btn-outline btn-xs" disabled={!roadmapMarkdown} on:click={copyRoadmap}>{$t('common.copy')}</button>
+            <button id="DownloadRoadmapButton" class="btn btn-outline btn-xs" disabled={!roadmapMarkdown} on:click={downloadRoadmap}>{$t('common.download')}</button>
           </div>
         </div>
         {#if loadingRoadmap}
           <div class="flex justify-center py-8"><span class="loading loading-spinner loading-md"></span></div>
         {:else}
-          <pre class="text-xs whitespace-pre-wrap bg-base-300/50 rounded-lg p-4 max-h-[480px] overflow-y-auto">{roadmapMarkdown || $t('fs.markdown.empty')}</pre>
+          <pre id="RoadmapMarkdownViewer" class="text-xs whitespace-pre-wrap bg-base-100/50 rounded-lg p-4 max-h-[480px] overflow-y-auto">{roadmapMarkdown || $t('fs.markdown.empty')}</pre>
         {/if}
       </div>
     </div>
   {/if}
 </div>
 
-<!-- 编辑/创建弹窗（DaisyUI 5：不用已移除的 form-control / 旧 label-text） -->
+<!-- Edit/create modal (DaisyUI 5: avoid the removed form-control / old label-text) -->
 {#if showForm}
-  <dialog class="modal modal-open">
+  <dialog id="ForeshadowFormModal" class="modal modal-open">
     <div class="modal-box max-w-lg">
       <h3 class="font-bold text-lg">{editing ? $t('fs.form.edit') : $t('fs.form.create')}</h3>
       <div class="flex flex-col gap-3 mt-4">
         <div>
           <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.name')}</span>
-          <input class="input input-bordered input-sm w-full" bind:value={form.name} disabled={$taskRunning} />
+          <input id="ForeshadowNameInput" class="input input-bordered input-sm w-full" bind:value={form.name} disabled={$taskRunning} />
         </div>
         <div>
           <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.description')}</span>
-          <textarea class="textarea textarea-bordered text-sm w-full" rows="3" bind:value={form.description} disabled={$taskRunning}></textarea>
+          <textarea id="ForeshadowDescriptionInput" class="textarea textarea-bordered text-sm w-full" rows="3" bind:value={form.description} disabled={$taskRunning}></textarea>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.plant')}</span>
-            <input type="number" min="1" class="input input-bordered input-sm w-full" bind:value={form.plant_chapter} disabled={$taskRunning} />
+            <input id="ForeshadowPlantChapterInput" type="number" min="1" class="input input-bordered input-sm w-full" bind:value={form.plant_chapter} disabled={$taskRunning} />
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.target')}</span>
-            <input type="number" min="0" class="input input-bordered input-sm w-full" bind:value={form.target_chapter} disabled={$taskRunning} />
+            <input id="ForeshadowTargetChapterInput" type="number" min="0" class="input input-bordered input-sm w-full" bind:value={form.target_chapter} disabled={$taskRunning} />
           </div>
         </div>
         {#if editing}
@@ -475,6 +475,7 @@
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.status')}</span>
             <!-- svelte-ignore a11y-no-redundant-roles -->
             <SmartSelect
+              id="ForeshadowStatusSelect"
               options={Object.entries(statusMeta).map(([val, meta]) => ({ value: val, label: meta.label }))}
               allowCustom={false}
               allowClear={false}
@@ -485,13 +486,13 @@
           </div>
           <div>
             <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.resolution')}</span>
-            <input class="input input-bordered input-sm w-full" bind:value={form.resolution} disabled={$taskRunning} />
+            <input id="ForeshadowResolutionInput" class="input input-bordered input-sm w-full" bind:value={form.resolution} disabled={$taskRunning} />
           </div>
         {/if}
       </div>
       <div class="modal-action">
-        <button class="btn btn-ghost btn-sm" on:click={() => showForm = false}>{$t('common.cancel')}</button>
-        <button class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={saveForm}>{$t('common.save')}</button>
+        <button id="CancelForeshadowFormButton" class="btn btn-ghost btn-sm" on:click={() => showForm = false}>{$t('common.cancel')}</button>
+        <button id="SaveForeshadowFormButton" class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={saveForm}>{$t('common.save')}</button>
       </div>
     </div>
     <form method="dialog" class="modal-backdrop"><button on:click={() => showForm = false}>close</button></form>

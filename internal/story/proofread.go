@@ -66,7 +66,7 @@ func proofreadCall(ctx context.Context, api *config.APIConfig, system, prompt st
 	for attempt := 0; attempt < 2; attempt++ {
 		raw := llm.CallAPIWithRetryLog(ctx, api, system, prompt, logger)
 		if raw == "" {
-			return fmt.Errorf("API 调用失败或被取消")
+			return fmt.Errorf("API call failed or was canceled")
 		}
 		j := llm.ExtractJSON(raw)
 		if j != "" && json.Unmarshal([]byte(j), out) == nil {
@@ -74,7 +74,7 @@ func proofreadCall(ctx context.Context, api *config.APIConfig, system, prompt st
 		}
 		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
 	}
-	return fmt.Errorf("模型两次返回无效 JSON")
+	return fmt.Errorf("la IA no devolvió un JSON válido tras varios intentos")
 }
 
 func AnalyzeProofread(ctx context.Context, api *config.APIConfig, cfg *config.Config, settings *ProjectSettings, state *Progress, pp *PostProcessState, logger *sse.LogBroadcaster) error {
@@ -92,7 +92,7 @@ func AnalyzeProofread(ctx context.Context, api *config.APIConfig, cfg *config.Co
 		}
 		ch := &state.Chapters[n]
 		SyncChapterBlocks(ch)
-		logger.StepInfo(n+1, len(state.Chapters), fmt.Sprintf("正在检查第 %d 章的人工校订问题...", ch.Num))
+		logger.StepInfo(n+1, len(state.Chapters), fmt.Sprintf("Revisando capitulo #%d...", ch.Num))
 		prompt := fmt.Sprintf(`Review this completed chapter only for issues that require human judgment or would require adding, deleting, splitting, merging, or moving paragraphs. Use the supplied settings, prior summaries, linked facts, and foreshadows to identify contradictions, but cite only blocks in the current chapter. Do not report ordinary spelling, grammar, wording, dialogue-naturalness, or style issues: a separate automatic proofreader handles those. Do not rewrite prose.
 
 Return JSON: {"issues":[{"category":"logic|fact|structure|rhythm|foreshadow|character|other","severity":"critical|important|suggestion","title":"short title","detail":"what is wrong","suggestion":"human action","block_ids":[1]}]}. Every issue must cite one or more real block IDs below. Return {"issues":[]} when none.
@@ -120,7 +120,7 @@ Blocks:
 			return err
 		}
 		if result.Issues == nil {
-			return fmt.Errorf("模型响应缺少 issues 数组")
+			return fmt.Errorf("model response missing issues array")
 		}
 		byID := map[int]Block{}
 		for _, b := range ch.Blocks {
@@ -244,7 +244,7 @@ Linked facts: %s
 		rebuildContentFromBlocks(ch)
 		return changes, nil
 	}
-	return nil, fmt.Errorf("校订结果两次破坏了段落对应关系")
+	return nil, fmt.Errorf("la IA no devolvió un resultado de corrección válido tras varios intentos (estructura de párrafos inconsistente)")
 }
 
 func valueOrEmpty[T any](p *[]T) []T {
@@ -265,7 +265,7 @@ func ApplyProofread(ctx context.Context, api *config.APIConfig, cfg *config.Conf
 		settingsSnapshot, _ := json.Marshal(settings)
 		postprocessSnapshot, _ := json.Marshal(pp)
 		before := state.Chapters[i]
-		logger.StepInfo(i+1, len(state.Chapters), fmt.Sprintf("正在校订第 %d 章...", before.Num))
+		logger.StepInfo(i+1, len(state.Chapters), fmt.Sprintf("Aplicando correcciones al capitulo #%d...", before.Num))
 		changes, err := applyProofreadChapter(ctx, api, cfg, state, settings, i, pp.AuthorRequirements, style, logger)
 		if err != nil {
 			_ = json.Unmarshal(stateSnapshot, state)
@@ -322,10 +322,10 @@ func UndoProofreadChapter(state *Progress, settings *ProjectSettings, pp *PostPr
 	}
 	ci := FindChapterIdx(state, chapterNum)
 	if ri < 0 || ci < 0 {
-		return fmt.Errorf("没有可撤销的校订")
+		return fmt.Errorf("no hay revisión de corrección para deshacer en este capítulo")
 	}
 	if ChapterRevision(state.Chapters[ci]) != pp.Revisions[ri].AfterRev {
-		return fmt.Errorf("正文已被再次修改")
+		return fmt.Errorf("el capítulo cambió desde la corrección; no se puede deshacer de forma segura")
 	}
 	byID := map[int]int{}
 	for i, b := range state.Chapters[ci].Blocks {
@@ -334,7 +334,7 @@ func UndoProofreadChapter(state *Progress, settings *ProjectSettings, pp *PostPr
 	for _, c := range pp.Revisions[ri].Changes {
 		i, ok := byID[c.BlockID]
 		if !ok {
-			return fmt.Errorf("段落结构已变化")
+			return fmt.Errorf("el bloque referenciado por la revisión ya no existe")
 		}
 		state.Chapters[ci].Blocks[i].Text = c.Before
 	}

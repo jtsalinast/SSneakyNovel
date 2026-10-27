@@ -13,16 +13,16 @@ export const projects = writable([]);
 
 // Language of the currently loaded novel project (immutable per project).
 // Drives AI prompt language, generated prose language and built-in skill filter.
-export const projectLanguage = writable('zh');
+export const projectLanguage = writable('en');
 
 export const contextPage = writable('config');
 export const selectedChapter = writable(-1);
 
 export const streamingContent = writable('');
 export const streamingChapterIdx = writable(-1);
-// 当前任务累计 token（提交/返回），由 SSE token_usage 更新
+// Cumulative tokens for the current task (sent/received), updated via SSE token_usage
 export const taskTokenUsage = writable(null);
-// 自动确认模式（每章生成完成后自动确认并继续下一章）
+// Auto-confirm mode: each chapter auto-confirms after generation, then the next begins
 export const autoConfirm = writable(false);
 
 export const chatSessions = writable(null);
@@ -34,11 +34,11 @@ export const wvFilter = writable('all');
 
 export const logEntries = writable([]);
 
-// 重试信息：记录最后一次失败的任务
+// Retry info: records the last failed task
 export const lastFailedTask = writable(null);
 
-// LLM 连接测试结果：{ ok, model?, error?, snapshot }，snapshot 为被测配置的 JSON。
-// 存全局 store 使其在切换页面后仍可见；表单内容与 snapshot 不一致时前端自动隐藏。
+// LLM connection test result: { ok, model?, error?, snapshot }; snapshot is the tested config JSON.
+// Stored in a global store so it survives page switches；when form content and snapshot disagree the UI hides it automatically。
 export const apiTestResult = writable(null);
 
 export function addLog(entry) {

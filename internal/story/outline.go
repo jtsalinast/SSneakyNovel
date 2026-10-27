@@ -18,7 +18,7 @@ type OutlineResponse struct {
 }
 
 // OutlineChapterCharacter is a machine-readable cast entry for one chapter outline.
-// Prefer this over scraping prose for「首次登场」; name must be the proper name only.
+// Prefer this over scraping prose for"times"; name must be the proper name only.
 type OutlineChapterCharacter struct {
 	Name            string `json:"name"`
 	FirstAppearance bool   `json:"first_appearance,omitempty"`
@@ -41,7 +41,7 @@ func normalizeOutlineCharacters(in []OutlineChapterCharacter) []OutlineChapterCh
 	out := make([]OutlineChapterCharacter, 0, len(in))
 	for _, c := range in {
 		name := strings.TrimSpace(StripNameMarks(c.Name))
-		name = strings.Trim(name, "：:、\"'「」『』")
+		name = strings.Trim(name, ": :, \"'\"\"\"\"")
 		if name == "" || seen[name] {
 			continue
 		}
@@ -72,7 +72,7 @@ func parseOutlineResponse(rawResp string) (*OutlineResponse, error) {
 	rawResp = cleanJSONResponse(rawResp)
 	var resp OutlineResponse
 	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return nil, fmt.Errorf("解析大纲JSON失败: %w\n原始响应: %s", err, rawResp)
+		return nil, fmt.Errorf("failed to parse outline JSON: %w\nraw response: %s", err, rawResp)
 	}
 	return &resp, nil
 }
@@ -100,13 +100,13 @@ func generateOutlineChaptersOnly(ctx context.Context, apiCfg *config.APIConfig, 
 
 		rawResp := llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
 		if rawResp == "" {
-			return OutlineResponse{}, fmt.Errorf("API 调用失败或被取消")
+			return OutlineResponse{}, fmt.Errorf("API call failed or was canceled")
 		}
 
 		var resp OutlineResponse
 		rawResp = cleanJSONResponse(rawResp)
 		if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-			return OutlineResponse{}, fmt.Errorf("解析大纲JSON失败: %w\n原始响应: %s", err, rawResp)
+			return OutlineResponse{}, fmt.Errorf("failed to parse outline JSON: %w\nraw response: %s", err, rawResp)
 		}
 		lastChapters = resp.Chapters
 		lastShort = validateOutlineChapterLengths(resp.Chapters, minLen)
@@ -153,7 +153,7 @@ func reviseOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Co
 
 		rawResp := llm.CallAPIWithRetry(ctx, apiCfg, systemPrompt, userPrompt)
 		if rawResp == "" {
-			return fmt.Errorf("API 调用失败或被取消")
+			return fmt.Errorf("API call failed or was canceled")
 		}
 		parsed, err := parseOutlineResponse(rawResp)
 		if err != nil {
@@ -211,23 +211,64 @@ func cleanJSONResponse(s string) string {
 	if strings.HasSuffix(s, "```") {
 		s = strings.TrimSuffix(s, "```")
 	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(extractJSONObject(s))
+}
+
+// extractJSONObject narrows a model response to its outermost JSON object so
+// prose preambles or trailing commentary around the payload ("Sure! {...}")
+// do not fail json.Unmarshal outright. If no balanced object exists (e.g. a
+// truncated response), the input is returned unchanged and the caller's parse
+// error surfaces as before.
+func extractJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return s
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return s
 }
 
 func ReviseOutlineAction(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, progressPath, cfgPath, feedback string, logger *sse.LogBroadcaster) error {
-	logger.StepInfo(1, 2, "正在根据意见修订大纲...")
+	logger.StepInfo(1, 2, "Checking the outline against the current story state...")
 	if err := EnsureNarrativeCheckpoints(ctx, apiCfg, cfg, state, progressPath, logger); err != nil {
 		return err
 	}
 
 	if err := reviseOutline(ctx, apiCfg, cfg, state, settings, feedback, progressPath, cfgPath, logger); err != nil {
-		return fmt.Errorf("修订大纲失败: %w", err)
+		return fmt.Errorf("revision del outline fallo: %w", err)
 	}
 
-	logger.StepInfo(2, 2, "正在保存修订后的大纲...")
+	logger.StepInfo(2, 2, "Saving the revised outline...")
 
 	if err := SaveProgress(progressPath, state); err != nil {
-		return fmt.Errorf("保存进度失败: %w", err)
+		return fmt.Errorf("guardar el progreso fallo: %w", err)
 	}
 
 	runOutlinePostProcessChecks(ctx, apiCfg, cfg, state, settings, progressPath, logger)
@@ -236,12 +277,17 @@ func ReviseOutlineAction(ctx context.Context, apiCfg *config.APIConfig, cfg *con
 	return nil
 }
 
-func ConfirmOutlineAction(state *Progress, progressPath string) error {
+func ConfirmOutlineAction(state *Progress, progressPath string, storyCfg config.StoryConfig) error {
 	if len(state.Chapters) == 0 {
-		return fmt.Errorf("大纲为空")
+		return fmt.Errorf("outline is empty")
 	}
 
 	state.Phase = "writing"
+	// Freeze the novel parameters at the moment writing begins. Without this
+	// snapshot, projects with a nil StoryConfigSnapshot would silently fall
+	// back to whatever cfg.Story holds at generation time (or defaults).
+	snapshot := storyCfg
+	state.StoryConfigSnapshot = &snapshot
 	return SaveProgress(progressPath, state)
 }
 
@@ -265,10 +311,10 @@ func EditChapterOutline(state *Progress, chapterNum int, title, outline string, 
 		}
 	}
 	if idx == -1 {
-		return fmt.Errorf("章节 %d 不存在", chapterNum)
+		return fmt.Errorf("el capítulo %d no existe", chapterNum)
 	}
 	if !outlineEditable(state.Chapters[idx].Status) {
-		return fmt.Errorf("只能编辑待定/写作中/审核中章节的大纲（已确认章节不可改）")
+		return fmt.Errorf("only pending/writing/in-review chapters can be outlined (accepted chapters cannot)")
 	}
 	state.Chapters[idx].Title = title
 	state.Chapters[idx].Outline = outline

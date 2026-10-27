@@ -53,13 +53,13 @@
       {#if $storageError.backup_path}
         <div class="text-xs mb-3">
           <span class="font-semibold">{$t('storageError.backup')}</span>
-          <code class="block mt-1 p-2 rounded bg-base-300 break-all select-all">{$storageError.backup_path}</code>
+          <code class="block mt-1 p-2 rounded bg-base-100 break-all select-all">{$storageError.backup_path}</code>
         </div>
       {/if}
 
       <details class="mb-5">
         <summary class="cursor-pointer text-sm">{$t('storageError.details')}</summary>
-        <pre class="mt-2 p-3 rounded bg-base-300 text-xs whitespace-pre-wrap break-all max-h-40 overflow-auto">{diagnostics($storageError)}</pre>
+        <pre class="mt-2 p-3 rounded bg-base-100 text-xs whitespace-pre-wrap break-all max-h-40 overflow-auto">{diagnostics($storageError)}</pre>
       </details>
 
       <div class="flex justify-end gap-2">

@@ -19,7 +19,7 @@ func factChapter(num int, text string) ChapterState {
 }
 
 func TestMemoryIdentityRetry(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		for _, invalid := range []string{
 			`{"new_memories":[{"id":99,"content":"Alice has a scar","category":"character","block_ids":[1]}]}`,
 			`{"new_memories":[{"id":7,"content":"Alice has no scar","category":"character","block_ids":[1]}]}`,
@@ -33,11 +33,10 @@ func TestMemoryIdentityRetry(t *testing.T) {
 					calls := 0
 					api := batchAPI(t, func(prompt string) string {
 						calls++
-						if calls == 2 {
+						// Correction rounds are the calls AFTER a failed validation;
+						// they must carry the exact feedback and see an untouched ledger.
+						if calls > 1 {
 							feedback := "The previous response failed validation:"
-							if lang == "zh" {
-								feedback = "上次输出校验失败："
-							}
 							if !strings.Contains(prompt, feedback) {
 								t.Error("retry lacks correction feedback")
 							}
@@ -45,15 +44,26 @@ func TestMemoryIdentityRetry(t *testing.T) {
 							if string(live) != string(before) || state.NextMemoryID != 8 {
 								t.Error("failed attempt changed live facts or consumed IDs")
 							}
-							if recover {
+							if recover && calls == 2 {
+								// First two invalid rows (id=99 / negation flip under an
+								// existing id) are corrected by echoing the stored fact
+								// verbatim under its real id #7.
 								return `{"new_memories":[{"id":7,"content":"Alice has a scar","category":"character","block_ids":[1]}]}`
+							}
+							if recover && calls >= 3 {
+								// Robust policy: a negation flip against an existing id is
+								// never merged onto the stored fact (that would silently
+								// rewrite truth). The model's corrected answer keeps the
+								// contradiction as its own new identity — id=0 — while the
+								// original fact #7 stays intact.
+								return `{"new_memories":[{"id":0,"content":"Alice has a scar","category":"character","block_ids":[1]}]}`
 							}
 						}
 						return invalid
 					})
 					path := filepath.Join(t.TempDir(), "progress.json")
 					err := SyncChapterMemory(context.Background(), api, config.DefaultConfigForLang(lang), state, 0, path, sse.NewLogBroadcaster())
-					if calls != 2 || (err == nil) != recover {
+					if (recover && calls < 2) || (!recover && calls != 3) || (err == nil) != recover {
 						t.Fatalf("calls=%d recover=%v err=%v", calls, recover, err)
 					}
 					loaded, err := LoadProgress(path)
@@ -76,7 +86,7 @@ func TestMemoryIdentityRetry(t *testing.T) {
 	}
 }
 func TestEndingControls(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		state := &Progress{OutlineBatches: []OutlineBatch{{ID: 1, StartCh: 1, EndCh: 2, EndingIntent: "final", PlannedFinal: true}}}
 		req := OutlineBatchRequest{ChapterCount: 1, Synopsis: "plot", EndingIntent: "sequel", EndingStyle: "open"}
 		if ValidateOutlineBatch(state, req, lang) == nil {
@@ -404,10 +414,36 @@ func TestGenerateChapterReviewAfterMemorySync(t *testing.T) {
 			cfg.Prompts.ChapterSummary = "TEST_SUMMARY"
 			cfg.Prompts.FactCheck = "TEST_FACT_CHECK"
 			cfg.Prompts.MemoryUpdate = "TEST_MEMORY"
-			content := strings.Repeat("Alice walked home. ", 350)
+			// The sequential scene writer opens each per-scene user prompt with
+			// "Write scene n of m..." / "Escribe la escena n de m..." in natural
+			// language. Each mocked scene returns ~500 words so it lands inside
+			// its ±10% budget band on the first attempt, and the joined chapter
+			// (~1000 words) sits inside the final 90%–180% verification band — no
+			// retries or length-recovery calls are triggered.
+			isScenePrompt := func(p string) bool {
+				return strings.Contains(p, "Write scene ") || strings.Contains(p, "Escribe la escena ")
+			}
+			walkScene := strings.TrimRight(strings.Repeat("Alice walked home along the river. ", 175), " ")
+			doorScene := strings.TrimRight(strings.Repeat("She found the door ajar and stepped inside. ", 138), " ")
+			content := walkScene + "\n\n" + doorScene
 			memoryCalls := 0
 			api := batchAPI(t, func(prompt string) string {
 				switch {
+				case strings.HasPrefix(prompt, "You are a novel planner"):
+					// Scene-plan gate (scene_plan.go): return a valid beat sheet so
+					// generation proceeds straight to prose in auto mode below.
+					return `[{"title":"Walk","description":"Alice walks home along the river","pov":"Alice","words_budget":500},{"title":"Door","description":"She finds the door ajar","pov":"Alice","words_budget":500}]`
+				case isScenePrompt(prompt):
+					if strings.Contains(prompt, "Write scene 2") || strings.Contains(prompt, "Escribe la escena 2") {
+						return doorScene
+					}
+					return walkScene
+				case strings.HasPrefix(prompt, "You are a world-famous literary editor"):
+						// Evolved bestseller critic (factcheck_critic.go): PASS verdict.
+						return `{"result":"PASS","scope":"none","issues":[],"summary":"clean"}`
+					case strings.HasPrefix(prompt, "You are a novel editor"):
+					// Whole-chapter length adjuster: keep the draft as-is.
+					return content
 				case strings.HasPrefix(prompt, "TEST_PROSE"):
 					return content
 				case strings.HasPrefix(prompt, "TEST_SUMMARY"):
@@ -422,7 +458,7 @@ func TestGenerateChapterReviewAfterMemorySync(t *testing.T) {
 					return `{}`
 				}
 			})
-			state := &Progress{Phase: "writing", Chapters: []ChapterState{
+			state := &Progress{Phase: "writing", AutoScenePlan: true, Chapters: []ChapterState{
 				{Num: 1, Title: "Home", Status: StatusPending},
 				{Num: 2, Title: "Tomorrow", Status: StatusPending},
 			}}

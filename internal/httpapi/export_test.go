@@ -10,15 +10,15 @@ import (
 
 func TestBookExportUsesNovelTitleAndMarkdownHeadings(t *testing.T) {
 	h := &Handlers{
-		cfg: &config.Config{Language: "zh", Story: config.StoryConfig{Title: "小说标题"}},
+		cfg: &config.Config{Language: "en", Story: config.StoryConfig{Title: "smallsaymetric"}},
 		state: &story.Progress{
-			Title:    "进度标题",
-			Chapters: []story.ChapterState{{Num: 3, Title: "新的开始", Content: "正文"}},
+			Title:    "advancedegreemetric",
+			Chapters: []story.ChapterState{{Num: 3, Title: "new open", Content: "body text"}},
 		},
 	}
 	res := httptest.NewRecorder()
 	h.GetBookExport(res, httptest.NewRequest("GET", "/api/export/txt", nil))
-	want := "# 小说标题\n\n## 第 3 章 新的开始\n\n正文"
+	want := "# smallsaymetric\n\n## Chapter 3: new open\n\nbody text"
 	if got := res.Body.String(); got != want {
 		t.Fatalf("export mismatch:\n got %q\nwant %q", got, want)
 	}
@@ -29,7 +29,7 @@ func TestOutlineExportIncludesEveryChapter(t *testing.T) {
 	res := httptest.NewRecorder()
 	h.GetOutlineExport(res, httptest.NewRequest("GET", "/api/export/outline", nil))
 	got := res.Body.String()
-	if !strings.Contains(got, "## 第 1 章 One\n\nFirst") || !strings.Contains(got, "## 第 2 章 Two\n\nSecond") {
+	if !strings.Contains(got, "## Chapter 1: One\n\nFirst") || !strings.Contains(got, "## Chapter 2: Two\n\nSecond") {
 		t.Fatal(got)
 	}
 }

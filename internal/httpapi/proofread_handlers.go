@@ -276,14 +276,29 @@ func (h *Handlers) DeleteProofreadBlock(w http.ResponseWriter, r *http.Request) 
 }
 func (h *Handlers) PostProofreadBlock(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AfterID int    `json:"after_id"`
-		Text    string `json:"text"`
+		AfterID  int    `json:"after_id"`
+		BeforeID int    `json:"before_id"`
+		Text     string `json:"text"`
 	}
 	if json.NewDecoder(r.Body).Decode(&body) != nil || strings.TrimSpace(body.Text) == "" {
 		h.writeErrorReq(w, r, 400, "block_text_required")
 		return
 	}
 	h.proofreadBlockEdit(w, r, func(ch *story.ChapterState) error {
+		// before_id anchors the new block right BEFORE that block (mirrors
+		// PostChapterBlockInsert / the "Add subscene before" chip action).
+		if body.BeforeID != 0 {
+			i := story.FindBlockIdx(ch, body.BeforeID)
+			if i < 0 {
+				return story.ErrBlockNotFound
+			}
+			anchor := 0 // i==0 -> insert at the very beginning
+			if i > 0 {
+				anchor = ch.Blocks[i-1].ID
+			}
+			_, err := story.InsertBlockAfter(ch, anchor, body.Text)
+			return err
+		}
 		_, err := story.InsertBlockAfter(ch, body.AfterID, body.Text)
 		return err
 	})
@@ -303,19 +318,19 @@ func (h *Handlers) GetProofreadExport(w http.ResponseWriter, r *http.Request) {
 	if english {
 		fmt.Fprintf(w, "# %s — Final Proofreading Report\n\n", title)
 	} else {
-		fmt.Fprintf(w, "# %s — 完稿校订报告\n\n", title)
+		fmt.Fprintf(w, "# %s — tell\n\n", title)
 	}
 	for _, issue := range h.postprocess.Issues {
 		if english {
 			fmt.Fprintf(w, "## [%s/%s/%s] %s\n\n%s\n\nSuggestion: %s\n\n", issue.Status, issue.Severity, issue.Category, issue.Title, issue.Detail, issue.Suggestion)
 		} else {
-			fmt.Fprintf(w, "## [%s/%s/%s] %s\n\n%s\n\n建议：%s\n\n", issue.Status, issue.Severity, issue.Category, issue.Title, issue.Detail, issue.Suggestion)
+			fmt.Fprintf(w, "## [%s/%s/%s] %s\n\n%s\n\n: %s\n\n", issue.Status, issue.Severity, issue.Category, issue.Title, issue.Detail, issue.Suggestion)
 		}
 		for _, a := range issue.Anchors {
 			if english {
 				fmt.Fprintf(w, "- Chapter %d · block %d: %s\n", a.ChapterNum, a.BlockID, a.Excerpt)
 			} else {
-				fmt.Fprintf(w, "- 第 %d 章 · 段落 %d：%s\n", a.ChapterNum, a.BlockID, a.Excerpt)
+				fmt.Fprintf(w, "- # %d chapter · paragraphpassage %d: %s\n", a.ChapterNum, a.BlockID, a.Excerpt)
 			}
 		}
 		fmt.Fprintln(w)

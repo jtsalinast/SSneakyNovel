@@ -30,35 +30,35 @@ type storyFieldSpec struct {
 func trimmed(s string) string { return strings.TrimSpace(s) }
 
 var storyFieldSpecs = []storyFieldSpec{
-	{"type", "Genre", "故事类型", func(s config.StoryConfig) string { return s.Type }, func(c *config.StoryConfig, v string) { c.Type = v }, nil, nil},
-	{"title", "Title", "小说标题", func(s config.StoryConfig) string { return s.Title }, func(c *config.StoryConfig, v string) { c.Title = v }, nil, nil},
-	{"subgenre", "Subgenre", "子类型", func(s config.StoryConfig) string { return s.Subgenre }, func(c *config.StoryConfig, v string) { c.Subgenre = v }, nil, nil},
-	{"theme", "Theme", "主题", func(s config.StoryConfig) string { return s.Theme }, func(c *config.StoryConfig, v string) { c.Theme = v }, nil, nil},
-	{"tone", "Tone", "基调", func(s config.StoryConfig) string { return s.Tone }, func(c *config.StoryConfig, v string) { c.Tone = v }, nil, nil},
-	{"author", "Author", "作者名", func(s config.StoryConfig) string { return s.Author }, func(c *config.StoryConfig, v string) { c.Author = v }, nil, nil},
-	{"story_length", "Story length", "篇幅", func(s config.StoryConfig) string { return s.StoryLength }, func(c *config.StoryConfig, v string) { c.StoryLength = v }, nil, nil},
-	{"structure", "Story structure", "故事结构", func(s config.StoryConfig) string { return s.Structure }, func(c *config.StoryConfig, v string) { c.Structure = v }, nil, nil},
-	{"motif", "Literary motif", "文学母题", func(s config.StoryConfig) string { return s.Motif }, func(c *config.StoryConfig, v string) { c.Motif = v }, nil, nil},
-	{"story_idea", "Story idea (core premise; NOT a chapter/outline synopsis)", "故事构想", func(s config.StoryConfig) string { return s.StoryIdea }, func(c *config.StoryConfig, v string) { c.StoryIdea = v }, nil, nil},
-	{"conflict_scale", "Conflict scale", "冲突规模", func(s config.StoryConfig) string { return s.ConflictScale }, func(c *config.StoryConfig, v string) { c.ConflictScale = v }, nil, nil},
-	{"conflict_other", "Custom conflict scale", "自定义冲突规模", func(s config.StoryConfig) string { return s.ConflictOther }, func(c *config.StoryConfig, v string) { c.ConflictOther = v }, nil, nil},
-	{"specific_settings", "Specific settings (one per line)", "特定设定（每行一条）", func(s config.StoryConfig) string { return s.SpecificSettings }, func(c *config.StoryConfig, v string) { c.SpecificSettings = v }, nil, nil},
-	{"protagonist_type", "Protagonist type", "主角类型", func(s config.StoryConfig) string { return s.ProtagonistType }, func(c *config.StoryConfig, v string) { c.ProtagonistType = v }, nil, nil},
-	{"protagonist_other", "Custom protagonist type", "自定义主角类型", func(s config.StoryConfig) string { return s.ProtagonistOther }, func(c *config.StoryConfig, v string) { c.ProtagonistOther = v }, nil, nil},
-	{"target_audience", "Target audience", "目标读者", func(s config.StoryConfig) string { return s.TargetAudience }, func(c *config.StoryConfig, v string) { c.TargetAudience = v }, nil, nil},
-	{"audience_profile", "Audience profile", "目标读者画像", func(s config.StoryConfig) string { return s.AudienceProfile }, func(c *config.StoryConfig, v string) { c.AudienceProfile = v }, nil, nil},
-	{"inspirational_pieces", "Inspirational pieces (reference works for style/atmosphere)", "灵感作品", func(s config.StoryConfig) string { return s.InspirationalPieces }, func(c *config.StoryConfig, v string) { c.InspirationalPieces = v }, nil, nil},
-	{"output_language", "Story output language (en/es; empty = follow project language)", "生成内容语言（en/es，空=跟随项目语言）", func(s config.StoryConfig) string { return s.OutputLanguage }, func(c *config.StoryConfig, v string) { c.OutputLanguage = config.NormalizeOutputLanguage(v) }, nil, nil},
-	{"romance_level", "Romance level", "恋爱线比重", func(s config.StoryConfig) string { return s.RomanceLevel }, func(c *config.StoryConfig, v string) { c.RomanceLevel = v }, nil, nil},
-	{"sexual_content", "Sexual content level", "性描写尺度", func(s config.StoryConfig) string { return s.SexualContent }, func(c *config.StoryConfig, v string) { c.SexualContent = v }, nil, nil},
-	{"gore_level", "Gore level", "暴力血腥尺度", func(s config.StoryConfig) string { return s.GoreLevel }, func(c *config.StoryConfig, v string) { c.GoreLevel = v }, nil, nil},
-	{"world_darkness", "World darkness", "世界黑暗度", func(s config.StoryConfig) string { return s.WorldDarkness }, func(c *config.StoryConfig, v string) { c.WorldDarkness = v }, nil, nil},
-	{"gender_bias", "Gender bias", "人物性别倾向", func(s config.StoryConfig) string { return s.GenderBias }, func(c *config.StoryConfig, v string) { c.GenderBias = v }, nil, nil},
-	{"locations_enabled", "Locations enabled", "启用地点实体", func(s config.StoryConfig) string { return strconv.FormatBool(s.LocationsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.LocationsEnabled = v }, nil},
-	{"character_arcs_enabled", "Character arcs enabled", "启用角色弧光", func(s config.StoryConfig) string { return strconv.FormatBool(s.CharacterArcsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.CharacterArcsEnabled = v }, nil},
-	{"target_words_per_chapter", "Target words per chapter", "每章目标字数", func(s config.StoryConfig) string { return strconv.Itoa(s.TargetWordsPerChapter) }, nil, nil, func(c *config.StoryConfig, v int) { c.TargetWordsPerChapter = v }},
-	{"writing_style", "Writing style", "写作风格", func(s config.StoryConfig) string { return s.WritingStyle }, func(c *config.StoryConfig, v string) { c.WritingStyle = v }, nil, nil},
-	{"writing_pov", "Narration POV", "叙述视角", func(s config.StoryConfig) string { return s.WritingPOV }, func(c *config.StoryConfig, v string) { c.WritingPOV = v }, nil, nil},
+	{"type", "Genre", "class", func(s config.StoryConfig) string { return s.Type }, func(c *config.StoryConfig, v string) { c.Type = v }, nil, nil},
+	{"title", "Title", "smallsaymetric", func(s config.StoryConfig) string { return s.Title }, func(c *config.StoryConfig, v string) { c.Title = v }, nil, nil},
+	{"subgenre", "Subgenre", "class", func(s config.StoryConfig) string { return s.Subgenre }, func(c *config.StoryConfig, v string) { c.Subgenre = v }, nil, nil},
+	{"theme", "Theme", "", func(s config.StoryConfig) string { return s.Theme }, func(c *config.StoryConfig, v string) { c.Theme = v }, nil, nil},
+	{"tone", "Tone", "", func(s config.StoryConfig) string { return s.Tone }, func(c *config.StoryConfig, v string) { c.Tone = v }, nil, nil},
+	{"author", "Author", "make", func(s config.StoryConfig) string { return s.Author }, func(c *config.StoryConfig, v string) { c.Author = v }, nil, nil},
+	{"story_length", "Story length", "piece", func(s config.StoryConfig) string { return s.StoryLength }, func(c *config.StoryConfig, v string) { c.StoryLength = v }, nil, nil},
+	{"structure", "Story structure", "", func(s config.StoryConfig) string { return s.Structure }, func(c *config.StoryConfig, v string) { c.Structure = v }, nil, nil},
+	{"motif", "Literary motif", "learn", func(s config.StoryConfig) string { return s.Motif }, func(c *config.StoryConfig, v string) { c.Motif = v }, nil, nil},
+	{"story_idea", "Story idea (core premise; NOT a chapter/outline synopsis)", "think", func(s config.StoryConfig) string { return s.StoryIdea }, func(c *config.StoryConfig, v string) { c.StoryIdea = v }, nil, nil},
+	{"conflict_scale", "Conflict scale", "", func(s config.StoryConfig) string { return s.ConflictScale }, func(c *config.StoryConfig, v string) { c.ConflictScale = v }, nil, nil},
+	{"conflict_other", "Custom conflict scale", "", func(s config.StoryConfig) string { return s.ConflictOther }, func(c *config.StoryConfig, v string) { c.ConflictOther = v }, nil, nil},
+	{"specific_settings", "Specific settings (one per line)", "(eachtravelonestrip)", func(s config.StoryConfig) string { return s.SpecificSettings }, func(c *config.StoryConfig, v string) { c.SpecificSettings = v }, nil, nil},
+	{"protagonist_type", "Protagonist type", "protagonist type", func(s config.StoryConfig) string { return s.ProtagonistType }, func(c *config.StoryConfig, v string) { c.ProtagonistType = v }, nil, nil},
+	{"protagonist_other", "Custom protagonist type", "protagonist type", func(s config.StoryConfig) string { return s.ProtagonistOther }, func(c *config.StoryConfig, v string) { c.ProtagonistOther = v }, nil, nil},
+	{"target_audience", "Target audience", "metricread", func(s config.StoryConfig) string { return s.TargetAudience }, func(c *config.StoryConfig, v string) { c.TargetAudience = v }, nil, nil},
+	{"audience_profile", "Audience profile", "metricreaddraw", func(s config.StoryConfig) string { return s.AudienceProfile }, func(c *config.StoryConfig, v string) { c.AudienceProfile = v }, nil, nil},
+	{"inspirational_pieces", "Inspirational pieces (reference works for style/atmosphere)", "spiritualfeelmake", func(s config.StoryConfig) string { return s.InspirationalPieces }, func(c *config.StoryConfig, v string) { c.InspirationalPieces = v }, nil, nil},
+	{"output_language", "Story output language (en/es; empty = follow project language)", "lifeinside(en/es, empty=along withitem)", func(s config.StoryConfig) string { return s.OutputLanguage }, func(c *config.StoryConfig, v string) { c.OutputLanguage = config.NormalizeOutputLanguage(v) }, nil, nil},
+	{"romance_level", "Romance level", "lovethreadratioheavy", func(s config.StoryConfig) string { return s.RomanceLevel }, func(c *config.StoryConfig, v string) { c.RomanceLevel = v }, nil, nil},
+	{"sexual_content", "Sexual content level", "writedegree", func(s config.StoryConfig) string { return s.SexualContent }, func(c *config.StoryConfig, v string) { c.SexualContent = v }, nil, nil},
+	{"gore_level", "Gore level", "grado de sangre/violencia", func(s config.StoryConfig) string { return s.GoreLevel }, func(c *config.StoryConfig, v string) { c.GoreLevel = v }, nil, nil},
+	{"world_darkness", "World darkness", "grado de oscuridad del mundo", func(s config.StoryConfig) string { return s.WorldDarkness }, func(c *config.StoryConfig, v string) { c.WorldDarkness = v }, nil, nil},
+	{"gender_bias", "Gender bias", "sesgo de género", func(s config.StoryConfig) string { return s.GenderBias }, func(c *config.StoryConfig, v string) { c.GenderBias = v }, nil, nil},
+	{"locations_enabled", "Locations enabled", "habilitar lugares", func(s config.StoryConfig) string { return strconv.FormatBool(s.LocationsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.LocationsEnabled = v }, nil},
+	{"character_arcs_enabled", "Character arcs enabled", "habilitar arcos de personaje", func(s config.StoryConfig) string { return strconv.FormatBool(s.CharacterArcsEnabled) }, nil, func(c *config.StoryConfig, v bool) { c.CharacterArcsEnabled = v }, nil},
+	{"target_words_per_chapter", "Target words per chapter", "palabras objetivo por capítulo", func(s config.StoryConfig) string { return strconv.Itoa(s.TargetWordsPerChapter) }, nil, nil, func(c *config.StoryConfig, v int) { c.TargetWordsPerChapter = v }},
+	{"writing_style", "Writing style", "writing style", func(s config.StoryConfig) string { return s.WritingStyle }, func(c *config.StoryConfig, v string) { c.WritingStyle = v }, nil, nil},
+	{"writing_pov", "Narration POV", "POV", func(s config.StoryConfig) string { return s.WritingPOV }, func(c *config.StoryConfig, v string) { c.WritingPOV = v }, nil, nil},
 }
 
 var storyFieldSpecByKey = func() map[string]storyFieldSpec {
@@ -356,7 +356,7 @@ func applyOutlineMetaWithGuard(cfg *config.Config, state *Progress, resp Outline
 	}
 
 	if err := config.SaveConfig(cfgPath, cfg); err != nil {
-		return fmt.Errorf("保存配置失败: %w", err)
+		return fmt.Errorf("insuredepositplace: %w", err)
 	}
 	return appendPendingChanges(pendingPath, conflicts, logger)
 }
@@ -367,7 +367,7 @@ func FormatConfigConflictMessage(conflicts []ConfigFieldChange, lang string) str
 	if en {
 		sb.WriteString("Cannot overwrite user-filled config fields without explicit consent. Conflicts:\n")
 	} else {
-		sb.WriteString("无法覆盖用户已填写的配置字段，需先征得用户同意。冲突字段：\n")
+		sb.WriteString("No se pueden sobrescribir campos de configuración rellenados por el usuario sin su consentimiento explícito. Conflictos:\n")
 	}
 	for _, c := range conflicts {
 		sb.WriteString(fmt.Sprintf("- %s (%s): current=%q proposed=%q\n", c.Field, StoryFieldLabel(c.Field, lang), c.Current, c.Proposed))
@@ -375,7 +375,7 @@ func FormatConfigConflictMessage(conflicts []ConfigFieldChange, lang string) str
 	if en {
 		sb.WriteString("Explain the changes to the user and wait for explicit approval, then retry update_project_config with confirm_overwrite=true.")
 	} else {
-		sb.WriteString("请向用户说明变更理由并等待明确同意，然后带 confirm_overwrite=true 重试 update_project_config。")
+		sb.WriteString("pleasedirectionusesaybrightmoreandetcwaitbrightintent, laterbelt confirm_overwrite=true heavy update_project_config. ")
 	}
 	return sb.String()
 }

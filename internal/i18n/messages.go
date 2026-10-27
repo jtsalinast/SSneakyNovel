@@ -1,837 +1,1019 @@
 package i18n
 
-// messageCatalog holds localized UI/log/agent status strings (key → zh/en template).
+// messageCatalog holds localized UI/log/agent status strings (key → English template).
 // Templates use fmt.Sprintf verbs (%s, %d, %v). Frontend mirrors keys with {0},{1},… placeholders.
 var messageCatalog = map[string]map[string]string{
-	"log.history_degraded":           {LangZH: "历史摘要暂用本地截断内容；下次使用时将重试生成。", LangEN: "History summaries are using locally shortened text; generation will be retried on next use."},
-	"log.section_generating":         {LangZH: "正在根据小说参数与故事构想生成%s...", LangEN: "Generating %s from the novel parameters and story idea..."},
-	"log.section_generate_failed":    {LangZH: "生成失败: %v", LangEN: "Generation failed: %v"},
-	"log.section_generate_done":      {LangZH: "%s 生成完成！", LangEN: "%s generated!"},
-	"log.preplan_generating":         {LangZH: "正在根据故事结构生成全书预规划（Pre-planning）...", LangEN: "Generating book pre-planning from the story structure..."},
-	"log.preplan_generate_failed":    {LangZH: "预规划生成失败: %v", LangEN: "Pre-planning generation failed: %v"},
-	"log.preplan_generate_done":      {LangZH: "预规划生成完成！", LangEN: "Pre-planning generated!"},
-	"log.section_generate_cancelled": {LangZH: "生成已取消", LangEN: "Generation cancelled"},
-	"log.knowledge_failed":           {LangZH: "事实或设定同步未完成，可在写作页重试：%v", LangEN: "Fact or setting sync incomplete; retry from Writing: %v"},
-	"log.skills_activated":           {LangZH: "本次流程已激活 Skill：%s", LangEN: "Skills activated for this task: %s"},
-	"log.skill_validation_done":      {LangZH: "Skill「%s」AI 校验完成", LangEN: "AI validation completed for skill \"%s\""},
-	"log.skill_validation_failed":    {LangZH: "Skill AI 校验失败：%s", LangEN: "Skill AI validation failed: %s"},
-	"log.skill_optimization_done":    {LangZH: "Skill 优化副本「%s」已生成并复检", LangEN: "Optimized skill copy \"%s\" was created and revalidated"},
-	"log.skill_optimization_failed":  {LangZH: "Skill AI 优化失败：%s", LangEN: "Skill AI optimization failed: %s"},
+	"log.history_degraded":           {LangEN: "History summaries are using locally shortened text; generation will be retried on next use."},
+	"log.section_generating":         {LangEN: "Generating %s from the novel parameters and story idea..."},
+	"log.section_generate_failed":    {LangEN: "Generation failed: %v"},
+	"log.section_generate_done":      {LangEN: "%s generated!"},
+	"log.preplan_generating":         {LangEN: "Generating book pre-planning from the story structure..."},
+	"log.preplan_generate_failed":    {LangEN: "Pre-planning generation failed: %v"},
+	"log.preplan_generate_done":      {LangEN: "Pre-planning generated!"},
+	"log.section_generate_cancelled": {LangEN: "Generation cancelled"},
+	"log.knowledge_failed":           {LangEN: "Fact or setting sync incomplete; retry from Writing: %v"},
+	"log.skills_activated":           {LangEN: "Skills activated for this task: %s"},
+	"log.skill_validation_done":      {LangEN: "AI validation completed for skill \"%s\""},
+	"log.skill_validation_failed":    {LangEN: "Skill AI validation failed: %s"},
+	"log.skill_optimization_done":    {LangEN: "Optimized skill copy \"%s\" was created and revalidated"},
+	"log.skill_optimization_failed":  {LangEN: "Skill AI optimization failed: %s"},
 	// ---- Task / handler logs ----
 	"log.autoconfirm_on": {
-		LangZH: "已开启自动确认模式：每章生成完成后将自动确认并继续生成下一章",
-		LangEN: "Auto-confirm enabled: each chapter is automatically confirmed once generation completes, then the next chapter begins.",
-	},
+
+		LangEN: "Auto-confirm enabled: each chapter is automatically confirmed once generation completes, then the next chapter begins."},
 	"log.autoconfirm_off": {
-		LangZH: "已关闭自动确认模式",
-		LangEN: "Auto-confirm disabled",
-	},
+
+		LangEN: "Auto-confirm disabled"},
 	"log.outline_generating": {
-		LangZH: "正在生成小说大纲...",
-		LangEN: "Generating novel outline...",
-	},
+
+		LangEN: "Generating novel outline..."},
 	"log.outline_confirmed": {
-		LangZH: "大纲已确认，进入写作阶段。",
-		LangEN: "Outline confirmed. Entering writing phase.",
-	},
+
+		LangEN: "Outline confirmed. Entering writing phase."},
 	"log.outline_revising": {
-		LangZH: "正在根据意见修订大纲...",
-		LangEN: "Revising outline based on feedback...",
-	},
+
+		LangEN: "Revising outline based on feedback..."},
 	"log.outline_revise_cancelled": {
-		LangZH: "大纲修订已取消",
-		LangEN: "Outline revision cancelled",
-	},
+
+		LangEN: "Outline revision cancelled"},
 	"log.outline_revise_failed": {
-		LangZH: "大纲修订失败: %s",
-		LangEN: "Outline revision failed: %s",
-	},
+
+		LangEN: "Outline revision failed: %s"},
 	"log.outline_revised": {
-		LangZH: "大纲已修订。",
-		LangEN: "Outline revised.",
-	},
+
+		LangEN: "Outline revised."},
+	"log.outline_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over the full outline..."},
+	"log.outline_analyze_unchanged": {
+
+		LangEN: "Outline unchanged since the last editorial pass — scores reused, no new analysis needed"},
+	"log.outline_analyze_cancelled": {
+
+		LangEN: "Outline analysis cancelled"},
+	"log.outline_analyze_failed": {
+
+		LangEN: "Outline analysis failed: %s"},
+	"log.outline_analyze_done": {
+
+		LangEN: "Outline analysis complete — %d editorial suggestions"},
+	"log.outline_analyze_proposing": {
+
+		LangEN: "Editor is drafting concrete outline replacements for this point..."},
+	"log.outline_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d chapter replacement(s) drafted"},
+	"log.outline_analysis_applied": {
+
+		LangEN: "Editorial suggestion applied to %d chapter(s)"},
+	"log.outline_analysis_cleared": {
+
+		LangEN: "Outline analysis cleared"},
+	// ---- Scene-plan bestseller critique (scene_plan_analysis.go) ----
+	"log.sceneplan_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over the pending scene plans..."},
+	"log.sceneplan_analyze_unchanged": {
+
+		LangEN: "Scene plans unchanged since the last editorial pass — scores reused, no new analysis needed"},
+	"log.sceneplan_analyze_cancelled": {
+
+		LangEN: "Scene-plan analysis cancelled"},
+	"log.sceneplan_analyze_failed": {
+
+		LangEN: "Scene-plan analysis failed: %s"},
+	// Per-chapter re-analysis outcomes (PostChapterScenePlanAnalyze). The
+	// empty/accepted cases used to surface only as the generic failure log
+	// above with a raw error string; now they have dedicated messages.
+	"log.sceneplan_analyze_empty_chapter": {
+
+		LangEN: "Chapter %d has no beat sheet to analyze — generate its scene plan first"},
+	"log.sceneplan_analyze_chapter_accepted": {
+
+		LangEN: "Chapter %d is already accepted — reopen it or regenerate its scene plan before re-analyzing"},
+	"log.sceneplan_analyze_done_ch": {
+
+		LangEN: "Scene-plan analysis complete for chapter %d"},
+	// HTTP 400 reasons for POST /api/chapters/{n}/scene-plan/analyze.
+	"scene_plan_empty_chapter": {
+
+		LangEN: "Chapter %d has no beat sheet to analyze — generate its scene plan first"},
+	"scene_plan_chapter_accepted": {
+
+		LangEN: "Chapter %d is already accepted — reopen it or regenerate its scene plan before re-analyzing"},
+	"log.sceneplan_analyze_done": {
+
+		LangEN: "Scene-plan analysis complete — %d editorial suggestions"},
+	"log.sceneplan_analyze_proposing": {
+
+		LangEN: "Editor is drafting concrete scene replacements for this point..."},
+	"log.sceneplan_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d scene replacement(s) drafted"},
+	"log.sceneplan_analysis_applied": {
+
+		LangEN: "Editorial suggestion applied to %d scene(s)"},
+	"log.sceneplan_analysis_cleared": {
+
+		LangEN: "Scene-plan analysis cleared"},
+	// ---- Act bestseller critique (drafted_analysis.go, act pass) ----
+	"log.act_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over ACT %d..."},
+	"log.act_analyze_unchanged": {
+
+		LangEN: "Act %d unchanged since the last editorial pass — scores reused, no new analysis needed"},
+	"log.act_analyze_cancelled": {
+
+		LangEN: "Act analysis cancelled"},
+	"log.act_analyze_failed": {
+
+		LangEN: "Act analysis failed: %v"},
+	"log.act_analyze_done": {
+
+		LangEN: "Act analysis complete — %d editorial suggestions"},
+	"log.act_analyze_proposing": {
+
+		LangEN: "Editor is drafting small subscene interventions for this act point..."},
+	"log.act_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d subscene intervention(s) drafted"},
+	"log.act_analysis_cleared": {
+
+		LangEN: "Act analysis cleared"},
+	// ---- Chapter bestseller critique (drafted_analysis.go, chapter pass) ----
+	"log.chapter_analyze_running": {
+
+		LangEN: "Running bestseller-editor analysis over chapter %d..."},
+	"log.chapter_analyze_unchanged": {
+
+		LangEN: "Chapter %d unchanged since the last editorial pass — scores reused, no new analysis needed"},
+	"log.chapter_analyze_cancelled": {
+
+		LangEN: "Chapter analysis cancelled"},
+	"log.chapter_analyze_bad_json_retry": {
+
+		LangEN: "Chapter %d: editor reply was not valid JSON (attempt %d) — asking the model again"},
+	"log.chapter_analyze_failed": {
+
+		LangEN: "Chapter analysis failed: %v"},
+	"log.chapter_analyze_done": {
+
+		LangEN: "Chapter analysis complete — %d editorial suggestions"},
+	"log.chapter_analyze_no_suggestions": {
+
+		LangEN: "Chapter %d scored %d/100 but the editor sent no actionable suggestions — re-run the critique; if it repeats, the model is answering with grades only"},
+	"log.chapter_analyze_proposing": {
+
+		LangEN: "Editor is drafting small subscene interventions for this chapter point..."},
+	"log.chapter_analyze_auto_proposal": {
+
+		LangEN: "Editor is auto-drafting concrete subscene interventions for chapter point \"%s\"..."},
+	"log.chapter_analyze_auto_propose_failed": {
+		LangEN: "Auto-proposal of subscene interventions failed for chapter %d (point %s) — the author can still propose them manually"},
+	"log.chapter_analyze_proposed": {
+
+		LangEN: "Proposals ready — %d subscene intervention(s) drafted"},
+	"log.trope_intervention_done": {
+
+		LangEN: "Subscene intervention applied on chapter %d, scene %d, unit %d"},
+	"log.trope_intervention_failed": {
+
+		LangEN: "Subscene intervention failed on chapter %d, scene %d, unit %d: %v"},
 	"log.chapter_writing": {
-		LangZH: "正在创作第 %d 章...",
-		LangEN: "Writing chapter %d...",
-	},
+
+		LangEN: "Writing chapter %d..."},
 	"log.chapter_write_cancelled": {
-		LangZH: "章节创作已取消",
-		LangEN: "Chapter writing cancelled",
-	},
+
+		LangEN: "Chapter writing cancelled"},
+	// Distinguishes a hard stop (user cancel / task deadline) from a step
+	// failure whose prose was already checkpointed as a resumable draft.
+	// The task hit its MaxTaskDuration wall-clock ceiling (NOT a user Stop —
+	// those are reported as log.chapter_write_cancelled via TaskStoppedByUser).
+	"log.chapter_write_aborted_deadline": {
+
+		LangEN: "Chapter writing stopped: the task reached its time limit — prose is saved as a resumable draft; use Resume, Fact-check or Reset on the chapter"},
+	"log.chapter_write_aborted": {
+
+		LangEN: "Chapter writing aborted: %s — prose is saved as a resumable draft; use Resume, Fact-check or Reset on the chapter"},
+	// Emitted by abortChapterWithDraftCheckpoint when the draft checkpoint save succeeds.
+	"log.chapter_draft_saved": {
+
+		LangEN: "Chapter %d kept as resumable draft (summary/verification step failed) — use Resume, Fact-check or Reset in the sidebar"},
+	// GenerateChapterAction found a DraftSavedAt checkpoint from an interrupted
+	// run and continues from the saved prose instead of regenerating it.
+	"log.chapter_draft_resumed": {
+
+		LangEN: "Chapter %d draft found from a previous interrupted run (%d prose units) — continuing without rewriting the prose"},
+	// finalizeChapterSummary fallbacks when the LLM summary step fails but the
+	// pipeline must still get a non-empty summary for the history sync.
+	"log.summary_fallback_previous": {
+
+		LangEN: "AI summary step failed (%s) — keeping the chapter's previous summary so the history sync can continue"},
+	"log.summary_fallback_placeholder": {
+
+		LangEN: "AI summary step failed (%s) — using a deterministic opening excerpt as placeholder summary; regenerate it later with Fact-check/Resume"},
+	// generateChapterSummaryWithRetryLog gives up because the task hit its
+	// wall-clock deadline while retrying the summary.
+	"log.summary_fail_timeout_detail": {
+
+		LangEN: "Summary step stopped by the task time limit: %v"},
+	"log.chapter_draft_checkpoint_failed": {
+
+		LangEN: "Could not persist the draft checkpoint for this chapter: %v"},
+	// Resume / fact-check / reset recovery actions (see ResumeChapterAction,
+	// FactCheckChapterAction, ResetChapterAction and their HTTP handlers).
+	"log.chapter_resume": {
+
+		LangEN: "Resuming chapter %d from its saved draft (%d prose units) — skipping prose regeneration"},
+	"log.chapter_factcheck_rerun": {
+
+		LangEN: "Re-running critic/fact-check on chapter %d..."},
+	// Error surfaced by the resume / fact-check HTTP handlers when the
+	// recovery action itself fails (not a cancellation).
+	"log.chapter_resume_failed": {
+
+		LangEN: "Chapter resume failed: %v"},
+	"log.chapter_factcheck_failed": {
+
+		LangEN: "Chapter fact-check re-run failed: %v"},
+	// Emitted when an LLM step exhausts llm.MaxAPIRetries.
+	"log.max_retries_exceeded": {
+
+		LangEN: "Max API retries exceeded: %v"},
+	"log.chapter_factcheck_clean": {
+
+		LangEN: "Chapter %d passed verification — moved to review"},
+	"log.chapter_reset": {
+
+		LangEN: "Chapter %d cleared: prose, summary and blocks discarded; outline and scene plan kept"},
+	"log.scene_plan_gate_skipped_draft": {
+
+		LangEN: "Scene-plan gate skipped for chapter %d: a resumable draft already exists (use Resume/Fact-check/Reset)"},
 	"log.chapter_write_conflict_pause": {
-		LangZH: "章节创作因事实核查冲突暂停，等待你选择处理方向",
-		LangEN: "Chapter writing paused due to fact-check conflict — choose how to proceed",
-	},
+
+		LangEN: "Chapter writing paused due to fact-check conflict — choose how to proceed"},
+	"log.scene_plan_generating": {
+
+		LangEN: "Chapter %d: planning scenes (beat sheet) before writing..."},
+	"log.scene_plan_ready": {
+
+		LangEN: "Scene plan ready for chapter %d: %d scenes, %d words budgeted"},
+	"log.scene_plan_pending": {
+
+		LangEN: "Chapter %d: scene plan awaiting your review — edit or approve it, then resume generation"},
+	"log.scene_plan_approved": {
+
+		LangEN: "Scene plan approved for chapter %d"},
+	"log.scene_plan_auto_approved": {
+
+		LangEN: "Chapter %d: scene plan auto-approved (automation on)"},
+	"log.scene_plan_failed": {
+
+		LangEN: "Scene plan generation failed: %v — falling back to single-pass writing"},
+	"log.scene_plan_cancelled": {
+
+		LangEN: "Scene plan generation cancelled"},
+	// ---- Scene-by-scene sequential writing (writing_scenes.go) ----
+	"log.scene_seq_start": {
+
+		LangEN: "[Scenes] Chapter %d: writing scene by scene — %d scenes, target %d words. Each scene is generated and verified against its word budget (±10%) before the next one starts."},
+	"log.scene_gen_start": {
+
+		LangEN: "[Scenes] Writing scene %d/%d \"%s\" — budget %d words, accepted range %d–%d words..."},
+	"log.scene_gen_failed": {
+
+		LangEN: "[Scenes] Scene %d \"%s\": attempt %d produced no text"},
+	"log.scene_call_retry": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\": call failed — controlled retry, %d attempt(s) left for this scene..."},
+	"log.scene_truncated": {
+
+		LangEN: "[Scenes] Scene %d \"%s\": output was cut off by the token cap at %d words"},
+	"log.scene_count_ok": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" ✓ %d words (budget %d, band %d–%d) — moving to the next scene"},
+	"log.scene_count_retry": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\" is %d words (budget %d, band %d–%d) — %s. Controlled retry %d/%d..."},
+	"log.scene_count_keep_best": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" still %d words after %d retries (budget %d, band %d–%d) — keeping closest draft and continuing"},
+	"log.scene_done": {
+
+		LangEN: "[Scenes] Scene %d/%d \"%s\" accepted — chapter now at %d words total"},
+	"log.scene_seq_fallback": {
+
+		LangEN: "[Scenes] No scene could be written sequentially — falling back to single-pass chapter generation"},
+	"log.scene_tropes": {
+
+		LangEN: "[Scenes] Scene %d \"%s\" segmented into %d subscenes (%s) — critiques can now repair a single unit"},
+	"log.scene_shrink_start": {
+
+		LangEN: "[Length] Chapter %d too long — surgically rewriting ONLY scene %d/%d \"%s\" (%d words → target %d); other scenes untouched"},
+	"log.scene_shrink_retry": {
+
+		LangEN: "[Length] Shrink of scene %d \"%s\" (chapter %d) came back at %d words (target %d) — controlled retry %d/%d..."},
+	"log.scene_shrink_failed": {
+
+		LangEN: "[Length] Shrink attempt %d for scene %d \"%s\" (chapter %d) returned empty text"},
+	"log.scene_shrink_done": {
+
+		LangEN: "[Length] Scene %d \"%s\" (chapter %d) shrunk to %d words — new chapter total %d words"},
+	"log.chapter_shrink_scene_pick": {
+
+		LangEN: "[Length] Chapter %d is %d words (max %d) — longest-over-budget scene is %d/%d (+%d words over its own budget); shrinking it surgically"},
+	"log.chapter_shrink_scene_ok": {
+
+		LangEN: "[Length] Surgical scene shrink fixed the chapter ✓ %d words (range %d–%d)"},
+	"log.chapter_shrink_scene_partial": {
+
+		LangEN: "[Length] Surgical scene shrink helped but chapter still %d words (range %d–%d) — trying whole-chapter adjust as last resort"},
+	"log.chapter_shrink_scene_failed": {
+
+		LangEN: "[Length] Surgical shrink of scene %d (chapter %d) not possible — falling back to whole-chapter adjustment"},
+	"log.trope_rewrite_start": {
+
+		LangEN: "[Fact-check] Chapter %d: repairing scene %d, subscene %d/%d only (rest of scene kept verbatim)..."},
+	"log.trope_rewrite_besteffort": {
+
+		LangEN: "[Fact-check] Subscene rewrite for scene %d (chapter %d, unit %d) drifted from the target length — applying the closest attempt as best effort instead of failing"},
+	"log.trope_rewrite_length_guard": {
+
+		LangEN: "[Fact-check] Subscene rewrite for scene %d (chapter %d) changed length too much (%d vs %d words) — retrying"},
+	"log.trope_rewrite_failed": {
+
+		LangEN: "[Fact-check] Subscene rewrite attempt %d for scene %d (chapter %d) returned empty text"},
+	"log.trope_rewrite_done": {
+
+		LangEN: "[Fact-check] Scene %d subscene %d repaired in chapter %d (scene now %d words) — rest of chapter untouched"},
+	"log.chapter_total_check": {
+
+		LangEN: "[Length] All scenes written: chapter total is %d WORDS (accepted range %d–%d) — verifying whole chapter..."},
+	"log.chapter_total_ok": {
+
+		LangEN: "[Length] Chapter total verified ✓ %d words (range %d–%d)"},
+	"log.chapter_total_adjust": {
+
+		LangEN: "[Length] Chapter total %d words is outside the %d–%d range — adjusting the full draft..."},
+	"log.chapter_total_final": {
+
+		LangEN: "[Length] After adjustment the chapter is %d words (target range %d–%d) — keeping best available draft"},
+	"log.auto_scene_plan_on": {
+
+		LangEN: "Scene-plan automation enabled: plans are generated and accepted automatically"},
+	"log.auto_scene_plan_off": {
+
+		LangEN: "Scene-plan automation disabled: you will review each plan before writing"},
+	"log.unplanned_cast_detected": {
+
+		LangEN: "Chapter %d: unplanned characters in draft: %s — judging relevance..."},
+	"log.unplanned_cast_registered": {
+
+		LangEN: "Chapter %d: registered in cast: %s"},
+	"log.unplanned_cast_skipped": {
+
+		LangEN: "Chapter %d: left unregistered (background extras): %s"},
+	"log.unplanned_cast_failed": {
+
+		LangEN: "Unplanned-cast registration failed: %v"},
+	"log.unplanned_cast_cancelled": {
+
+		LangEN: "Unplanned-cast scan cancelled"},
 	"log.chapter_write_failed": {
-		LangZH: "章节创作失败: %s",
-		LangEN: "Chapter writing failed: %s",
-	},
+
+		LangEN: "Chapter writing failed: %s"},
 	"log.chapter_write_done": {
-		LangZH: "第 %d 章《%s》创作完成！",
-		LangEN: "Chapter %d \"%s\" complete!",
-	},
+
+		LangEN: "Chapter %d \"%s\" complete!"},
 	"log.chapter_autoconfirm_failed": {
-		LangZH: "自动确认失败: %s",
-		LangEN: "Auto-confirm failed: %s",
-	},
+
+		LangEN: "Auto-confirm failed: %s"},
 	"log.chapter_autoconfirmed": {
-		LangZH: "第 %d 章《%s》已自动确认。",
-		LangEN: "Chapter %d \"%s\" auto-confirmed.",
-	},
+
+		LangEN: "Chapter %d \"%s\" auto-confirmed."},
 	"log.all_chapters_done": {
-		LangZH: "全部章节已创作完成！",
-		LangEN: "All chapters generated.",
-	},
+
+		LangEN: "All chapters generated."},
 	"log.autowrite_cancelled": {
-		LangZH: "任务已取消，停止自动续写",
-		LangEN: "Task cancelled; auto-continue stopped",
-	},
+
+		LangEN: "Task cancelled; auto-continue stopped"},
 	"log.chapter_kept_review": {
-		LangZH: "第 %d 章已保留当前稿并进入审核。",
-		LangEN: "Chapter %d kept as draft and moved to review.",
-	},
+
+		LangEN: "Chapter %d kept as draft and moved to review."},
 	"log.chapter_confirmed": {
-		LangZH: "第 %d 章已确认。",
-		LangEN: "Chapter %d confirmed.",
-	},
+
+		LangEN: "Chapter %d confirmed."},
 	"log.chapter_revising": {
-		LangZH: "正在根据意见修改当前章节...",
-		LangEN: "Revising current chapter based on feedback...",
-	},
+
+		LangEN: "Revising current chapter based on feedback..."},
 	"log.chapter_revise_cancelled": {
-		LangZH: "章节修订已取消",
-		LangEN: "Chapter revision cancelled",
-	},
+
+		LangEN: "Chapter revision cancelled"},
 	"log.chapter_revise_failed": {
-		LangZH: "章节修订失败: %s",
-		LangEN: "Chapter revision failed: %s",
-	},
+
+		LangEN: "Chapter revision failed: %s"},
 	"log.chapter_revised": {
-		LangZH: "章节已修订。",
-		LangEN: "Chapter revised.",
-	},
+
+		LangEN: "Chapter revised."},
 	"log.chapter_specific_revising": {
-		LangZH: "正在定向修订第 %d 章...",
-		LangEN: "Targeted revision of chapter %d...",
-	},
+
+		LangEN: "Targeted revision of chapter %d..."},
 	"log.smooth_transitions_cancelled": {
-		LangZH: "章节衔接优化已取消（已完成部分不会丢失）",
-		LangEN: "Transition smoothing cancelled (completed parts are preserved)",
-	},
+
+		LangEN: "Transition smoothing cancelled (completed parts are preserved)"},
 	"log.smooth_transitions_failed": {
-		LangZH: "章节衔接优化失败: %s",
-		LangEN: "Transition smoothing failed: %s",
-	},
+
+		LangEN: "Transition smoothing failed: %s"},
 	"log.chapter_deleted": {
-		LangZH: "已删除第 %d 章。",
-		LangEN: "Deleted chapter %d.",
-	},
+
+		LangEN: "Deleted chapter %d."},
 	"log.outline_deleted": {
-		LangZH: "大纲已删除。",
-		LangEN: "Outline deleted.",
-	},
+
+		LangEN: "Outline deleted."},
 	"log.chapter_outline_updated": {
-		LangZH: "第 %d 章大纲已更新。",
-		LangEN: "Chapter %d outline updated.",
-	},
+
+		LangEN: "Chapter %d outline updated."},
 	"log.settings_reconciling": {
-		LangZH: "正在协调新设定与已有内容...",
-		LangEN: "Reconciling new settings with existing content...",
-	},
+
+		LangEN: "Reconciling new settings with existing content..."},
 	"log.settings_reconcile_cancelled": {
-		LangZH: "设定协调已取消",
-		LangEN: "Settings reconciliation cancelled",
-	},
+
+		LangEN: "Settings reconciliation cancelled"},
 	"log.settings_reconcile_failed": {
-		LangZH: "设定协调失败: %s",
-		LangEN: "Settings reconciliation failed: %s",
-	},
+
+		LangEN: "Settings reconciliation failed: %s"},
 	"log.settings_reconcile_done": {
-		LangZH: "设定协调完成！",
-		LangEN: "Settings reconciliation complete.",
-	},
+
+		LangEN: "Settings reconciliation complete."},
 	"log.delete_file_failed": {
-		LangZH: "删除文件 %s 失败: %v",
-		LangEN: "Failed to delete file %s: %v",
-	},
+
+		LangEN: "Failed to delete file %s: %v"},
 	"log.chapters_deleted_from": {
-		LangZH: "已从第 %d 章删除到末尾，共删除 %d 章。",
-		LangEN: "Deleted from chapter %d to end (%d chapters).",
-	},
+
+		LangEN: "Deleted from chapter %d to end (%d chapters)."},
 	"log.foreshadow_roadmap_save_failed": {
-		LangZH: "伏笔路线图保存失败: %v",
-		LangEN: "Failed to save foreshadow roadmap: %v",
-	},
+
+		LangEN: "Failed to save foreshadow roadmap: %v"},
 	"log.foreshadow_suggesting": {
-		LangZH: "正在分析大纲，设计伏笔方案...",
-		LangEN: "Analysing outline and designing foreshadow plan...",
-	},
+
+		LangEN: "Analysing outline and designing foreshadow plan..."},
 	"log.foreshadow_suggest_cancelled": {
-		LangZH: "伏笔建议已取消",
-		LangEN: "Foreshadow suggestions cancelled",
-	},
+
+		LangEN: "Foreshadow suggestions cancelled"},
 	"log.foreshadow_suggest_failed": {
-		LangZH: "伏笔建议生成失败: %s",
-		LangEN: "Foreshadow suggestion failed: %s",
-	},
+
+		LangEN: "Foreshadow suggestion failed: %s"},
 	"log.foreshadow_suggest_done": {
-		LangZH: "伏笔建议生成完成，共 %d 条",
-		LangEN: "Foreshadow suggestions ready (%d items)",
-	},
+
+		LangEN: "Foreshadow suggestions ready (%d items)"},
 	"log.continuation_outline_generating": {
-		LangZH: "正在生成续写大纲...",
-		LangEN: "Generating continuation outline...",
-	},
+
+		LangEN: "Generating continuation outline..."},
 	"log.continuation_outline_cancelled": {
-		LangZH: "续写大纲生成已取消",
-		LangEN: "Continuation outline cancelled",
-	},
+
+		LangEN: "Continuation outline cancelled"},
 	"log.continuation_outline_failed": {
-		LangZH: "续写大纲生成失败: %s",
-		LangEN: "Continuation outline failed: %s",
-	},
+
+		LangEN: "Continuation outline failed: %s"},
 	"log.continuation_outline_done": {
-		LangZH: "续写大纲生成完成！",
-		LangEN: "Continuation outline complete.",
-	},
+
+		LangEN: "Continuation outline complete."},
 	"log.chapter_polish_cancelled": {
-		LangZH: "章节润色已取消",
-		LangEN: "Chapter polish cancelled",
-	},
+
+		LangEN: "Chapter polish cancelled"},
 	"log.chapter_polish_failed": {
-		LangZH: "章节润色失败: %s",
-		LangEN: "Chapter polish failed: %s",
-	},
+
+		LangEN: "Chapter polish failed: %s"},
 	"log.postprocess_diagnose_cancelled": {
-		LangZH: "全书优化分析已取消",
-		LangEN: "Full-book analysis cancelled",
-	},
+
+		LangEN: "Full-book analysis cancelled"},
 	"log.postprocess_diagnose_failed": {
-		LangZH: "全书优化分析失败: %s",
-		LangEN: "Full-book analysis failed: %s",
-	},
+
+		LangEN: "Full-book analysis failed: %s"},
 	"log.postprocess_consistency_cancelled": {
-		LangZH: "全书一致性核查已取消",
-		LangEN: "Consistency check cancelled",
-	},
+
+		LangEN: "Consistency check cancelled"},
 	"log.postprocess_consistency_failed": {
-		LangZH: "全书一致性核查失败: %s",
-		LangEN: "Consistency check failed: %s",
-	},
+
+		LangEN: "Consistency check failed: %s"},
 	"log.postprocess_roadmap_cancelled": {
-		LangZH: "路线图生成已取消",
-		LangEN: "Roadmap generation cancelled",
-	},
+
+		LangEN: "Roadmap generation cancelled"},
 	"log.postprocess_roadmap_failed": {
-		LangZH: "路线图生成失败: %s",
-		LangEN: "Roadmap generation failed: %s",
-	},
+
+		LangEN: "Roadmap generation failed: %s"},
 	"log.postprocess_execute_cancelled": {
-		LangZH: "全书优化执行已取消（已完成项不会丢失）",
-		LangEN: "Optimisation execution cancelled (completed items are preserved)",
-	},
+
+		LangEN: "Optimisation execution cancelled (completed items are preserved)"},
 	"log.postprocess_execute_failed": {
-		LangZH: "全书优化执行失败: %s",
-		LangEN: "Optimisation execution failed: %s",
-	},
+
+		LangEN: "Optimisation execution failed: %s"},
 	"log.child_task_start_failed": {
-		LangZH: "无法启动子任务 %s：主任务已结束",
-		LangEN: "Cannot start child task %s: parent task already ended",
-	},
+
+		LangEN: "Cannot start child task %s: parent task already ended"},
 	"log.save_session_failed": {
-		LangZH: "保存会话失败: %v",
-		LangEN: "Failed to save chat session: %v",
-	},
+
+		LangEN: "Failed to save chat session: %v"},
 	"log.chat_cancelled": {
-		LangZH: "助理对话已取消",
-		LangEN: "Assistant chat cancelled",
-	},
+
+		LangEN: "Assistant chat cancelled"},
 	"log.chat_failed": {
-		LangZH: "助理回复失败: %v",
-		LangEN: "Assistant reply failed: %v",
-	},
+
+		LangEN: "Assistant reply failed: %v"},
 	"log.agent_output_truncated": {
-		LangZH: "助理输出因 max_tokens=%d 被截断，工具调用已中止",
-		LangEN: "Assistant output truncated at max_tokens=%d — tool call aborted",
-	},
+
+		LangEN: "Assistant output truncated at max_tokens=%d — tool call aborted"},
 	"log.agent_tool_call_parse_retry": {
-		LangZH: "工具调用解析失败（finish_reason=%s，%d 字符），已要求模型诊断并重试一次",
-		LangEN: "Tool-call parse failed (finish_reason=%s, %d chars) — asking model to diagnose and retry once",
-	},
+
+		LangEN: "Tool-call parse failed (finish_reason=%s, %d chars) — asking model to diagnose and retry once"},
 	"log.agent_tool_call_parse_failed": {
-		LangZH: "工具调用解析失败且重试后仍无效，已中止",
-		LangEN: "Tool-call parse failed again after retry — aborted",
-	},
+
+		LangEN: "Tool-call parse failed again after retry — aborted"},
 	"log.chat_done": {
-		LangZH: "助理回复完成",
-		LangEN: "Assistant reply complete.",
-	},
+
+		LangEN: "Assistant reply complete."},
 	"log.project_deleted": {
-		LangZH: "项目「%s」已删除",
-		LangEN: "Project \"%s\" deleted",
-	},
+
+		LangEN: "Project \"%s\" deleted"},
 	"log.project_created": {
-		LangZH: "项目「%s」创建成功",
-		LangEN: "Project \"%s\" created",
-	},
+
+		LangEN: "Project \"%s\" created"},
 
 	// ---- Writing pipeline logs ----
 	"log.chapter_start": {
-		LangZH: "开始创作第 %d 章: 《%s》",
-		LangEN: "Starting chapter %d: \"%s\"",
-	},
+
+		LangEN: "Starting chapter %d: \"%s\""},
 	"log.outline_check_failed": {
-		LangZH: "大纲一致性检查失败: %v（按原大纲继续）",
-		LangEN: "Outline consistency check failed: %v (continuing with original outline)",
-	},
+
+		LangEN: "Outline consistency check failed: %v (continuing with original outline)"},
 	"log.outline_auto_revised": {
-		LangZH: "本章大纲已自动修订以匹配当前剧情",
-		LangEN: "Chapter outline auto-revised to match current story",
-	},
+
+		LangEN: "Chapter outline auto-revised to match current story"},
 	"log.outline_consistent": {
-		LangZH: "本章大纲与当前剧情一致 ✓",
-		LangEN: "Chapter outline consistent with story ✓",
-	},
+
+		LangEN: "Chapter outline consistent with story ✓"},
+	"log.chapter_length_target": {
+
+		LangEN: "[Length] Chapter %d target: %d WORDS (accepted range %d–%d words; source: %s) — measured in words, not characters"},
 	"log.prose_done": {
-		LangZH: "正文撰写完毕，共 %d 字",
-		LangEN: "Prose complete — %d characters",
-	},
+
+		LangEN: "Prose complete — %d words"},
 	"log.chapter_length_retry": {
-		LangZH: "[字数控制] 当前 %d 字，要求 %d–%d 字，正在第 %d 次重新撰写...",
-		LangEN: "[Length] Draft is %d chars, need %d–%d — regenerating (attempt %d)...",
-	},
+
+		LangEN: "[Length] Draft is %d words, need %d–%d — regenerating (attempt %d)..."},
+	"log.chapter_length_retry_truncated": {
+
+		LangEN: "[Length] Draft was cut off by the output token cap at %d words (need %d–%d) — continuing the remaining scenes (attempt %d). Consider raising max_tokens in the API config."},
+	"log.chapter_length_continue": {
+
+		LangEN: "[Length] Continuation appended — chapter now at %d words (round %d)"},
+	"log.chapter_length_continue_failed": {
+
+		LangEN: "[Length] Continuation round %d failed: %v — keeping partial draft"},
+	"log.chapter_length_continue_duplicate": {
+
+		LangEN: "[Length] Continuation round %d restated already-written scenes — stopping continuation to avoid duplicates"},
 	"log.chapter_length_adjust": {
-		LangZH: "[字数控制] 重写后仍为 %d 字（要求 %d–%d 字），正在对原文压缩/扩展...",
-		LangEN: "[Length] Still %d chars after rewrite (need %d–%d) — compressing/expanding draft...",
-	},
+
+		LangEN: "[Length] Still %d words after rewrite (need %d–%d) — compressing/expanding draft..."},
 	"log.chapter_length_adjust_failed": {
-		LangZH: "[字数控制] 压缩/扩展失败: %v，保留最佳稿",
-		LangEN: "[Length] Compress/expand failed: %v — keeping best draft",
-	},
+
+		LangEN: "[Length] Compress/expand failed: %v — keeping best draft"},
 	"log.chapter_length_soft_keep": {
-		LangZH: "[字数控制] 最佳稿 %d 字略超/略低于 %d–%d 字，在容忍范围内，跳过压缩/扩展",
-		LangEN: "[Length] Best draft %d chars is slightly outside %d–%d — within soft tolerance, skipping adjust",
-	},
+
+		LangEN: "[Length] Best draft %d words is slightly outside %d–%d — within soft tolerance, skipping adjust"},
 	"log.chapter_length_skip_adjust": {
-		LangZH: "[字数控制] 最佳稿 %d 字偏离 %d–%d 字过多，跳过压缩/扩展",
-		LangEN: "[Length] Best draft %d chars too far from %d–%d — skipping adjust",
-	},
+
+		LangEN: "[Length] Best draft %d words too far from %d–%d — skipping adjust"},
 	"log.chapter_length_adjust_reverted": {
-		LangZH: "[字数控制] 压缩/扩展后 %d 字未优于最佳稿 %d 字（要求 %d–%d 字），保留最佳稿",
-		LangEN: "[Length] After adjust %d chars not better than best %d (need %d–%d) — keeping best draft",
-	},
+
+		LangEN: "[Length] After adjust %d words not better than best %d (need %d–%d) — keeping best draft"},
 	"log.chapter_length_off_range": {
-		LangZH: "[字数控制] 压缩/扩展后仍为 %d 字（要求 %d–%d 字），请用户在审核时处理；自动确认模式下将继续下一章",
-		LangEN: "[Length] Still %d chars after adjust (need %d–%d) — please review manually; auto-confirm will continue to the next chapter",
-	},
+
+		LangEN: "[Length] Still %d words after adjust (need %d–%d) — please review manually; auto-confirm will continue to the next chapter"},
+	"log.chapter_revision_short_retry": {
+
+		LangEN: "[Length] Revision is only %d words (need %d–%d) — retrying rewrite keeping all original scenes intact..."},
+	"log.chapter_revision_reverted": {
+
+		LangEN: "[Length] Revision (%d words) still shorter than original (%d words, need %d–%d) — keeping the original text"},
 	"log.summary_done": {
-		LangZH: "摘要提炼完成",
-		LangEN: "Summary extraction complete",
-	},
+
+		LangEN: "Summary extraction complete"},
 	"log.factcheck_retry": {
-		LangZH: "[事实核查] 发现问题，正在重新生成第 %d 章（第 %d 次重试）...",
-		LangEN: "[Fact-check] Issues found — regenerating chapter %d (retry %d)...",
-	},
+
+		LangEN: "[Fact-check] Issues found — regenerating chapter %d (retry %d)..."},
 	"log.factcheck_details": {
-		LangZH: "核查详情: %s",
-		LangEN: "Check details: %s",
-	},
+
+		LangEN: "Check details: %s"},
 	"log.factcheck_max_retries": {
-		LangZH: "[事实核查] 已达最大重试次数，正在分析冲突根因...",
-		LangEN: "[Fact-check] Max retries reached — analysing conflict root cause...",
-	},
+
+		LangEN: "[Fact-check] Max retries reached — analysing conflict root cause..."},
 	"log.conflict_analyze_failed": {
-		LangZH: "冲突分析失败: %v，保留当前版本",
-		LangEN: "Conflict analysis failed: %v — keeping current version",
-	},
+
+		LangEN: "Conflict analysis failed: %v — keeping current version"},
+	"log.conflict_failure_recorded": {
+
+		LangEN: "[Repair failure] Stage: %s — reason: %s. The conflict panel keeps Retry / Rewrite available; your draft was not lost."},
+	"log.conflict_failure_dropped": {
+
+		LangEN: "[Repair failure] Stage: %s — reason: %s (no chapter mid-writing to attach the note to)"},
 	"log.conflict_retry": {
-		LangZH: "检测到可调和冲突，正在按补充约束进行最后一次尝试...",
-		LangEN: "Resolvable conflict detected — final attempt with extra constraints...",
-	},
+
+		LangEN: "Resolvable conflict detected — final attempt with extra constraints..."},
 	"log.factcheck_constraint_pass": {
-		LangZH: "[事实核查] 补充约束尝试通过 ✓",
-		LangEN: "[Fact-check] Constrained retry passed ✓",
-	},
+
+		LangEN: "[Fact-check] Constrained retry passed ✓"},
+	"log.critic_run": {
+
+		LangEN: "[Critic] Bestseller chapter review (act-aware, scene-level)…"},
+	"log.critic_scene_issue": {
+
+		LangEN: "[Critic] Scene %d · unit %d: %s"},
+	"log.critic_repairs_done": {
+
+		LangEN: "[Critic] Surgical repairs applied to %d scene/unit(s), %d skipped"},
+	"log.critic_repair_failed": {
+
+		LangEN: "[Critic] Surgical repair failed for scene %d unit %d — deferring to full-chapter retry"},
 	"log.factcheck_pass": {
-		LangZH: "[事实核查] 通过 ✓",
-		LangEN: "[Fact-check] Passed ✓",
-	},
+
+		LangEN: "[Fact-check] Passed ✓"},
+	"log.surgical_trope_start": {
+
+		LangEN: "[Surgical repair] Rewriting chapter %d · scene %d (\"%s\") · subscene %d only — the rest of the chapter stays untouched..."},
+	"log.surgical_trope_failed": {
+
+		LangEN: "[Surgical repair] Failed: %v — the chapter keeps its current text; try again or choose another option"},
+	"log.surgical_trope_done": {
+
+		LangEN: "[Surgical repair] Chapter %d subscene rewritten and re-verified ✓"},
 	"log.chapter_write_complete": {
-		LangZH: "第 %d 章创作完成！",
-		LangEN: "Chapter %d writing complete!",
-	},
+
+		LangEN: "Chapter %d writing complete!"},
 	"log.outline_conflict": {
-		LangZH: "第 %d 章大纲与当前剧情冲突: %s",
-		LangEN: "Chapter %d outline conflicts with story: %s",
-	},
+
+		LangEN: "Chapter %d outline conflicts with story: %s"},
+	"log.outline_revision_rejected": {
+
+		LangEN: "Proposed outline revision for chapter %d was rejected (it dropped detail or named entities); keeping the approved outline"},
 	"log.chapter_modifying": {
-		LangZH: "正在修改第 %d 章《%s》...",
-		LangEN: "Revising chapter %d \"%s\"...",
-	},
+
+		LangEN: "Revising chapter %d \"%s\"..."},
 	"log.prose_revised": {
-		LangZH: "正文修改完毕，共 %d 字",
-		LangEN: "Revision complete — %d characters",
-	},
+
+		LangEN: "Revision complete — %d words"},
 	"log.subsequent_outline_failed": {
-		LangZH: "后续大纲修订失败: %v（不影响当前章节）",
-		LangEN: "Subsequent outline revision failed: %v (current chapter unaffected)",
-	},
+
+		LangEN: "Subsequent outline revision failed: %v (current chapter unaffected)"},
 	"log.subsequent_outline_done": {
-		LangZH: "后续大纲修订完成",
-		LangEN: "Subsequent outline revision complete",
-	},
+
+		LangEN: "Subsequent outline revision complete"},
 	"log.chapter_specific_revising_long": {
-		LangZH: "正在对第 %d 章《%s》进行定向修订（不影响其他章节）...",
-		LangEN: "Targeted revision of chapter %d \"%s\" (other chapters untouched)...",
-	},
+
+		LangEN: "Targeted revision of chapter %d \"%s\" (other chapters untouched)..."},
 	"log.prose_specific_revised": {
-		LangZH: "正文修订完毕，共 %d 字",
-		LangEN: "Targeted revision complete — %d characters",
-	},
+
+		LangEN: "Targeted revision complete — %d words"},
 	"log.block_revising": {
-		LangZH: "正在修订第 %d 章的段落 block #%d...",
-		LangEN: "Revising chapter %d, block #%d...",
-	},
+
+		LangEN: "Revising chapter %d, block #%d..."},
 	"log.block_revised": {
-		LangZH: "第 %d 章 block #%d 修订完成",
-		LangEN: "Chapter %d block #%d revised",
-	},
+
+		LangEN: "Chapter %d block #%d revised"},
 	"log.chapter_segment_revising": {
-		LangZH: "检测到 %d 处原文引用，正在定向修订对应自然段...",
-		LangEN: "Detected %d quoted passage(s) — revising only the matched paragraph(s)...",
-	},
+
+		LangEN: "Detected %d quoted passage(s) — revising only the matched paragraph(s)..."},
 	"log.chapter_segment_fallback": {
-		LangZH: "局部修订无法完成（引用片段在原文未精确定位或段落数不匹配），回退到整章修订",
-		LangEN: "Local revision unavailable (quoted passage not located or paragraph count mismatch) — falling back to full-chapter revision",
-	},
+
+		LangEN: "Local revision unavailable (quoted passage not located or paragraph count mismatch) — falling back to full-chapter revision"},
 	"log.chapter_specific_done": {
-		LangZH: "第 %d 章定向修订完成（其余章节未受影响）。",
-		LangEN: "Chapter %d targeted revision complete (other chapters untouched).",
-	},
+
+		LangEN: "Chapter %d targeted revision complete (other chapters untouched)."},
 	"log.fatal_no_retry": {
-		LangZH: "致命错误: %v，不再重试",
-		LangEN: "Fatal error: %v — not retrying",
-	},
+
+		LangEN: "Fatal error: %v — not retrying"},
 	"log.content_gen_retry": {
-		LangZH: "正文生成失败: %v。第 %d 次重试，等待 %ds...",
-		LangEN: "Prose generation failed: %v. Retry %d, waiting %ds...",
-	},
+
+		LangEN: "Prose generation failed: %v. Retry %d, waiting %ds..."},
 	"log.summary_retry": {
-		LangZH: "摘要提炼失败: %v。第 %d 次重试，等待 %ds...",
-		LangEN: "Summary extraction failed: %v. Retry %d, waiting %ds...",
-	},
+
+		LangEN: "Summary extraction failed: %v. Retry %d, waiting %ds..."},
 	"log.factcheck_api_retry": {
-		LangZH: "事实核查失败: %v。第 %d 次重试，等待 %ds...",
-		LangEN: "Fact-check failed: %v. Retry %d, waiting %ds...",
-	},
+
+		LangEN: "Fact-check failed: %v. Retry %d, waiting %ds..."},
 	"log.smooth_start": {
-		LangZH: "开始章节衔接优化，共 %d 章待检查",
-		LangEN: "Starting transition smoothing — %d chapters to check",
-	},
+
+		LangEN: "Starting transition smoothing — %d chapters to check"},
 	"log.smooth_natural": {
-		LangZH: "第 %d 章衔接自然，无需修改",
-		LangEN: "Chapter %d transition is smooth — no change needed",
-	},
+
+		LangEN: "Chapter %d transition is smooth — no change needed"},
 	"log.smooth_optimized": {
-		LangZH: "第 %d 章开头已优化并保存",
-		LangEN: "Chapter %d opening optimised and saved",
-	},
+
+		LangEN: "Chapter %d opening optimised and saved"},
 	"log.smooth_done": {
-		LangZH: "章节衔接优化完成：检查 %d 章，优化 %d 章",
-		LangEN: "Transition smoothing complete: checked %d, optimised %d",
-	},
+
+		LangEN: "Transition smoothing complete: checked %d, optimised %d"},
 	"log.outline_revise_summary": {
-		LangZH: "大纲已修订，共 %d 章",
-		LangEN: "Outline revised — %d chapters",
-	},
+
+		LangEN: "Outline revised — %d chapters"},
 	"log.reconcile_pending_outline_failed": {
-		LangZH: "待定章节大纲重新生成失败: %v（设定已更新）",
-		LangEN: "Failed to regenerate pending outlines: %v (settings updated)",
-	},
+
+		LangEN: "Failed to regenerate pending outlines: %v (settings updated)"},
 	"log.reconcile_done_explain": {
-		LangZH: "设定协调完成。%s",
-		LangEN: "Settings reconciliation complete. %s",
-	},
+
+		LangEN: "Settings reconciliation complete. %s"},
 	"log.continuation_outline_summary": {
-		LangZH: "续写大纲生成完成，新增 %d 章，总计 %d 章",
-		LangEN: "Continuation outline complete — added %d chapters (total %d)",
-	},
+
+		LangEN: "Continuation outline complete — added %d chapters (total %d)"},
 	"log.foreshadow_outline_check_failed": {
-		LangZH: "伏笔-大纲一致性检查失败: %v",
-		LangEN: "Foreshadow/outline consistency check failed: %v",
-	},
+
+		LangEN: "Foreshadow/outline consistency check failed: %v"},
 	"log.foreshadow_outline_report_save_failed": {
-		LangZH: "保存伏笔-大纲检查报告失败: %v",
-		LangEN: "Failed to save foreshadow/outline check report: %v",
-	},
+
+		LangEN: "Failed to save foreshadow/outline check report: %v"},
 	"log.foreshadow_outline_check_pass": {
-		LangZH: "伏笔与大纲一致性检查通过 ✓",
-		LangEN: "Foreshadow/outline consistency check passed ✓",
-	},
+
+		LangEN: "Foreshadow/outline consistency check passed ✓"},
 	"log.outline_chapters_too_short": {
-		LangZH: "第 %s 章大纲不足 %d 字，正在要求 AI 扩写…",
-		LangEN: "Chapter %s outline(s) under %d characters — asking AI to expand…",
-	},
+
+		LangEN: "Chapter %s outline(s) under %d characters — asking AI to expand…"},
 	"log.outline_chapters_still_short": {
-		LangZH: "第 %s 章大纲仍不足 %d 字（已重试），请在大纲页手动补充",
-		LangEN: "Chapter %s outline(s) still under %d characters after retry — please expand on the Outline page",
-	},
+
+		LangEN: "Chapter %s outline(s) still under %d characters after retry — please expand on the Outline page"},
 	"log.outline_character_check_failed": {
-		LangZH: "大纲人物检查失败: %v",
-		LangEN: "Outline character check failed: %v",
-	},
+
+		LangEN: "Outline character check failed: %v"},
+	"log.outline_postprocess_skipped": {
+
+		LangEN: "Post-batch consistency checks skipped (state snapshot failed): %v"},
+	"log.outline_postprocess_panic": {
+
+		LangEN: "Post-batch consistency check crashed and was recovered: %v"},
 	"log.outline_character_report_save_failed": {
-		LangZH: "保存大纲人物检查报告失败: %v",
-		LangEN: "Failed to save outline character check report: %v",
-	},
+
+		LangEN: "Failed to save outline character check report: %v"},
 	"log.outline_character_check_pass": {
-		LangZH: "大纲人物与已登记角色一致 ✓",
-		LangEN: "Outline characters match registered list ✓",
-	},
+
+		LangEN: "Outline characters match registered list ✓"},
 	"log.foreshadow_plan_parsed": {
-		LangZH: "伏笔方案解析完成，共 %d 条",
-		LangEN: "Foreshadow plan parsed — %d items",
-	},
+
+		LangEN: "Foreshadow plan parsed — %d items"},
 	"log.foreshadow_status_updated": {
-		LangZH: "伏笔状态更新完成，处理 %d 条变更",
-		LangEN: "Foreshadow status updated — %d changes",
-	},
+
+		LangEN: "Foreshadow status updated — %d changes"},
 	"log.foreshadow_sync_failed": {
-		LangZH: "伏笔状态更新失败: %v（不影响本章）",
-		LangEN: "Foreshadow sync failed: %v (chapter unaffected)",
-	},
+
+		LangEN: "Foreshadow sync failed: %v (chapter unaffected)"},
 	"log.foreshadow_sync_summary": {
-		LangZH: "伏笔状态已更新（活跃: %d, 已回收: %d）",
-		LangEN: "Foreshadow status updated (active: %d, resolved: %d)",
-	},
+
+		LangEN: "Foreshadow status updated (active: %d, resolved: %d)"},
 	"log.memory_update_failed": {
-		LangZH: "叙事记忆更新失败（不影响本章）",
-		LangEN: "Narrative memory update failed (chapter unaffected)",
-	},
+
+		LangEN: "Narrative memory update failed (chapter unaffected)"},
 	"log.memory_save_failed": {
-		LangZH: "叙事记忆保存失败",
-		LangEN: "Failed to save narrative memory",
-	},
+
+		LangEN: "Failed to save narrative memory"},
 	"log.import_split_done": {
-		LangZH: "本地切章完成：共 %d 章，开始逐章分析",
-		LangEN: "Local split done: %d chapters, starting per-chapter analysis",
-	},
+
+		LangEN: "Local split done: %d chapters, starting per-chapter analysis"},
 	"log.import_resuming": {
-		LangZH: "从断点恢复导入：已完成 %d / %d 章",
-		LangEN: "Resuming import from checkpoint: %d / %d chapters done",
-	},
+
+		LangEN: "Resuming import from checkpoint: %d / %d chapters done"},
 	"log.import_meta_done": {
-		LangZH: "作品元信息分析完成：《%s》",
-		LangEN: "Metadata analysis done: \"%s\"",
-	},
+
+		LangEN: "Metadata analysis done: \"%s\""},
 	"log.import_meta_failed": {
-		LangZH: "作品元信息分析失败：%v（不影响章节处理）",
-		LangEN: "Metadata analysis failed: %v (chapter processing unaffected)",
-	},
+
+		LangEN: "Metadata analysis failed: %v (chapter processing unaffected)"},
 	"log.import_chapter_done": {
-		LangZH: "第 %d / %d 章分析完成",
-		LangEN: "Chapter %d / %d analyzed",
-	},
+
+		LangEN: "Chapter %d / %d analyzed"},
 	"log.import_cancelled": {
-		LangZH: "导入已暂停（已完成 %d / %d 章，可随时恢复）",
-		LangEN: "Import paused (%d / %d chapters done, resume anytime)",
-	},
+
+		LangEN: "Import paused (%d / %d chapters done, resume anytime)"},
 	"log.import_done": {
-		LangZH: "导入完成：共 %d 章，可开始续写",
-		LangEN: "Import complete: %d chapters, ready for continuation",
-	},
+
+		LangEN: "Import complete: %d chapters, ready for continuation"},
 	"log.import_task_cancelled": {
-		LangZH: "导入任务已取消（进度已保存，可恢复）",
-		LangEN: "Import task cancelled (progress saved, resumable)",
-	},
+
+		LangEN: "Import task cancelled (progress saved, resumable)"},
 	"log.import_task_failed": {
-		LangZH: "导入任务失败: %s（进度已保存，可恢复）",
-		LangEN: "Import task failed: %s (progress saved, resumable)",
-	},
+
+		LangEN: "Import task failed: %s (progress saved, resumable)"},
 	"log.postprocess_material": {
-		LangZH: "全书材料：约 %d 字，预估 %d tokens，诊断模式：%s",
-		LangEN: "Book material: ~%d chars, ~%d tokens, diagnosis mode: %s",
-	},
+
+		LangEN: "Book material: ~%d chars, ~%d tokens, diagnosis mode: %s"},
 	"log.postprocess_consistency_single": {
-		LangZH: "开始全书一致性核查（单卷）...",
-		LangEN: "Starting full-book consistency check (single volume)...",
-	},
+
+		LangEN: "Starting full-book consistency check (single volume)..."},
 	"log.postprocess_consistency_multi": {
-		LangZH: "正文较长，分 %d 卷进行一致性核查...",
-		LangEN: "Long text — consistency check split into %d volumes...",
-	},
+
+		LangEN: "Long text — consistency check split into %d volumes..."},
 	"log.postprocess_roadmap_items": {
-		LangZH: "已生成 %d 条优化工单",
-		LangEN: "Generated %d optimisation roadmap items",
-	},
+
+		LangEN: "Generated %d optimisation roadmap items"},
 	"log.postprocess_smooth_preface": {
-		LangZH: "前置步骤：优化章节衔接...",
-		LangEN: "Preface: optimising chapter transitions...",
-	},
+
+		LangEN: "Preface: optimising chapter transitions..."},
 	"log.postprocess_smooth_skip": {
-		LangZH: "章节衔接优化跳过或失败: %v",
-		LangEN: "Transition smoothing skipped or failed: %v",
-	},
+
+		LangEN: "Transition smoothing skipped or failed: %v"},
 	"log.postprocess_batch_failed": {
-		LangZH: "第 %d 章工单失败: %v",
-		LangEN: "Chapter %d roadmap batch failed: %v",
-	},
+
+		LangEN: "Chapter %d roadmap batch failed: %v"},
 	"log.postprocess_batch_done": {
-		LangZH: "第 %d 章已完成（合并 %d 条意见）",
-		LangEN: "Chapter %d done (merged %d items)",
-	},
+
+		LangEN: "Chapter %d done (merged %d items)"},
 	"log.postprocess_batch_skip": {
-		LangZH: "第 %d 章内容无变化，已跳过",
-		LangEN: "Chapter %d unchanged — skipped",
-	},
+
+		LangEN: "Chapter %d unchanged — skipped"},
 	"log.postprocess_execute_summary": {
-		LangZH: "全书优化执行完成：处理 %d 章（共 %d 条工单），有效修改 %d 章",
-		LangEN: "Optimisation execution complete: %d chapters (%d items), %d modified",
-	},
+
+		LangEN: "Optimisation execution complete: %d chapters (%d items), %d modified"},
 	"log.api_fatal": {
-		LangZH: "致命错误: %v，不再重试",
-		LangEN: "Fatal error: %v — not retrying",
-	},
+
+		LangEN: "Fatal error: %v — not retrying"},
 	"log.api_retry": {
-		LangZH: "API调用失败: %v。第 %d 次重试，等待 %ds...",
-		LangEN: "API call failed: %v. Retry %d, waiting %ds...",
-	},
+
+		LangEN: "API call failed: %v. Retry %d, waiting %ds..."},
 	"log.api_stream_retry": {
-		LangZH: "流式API调用失败: %v。第 %d 次重试，等待 %ds...",
-		LangEN: "Streaming API call failed: %v. Retry %d, waiting %ds...",
-	},
+
+		LangEN: "Streaming API call failed: %v. Retry %d, waiting %ds..."},
 
 	// ---- Agent tool status messages ----
 	"agent.task_cancelled": {
-		LangZH: "任务已取消",
-		LangEN: "Task cancelled",
-	},
+
+		LangEN: "Task cancelled"},
 	"agent.api_failed": {
-		LangZH: "Agent API 调用失败: %v",
-		LangEN: "Agent API call failed: %v",
-	},
+
+		LangEN: "Agent API call failed: %v"},
 	"agent.output_truncated": {
-		LangZH: "助理回复因输出 token 上限（max_tokens=%d）被截断，工具调用未完成。请在配置页增大 max_tokens，或缩短修改意见后点击「重试」重新发送。",
-		LangEN: "Assistant output was cut off at the max_tokens limit (%d). The tool call did not complete. Increase max_tokens on the Config page, shorten your message, then click Retry to resend.",
-	},
+
+		LangEN: "Assistant output was cut off at the max_tokens limit (%d). The tool call did not complete. Increase max_tokens on the Config page, shorten your message, then click Retry to resend."},
 	"agent.tool_call_parse_retry_hint": {
-		LangZH: "[工具调用解析失败 — 请重试一次]\n原因标记: %s；当前 Agent max_tokens=%d。\n你上一条输出中的 <tool_call> 未能解析（常见原因：缺少 </tool_call>、JSON 被截断/不完整、arguments 过长、非法转义）。\n请自行分析上一条输出的问题后重试：只输出一个完整合法的 <tool_call>...</tool_call>（标签内为合法 JSON 对象）。\n若 writing_style 等字段很长，请拆成多次 update_project_config，每次只更新少量字段。\n不要解释，直接输出工具调用。",
-		LangEN: "[Tool-call parse failed — retry once]\nReason tag: %s; Agent max_tokens=%d.\nYour previous <tool_call> could not be parsed (common causes: missing </tool_call>, truncated/incomplete JSON, oversized arguments, bad escapes).\nDiagnose the previous output, then retry with exactly one complete <tool_call>...</tool_call> containing a valid JSON object.\nIf writing_style or another field is long, split it into multiple update_project_config calls with few fields each.\nDo not explain — emit the tool call only.",
-	},
+
+		LangEN: "[Tool-call parse failed — retry once]\nReason tag: %s; Agent max_tokens=%d.\nYour previous <tool_call> could not be parsed (common causes: missing </tool_call>, truncated/incomplete JSON, oversized arguments, bad escapes).\nDiagnose the previous output, then retry with exactly one complete <tool_call>...</tool_call> containing a valid JSON object.\nIf writing_style or another field is long, split it into multiple update_project_config calls with few fields each.\nDo not explain — emit the tool call only."},
 	"agent.tool_call_parse_failed": {
-		LangZH: "助理工具调用格式无效（重试后仍无法解析）。请缩短单次参数（长文本字段拆开更新），或点击「重试」重新发送。",
-		LangEN: "Assistant tool call was invalid and still could not be parsed after one retry. Shorten arguments (split long fields across calls), or click Retry to resend.",
-	},
+
+		LangEN: "Assistant tool call was invalid and still could not be parsed after one retry. Shorten arguments (split long fields across calls), or click Retry to resend."},
 	"agent.max_steps": {
-		LangZH: "已达到最大工具调用步骤限制。",
-		LangEN: "Reached the maximum tool-call step limit.",
-	},
+
+		LangEN: "Reached the maximum tool-call step limit."},
 	"agent.section_generate_started": {
-		LangZH: "已开始后台生成「%s」，完成后会自动刷新相关数据；请稍候并告知用户关注进度指示。",
-		LangEN: "Background generation for \"%s\" has started; related data refreshes automatically when it finishes. Tell the user to watch the progress indicator.",
-	},
+
+		LangEN: "Background generation for \"%s\" has started; related data refreshes automatically when it finishes. Tell the user to watch the progress indicator."},
 	"agent.tool_exec_error": {
-		LangZH: "工具执行错误: %v",
-		LangEN: "Tool execution error: %v",
-	},
+
+		LangEN: "Tool execution error: %v"},
 	"agent.unknown_tool": {
-		LangZH: "未知工具: %s",
-		LangEN: "Unknown tool: %s",
-	},
+
+		LangEN: "Unknown tool: %s"},
 	"agent.confirm_required": {
-		LangZH: "⚠️ 操作未执行：「%s」是不可逆的危险操作。请先向用户复述影响范围并获得明确同意，确认后携带 confirm=true 重新调用。如果用户的本意是修改内容而非删除，请改用对应的修订工具。",
-		LangEN: "⚠️ Not executed: \"%s\" is irreversible. Restate the impact to the user and get explicit consent, then retry with confirm=true. If the user meant to edit content, use the revise tool instead.",
-	},
+
+		LangEN: "⚠️ Not executed: \"%s\" is irreversible. Restate the impact to the user and get explicit consent, then retry with confirm=true. If the user meant to edit content, use the revise tool instead."},
 	"agent.no_characters": {
-		LangZH: "暂无角色数据",
-		LangEN: "No character data",
-	},
+
+		LangEN: "No character data"},
 	"agent.characters_not_found": {
-		LangZH: "没有找到匹配的角色",
-		LangEN: "No matching characters found",
-	},
+
+		LangEN: "No matching characters found"},
 	"agent.character_not_found": {
-		LangZH: "未找到角色: %s",
-		LangEN: "Character not found: %s",
-	},
+
+		LangEN: "Character not found: %s"},
 	"agent.no_worldview": {
-		LangZH: "暂无世界观数据",
-		LangEN: "No worldview data",
-	},
+
+		LangEN: "No worldview data"},
 	"agent.worldview_not_found": {
-		LangZH: "没有找到匹配的世界观条目",
-		LangEN: "No matching worldview entries",
-	},
+
+		LangEN: "No matching worldview entries"},
 	"agent.no_organizations": {
-		LangZH: "暂无组织数据",
-		LangEN: "No organization data",
-	},
+
+		LangEN: "No organization data"},
 	"agent.chapter_not_found": {
-		LangZH: "未找到第%d章",
-		LangEN: "Chapter %d not found",
-	},
+
+		LangEN: "Chapter %d not found"},
 	"agent.no_outline": {
-		LangZH: "暂无大纲",
-		LangEN: "No outline yet",
-	},
+
+		LangEN: "No outline yet"},
 	"agent.no_foreshadows": {
-		LangZH: "暂无伏笔",
-		LangEN: "No foreshadows yet",
-	},
+
+		LangEN: "No foreshadows yet"},
 	"agent.search_keyword_required": {
-		LangZH: "请提供搜索关键词",
-		LangEN: "Search keyword required",
-	},
+
+		LangEN: "Search keyword required"},
 	"agent.search_no_results": {
-		LangZH: "未找到相关内容",
-		LangEN: "No matching content found",
-	},
+
+		LangEN: "No matching content found"},
 	"agent.character_created": {
-		LangZH: "角色「%s」创建成功 (ID: %s)",
-		LangEN: "Character \"%s\" created (ID: %s)",
-	},
+
+		LangEN: "Character \"%s\" created (ID: %s)"},
 	"agent.character_updated": {
-		LangZH: "角色「%s」已更新",
-		LangEN: "Character \"%s\" updated",
-	},
+
+		LangEN: "Character \"%s\" updated"},
 	"agent.character_deleted": {
-		LangZH: "角色「%s」已删除",
-		LangEN: "Character \"%s\" deleted",
-	},
+
+		LangEN: "Character \"%s\" deleted"},
 	"agent.worldview_created": {
-		LangZH: "世界观条目「%s」创建成功 (ID: %s)",
-		LangEN: "Worldview entry \"%s\" created (ID: %s)",
-	},
+
+		LangEN: "Worldview entry \"%s\" created (ID: %s)"},
 	"agent.worldview_updated": {
-		LangZH: "世界观条目「%s」已更新",
-		LangEN: "Worldview entry \"%s\" updated",
-	},
+
+		LangEN: "Worldview entry \"%s\" updated"},
 	"agent.worldview_deleted": {
-		LangZH: "世界观条目「%s」已删除",
-		LangEN: "Worldview entry \"%s\" deleted",
-	},
+
+		LangEN: "Worldview entry \"%s\" deleted"},
 	"agent.config_saved_reconciling": {
-		LangZH: "故事配置已保存，正在自动协调已有内容...",
-		LangEN: "Story config saved — reconciling existing content...",
-	},
+
+		LangEN: "Story config saved — reconciling existing content..."},
 	"agent.config_saved": {
-		LangZH: "故事配置已保存",
-		LangEN: "Story config saved",
-	},
+
+		LangEN: "Story config saved"},
 	"agent.outline_task_started": {
-		LangZH: "大纲生成任务已启动，请等待完成。",
-		LangEN: "Outline generation started — please wait.",
-	},
+
+		LangEN: "Outline generation started — please wait."},
 	"agent.outline_confirmed": {
-		LangZH: "大纲已确认，现在进入写作阶段。",
-		LangEN: "Outline confirmed — entering writing phase.",
-	},
+
+		LangEN: "Outline confirmed — entering writing phase."},
 	"agent.outline_revise_started": {
-		LangZH: "大纲修订任务已启动，请等待完成。",
-		LangEN: "Outline revision started — please wait.",
-	},
+
+		LangEN: "Outline revision started — please wait."},
 	"agent.outline_deleted": {
-		LangZH: "大纲已删除。",
-		LangEN: "Outline deleted.",
-	},
+
+		LangEN: "Outline deleted."},
 	"agent.chapter_outline_updated": {
-		LangZH: "第 %d 章大纲已更新。",
-		LangEN: "Chapter %d outline updated.",
-	},
+
+		LangEN: "Chapter %d outline updated."},
 	"agent.chapter_task_started": {
-		LangZH: "第 %d 章生成任务已启动，请等待完成。",
-		LangEN: "Chapter %d generation started — please wait.",
-	},
+
+		LangEN: "Chapter %d generation started — please wait."},
 	"agent.chapter_confirmed": {
-		LangZH: "第 %d 章《%s》已确认。",
-		LangEN: "Chapter %d \"%s\" confirmed.",
-	},
+
+		LangEN: "Chapter %d \"%s\" confirmed."},
 	"agent.chapter_revise_started": {
-		LangZH: "第 %d 章修订任务已启动（仅修改该章，不影响其他章节），请等待完成。",
-		LangEN: "Chapter %d revision started (this chapter only) — please wait.",
-	},
+
+		LangEN: "Chapter %d revision started (this chapter only) — please wait."},
 	"agent.chapter_deleted": {
-		LangZH: "已删除第 %d 章。",
-		LangEN: "Deleted chapter %d.",
-	},
+
+		LangEN: "Deleted chapter %d."},
 	"agent.chapter_content_edited": {
-		LangZH: "第 %d 章正文已编辑（操作: %s，共 %d 行）。",
-		LangEN: "Chapter %d content edited (op: %s, %d lines total).",
-	},
+
+		LangEN: "Chapter %d content edited (op: %s, %d lines total)."},
 	"agent.chapter_edit_op_required": {
-		LangZH: "缺少 operation 参数，必须为 replace_lines / replace_text / insert_after_line / append 之一",
-		LangEN: "Missing operation parameter; must be one of: replace_lines / replace_text / insert_after_line / append",
-	},
+
+		LangEN: "Missing operation parameter; must be one of: replace_lines / replace_text / insert_after_line / append"},
 	"agent.chapter_edit_text_required": {
-		LangZH: "new_text 不能为空",
-		LangEN: "new_text must not be empty",
-	},
+
+		LangEN: "new_text must not be empty"},
 	"agent.chapters_bulk_delete_confirm": {
-		LangZH: "⚠️ 操作未执行：这将永久删除第 %d 章到末尾共 %d 章的全部内容。请先向用户复述此影响范围并获得明确同意，确认后携带 confirm=true 重新调用。如果用户的本意是修改章节内容，请改用 revise_chapter。",
-		LangEN: "⚠️ Not executed: this would permanently delete chapters %d through end (%d chapters). Restate the impact and get consent, then retry with confirm=true. To edit content, use revise_chapter.",
-	},
+
+		LangEN: "⚠️ Not executed: this would permanently delete chapters %d through end (%d chapters). Restate the impact and get consent, then retry with confirm=true. To edit content, use revise_chapter."},
 	"agent.chapters_deleted_from": {
-		LangZH: "已从第 %d 章删除到末尾，共删除 %d 章。",
-		LangEN: "Deleted from chapter %d to end (%d chapters).",
-	},
+
+		LangEN: "Deleted from chapter %d to end (%d chapters)."},
 	"agent.organization_created": {
-		LangZH: "组织「%s」创建成功 (ID: %s)",
-		LangEN: "Organization \"%s\" created (ID: %s)",
-	},
+
+		LangEN: "Organization \"%s\" created (ID: %s)"},
 	"agent.organization_updated": {
-		LangZH: "组织「%s」已更新",
-		LangEN: "Organization \"%s\" updated",
-	},
+
+		LangEN: "Organization \"%s\" updated"},
 	"agent.organization_deleted": {
-		LangZH: "组织「%s」已删除",
-		LangEN: "Organization \"%s\" deleted",
-	},
+
+		LangEN: "Organization \"%s\" deleted"},
 	"agent.organization_not_found": {
-		LangZH: "未找到组织: %s",
-		LangEN: "Organization not found: %s",
-	},
+
+		LangEN: "Organization not found: %s"},
 	"agent.relation_created": {
-		LangZH: "关系创建成功 (ID: %s)",
-		LangEN: "Relation created (ID: %s)",
-	},
+
+		LangEN: "Relation created (ID: %s)"},
 	"agent.relation_updated": {
-		LangZH: "关系已更新 (ID: %s)",
-		LangEN: "Relation updated (ID: %s)",
-	},
+
+		LangEN: "Relation updated (ID: %s)"},
 	"agent.relation_deleted": {
-		LangZH: "关系已删除",
-		LangEN: "Relation deleted",
-	},
+
+		LangEN: "Relation deleted"},
 	"agent.relation_not_found": {
-		LangZH: "未找到关系: %s",
-		LangEN: "Relation not found: %s",
-	},
+
+		LangEN: "Relation not found: %s"},
 	"agent.foreshadow_suggest_started": {
-		LangZH: "伏笔建议生成任务已启动，请等待完成。",
-		LangEN: "Foreshadow suggestion task started — please wait.",
-	},
+
+		LangEN: "Foreshadow suggestion task started — please wait."},
 	"agent.foreshadow_created": {
-		LangZH: "伏笔「%s」创建成功 (ID: %d)",
-		LangEN: "Foreshadow \"%s\" created (ID: %d)",
-	},
+
+		LangEN: "Foreshadow \"%s\" created (ID: %d)"},
 	"agent.foreshadow_updated": {
-		LangZH: "伏笔「%s」已更新",
-		LangEN: "Foreshadow \"%s\" updated",
-	},
+
+		LangEN: "Foreshadow \"%s\" updated"},
 	"agent.foreshadow_deleted": {
-		LangZH: "伏笔「%s」已删除",
-		LangEN: "Foreshadow \"%s\" deleted",
-	},
+
+		LangEN: "Foreshadow \"%s\" deleted"},
 	"agent.foreshadow_not_found": {
-		LangZH: "伏笔 %d 不存在",
-		LangEN: "Foreshadow %d not found",
-	},
+
+		LangEN: "Foreshadow %d not found"},
 	"agent.skill_toggled": {
-		LangZH: "技能「%s」已%s",
-		LangEN: "Skill \"%s\" %s",
-	},
+
+		LangEN: "Skill \"%s\" %s"},
 	"agent.progress_reset": {
-		LangZH: "进度已重置。",
-		LangEN: "Progress reset.",
-	},
-}
+
+		LangEN: "Progress reset."}}

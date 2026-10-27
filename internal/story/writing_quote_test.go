@@ -9,7 +9,7 @@ import (
 )
 
 func TestRevisionCustomTemplatePreservesAuthorFeedback(t *testing.T) {
-	for _, lang := range []string{"zh", "en"} {
+	for _, lang := range []string{"en"} {
 		for _, quote := range []bool{false, true} {
 			cfg := config.DefaultConfigForLang(lang)
 			cfg.Prompts.ChapterRevision = "Custom revision"

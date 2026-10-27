@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"reflect"
+	"regexp"
 	"showmethestory/internal/config"
 	"showmethestory/internal/i18n"
 	"showmethestory/internal/llm"
@@ -48,17 +49,40 @@ func boundedHistoryFallback(parts []string, limit int) string {
 	if len(parts) == 0 || limit <= 0 {
 		return ""
 	}
-	per := max(16, limit/len(parts))
-	var out strings.Builder
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if runes := []rune(part); len(runes) > per {
+	// Reserve most of the budget for the newest parts (the ones closest to
+	// the chapter being written). The old proportional scheme gave every
+	// part the same tiny slice once there were many chapters, truncating
+	// recent summaries mid-sentence and losing key facts. If the whole set
+	// already fits, nothing is shortened at all.
+	const minPerPart = 240
+	kept := map[int]string{}
+	used := 0
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := strings.TrimSpace(parts[i])
+		if part == "" {
+			continue
+		}
+		runes := []rune(part)
+		remaining := limit - used
+		if remaining < minPerPart {
+			break // no meaningful room left; older parts are dropped whole
+		}
+		per := max(minPerPart, remaining*3/5)
+		if len(runes) > per {
 			part = string(runes[:per])
 		}
-		out.WriteString(part)
-		out.WriteByte('\n')
+		kept[i] = part
+		used += len([]rune(part)) + 1
 	}
-	return truncateRunesExact(strings.TrimSpace(out.String()), limit)
+	// Reassemble in the original chronological order (parts were consumed
+	// newest-first to prioritise their budget).
+	ordered := make([]string, 0, len(kept))
+	for i := range parts {
+		if p, ok := kept[i]; ok {
+			ordered = append(ordered, p)
+		}
+	}
+	return truncateRunesExact(strings.Join(ordered, "\n"), limit)
 }
 
 func compressHistory(ctx context.Context, api *config.APIConfig, cfg *config.Config, parts []string, limit int) (string, bool, error) {
@@ -85,6 +109,40 @@ func compressHistory(ctx context.Context, api *config.APIConfig, cfg *config.Con
 		return fallback, true, nil
 	}
 	return truncateRunesExact(strings.TrimSpace(result), limit), false, nil
+}
+
+// checkpointThreadRe extracts the per-storyline state block from a compressed
+// history response. The HistoryCompression prompt asks for a final section
+// "THREADS:" with one "- <hilo>: <estado>" line per open storyline; older or
+// non-conforming responses simply lack the section and yield no threads.
+var checkpointThreadRe = regexp.MustCompile(`(?im)^\s*THREADS:\s*$`)
+
+func splitCheckpointThreads(compressed string) (summary string, threads map[string]string) {
+	idx := checkpointThreadRe.FindStringIndex(compressed)
+	if idx == nil {
+		return compressed, nil
+	}
+	summary = strings.TrimSpace(compressed[:idx[0]])
+	body := compressed[idx[1]:]
+	threads = map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+		if line == "" {
+			continue
+		}
+		name, state, found := strings.Cut(line, ":")
+		if !found {
+			name, state, found = strings.Cut(line, "：")
+		}
+		if !found || strings.TrimSpace(name) == "" || strings.TrimSpace(state) == "" {
+			continue
+		}
+		threads[strings.TrimSpace(name)] = strings.TrimSpace(state)
+	}
+	if len(threads) == 0 {
+		return compressed, nil
+	}
+	return summary, threads
 }
 
 // EnsureNarrativeCheckpoints creates 20-chapter cold-history summaries and
@@ -185,8 +243,16 @@ func checkpointFor(ctx context.Context, api *config.APIConfig, cfg *config.Confi
 	if cp, ok := old[key]; ok && !cp.Degraded && cp.SourceHash == hash && strings.TrimSpace(cp.Summary) != "" {
 		return cp, nil
 	}
-	summary, degraded, err := compressHistory(ctx, api, cfg, parts, limit)
-	return NarrativeCheckpoint{StartChapter: start, EndChapter: end, Level: level, SourceHash: hash, Summary: summary, Degraded: degraded}, err
+	raw, degraded, err := compressHistory(ctx, api, cfg, parts, limit)
+	summary, threads := raw, map[string]string(nil)
+	if !degraded {
+		summary, threads = splitCheckpointThreads(raw)
+		if strings.TrimSpace(summary) == "" {
+			summary = raw
+			threads = nil
+		}
+	}
+	return NarrativeCheckpoint{StartChapter: start, EndChapter: end, Level: level, SourceHash: hash, Summary: summary, Threads: threads, Degraded: degraded}, err
 }
 
 func checkpointCover(state *Progress, beforeChapter int) []NarrativeCheckpoint {
@@ -217,12 +283,33 @@ func checkpointCover(state *Progress, beforeChapter int) []NarrativeCheckpoint {
 }
 
 func formatCheckpointHistory(state *Progress, beforeChapter, limit int, lang string) string {
+	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
 	parts := []string{}
 	for _, cp := range checkpointCover(state, beforeChapter) {
-		if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		if en {
 			parts = append(parts, fmt.Sprintf("[Compressed history, chapters %d-%d] %s", cp.StartChapter, cp.EndChapter, cp.Summary))
 		} else {
-			parts = append(parts, fmt.Sprintf("【压缩历史：第%d-%d章】%s", cp.StartChapter, cp.EndChapter, cp.Summary))
+			parts = append(parts, fmt.Sprintf("[Historia comprimida, capítulos %d-%d] %s", cp.StartChapter, cp.EndChapter, cp.Summary))
+		}
+		// Per-storyline state: a blended recap tells the model what happened in
+		// a chapter range, but not where each open thread currently stands.
+		// Render the newest checkpoint's threads as explicit thread-state lines.
+		if len(cp.Threads) > 0 {
+			names := make([]string, 0, len(cp.Threads))
+			for name := range cp.Threads {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			var sb strings.Builder
+			if en {
+				sb.WriteString(fmt.Sprintf("[Thread states at end of chapter %d]\n", cp.EndChapter))
+			} else {
+				sb.WriteString(fmt.Sprintf("[Estado de los hilos al final del capítulo %d]\n", cp.EndChapter))
+			}
+			for _, name := range names {
+				sb.WriteString("- " + name + ": " + cp.Threads[name] + "\n")
+			}
+			parts = append(parts, strings.TrimRight(sb.String(), "\n"))
 		}
 	}
 	return boundedHistoryFallback(parts, limit)

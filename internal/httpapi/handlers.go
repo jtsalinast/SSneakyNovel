@@ -17,6 +17,7 @@ import (
 	"showmethestory/internal/prose"
 	"showmethestory/internal/sse"
 	"showmethestory/internal/story"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,17 +50,19 @@ type Handlers struct {
 	taskMu             sync.Mutex
 	taskRunning        bool
 	activeWork         int
+	stuckSince         time.Time // first moment reconcileTaskState saw counters claim work while the task stack is empty; zero otherwise
 	taskCtx            context.Context
 	generationID       uint64 // bumped on every task start/stop; see tryStartTask
 	taskCancel         context.CancelFunc
+	manualStop         bool // set by PostTaskStop; distinguishes a user Stop from the MaxTaskDuration deadline (see TaskStoppedByUser)
 	taskTokens         *llm.TaskTokenUsage
 	knowledgeAtStart   string
 	forceKnowledgeSync bool
 	skipKnowledgeSync  bool
-	autoConfirm        bool // 自动确认模式：章节生成完成后自动确认并继续生成下一章
+	autoConfirm        bool // modo auto: avanza al siguiente capítulo tras aceptar uno
 
-	lastChatMessage   string             // 缓存最后发送的聊天消息，用于重试
-	lastReconcileBody config.StoryConfig // 缓存最后的设定协调请求
+	lastChatMessage   string             // guarda el último mensaje de chat enviado, para reintentos
+	lastReconcileBody config.StoryConfig // guarda la última solicitud recibida
 }
 
 func NewHandlers(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.LogBroadcaster, progDir string, version string) *Handlers {
@@ -100,7 +103,7 @@ func (h *Handlers) switchProject(name string) error {
 
 	projectDir := filepath.Join(h.progDir, "storys", name)
 	if info, err := os.Stat(projectDir); err != nil || !info.IsDir() {
-		return fmt.Errorf("项目目录不存在: %s", name)
+		return fmt.Errorf("archivo no encontrado: %s", name)
 	}
 	if err := ensureProjectCompatible(projectDir); err != nil {
 		return err
@@ -114,12 +117,12 @@ func (h *Handlers) switchProject(name string) error {
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("加载项目配置失败: %w", err)
+		return fmt.Errorf("itemplace: %w", err)
 	}
 
 	state, err := story.LoadProgress(progressPath)
 	if err != nil {
-		return fmt.Errorf("加载项目进度失败: %w", err)
+		return fmt.Errorf("leer archivo: %w", err)
 	}
 	if state == nil {
 		state = &story.Progress{Phase: "writing", BookStatus: story.BookStatusActive}
@@ -127,7 +130,7 @@ func (h *Handlers) switchProject(name string) error {
 
 	settings, err := story.LoadProjectSettings(settingsPath)
 	if err != nil {
-		return fmt.Errorf("加载项目设定失败: %w", err)
+		return fmt.Errorf("item: %w", err)
 	}
 
 	skills := story.LoadAllSkills(cfg, h.progDir)
@@ -135,7 +138,7 @@ func (h *Handlers) switchProject(name string) error {
 	postprocessPath := filepath.Join(projectDir, "postprocess.json")
 	postprocess, err := story.LoadPostProcess(postprocessPath)
 	if err != nil {
-		return fmt.Errorf("加载完稿校订状态失败: %w", err)
+		return fmt.Errorf("posture: %w", err)
 	}
 
 	h.projectName = name
@@ -150,7 +153,7 @@ func (h *Handlers) switchProject(name string) error {
 	h.postprocessPath = postprocessPath
 	h.postprocess = postprocess
 
-	fmt.Printf(" [系统] 已切换到项目: %s (%s)\n", name, projectDir)
+	fmt.Printf(" [system] Switched to project: %s (%s)\n", name, projectDir)
 	return nil
 }
 
@@ -189,12 +192,64 @@ func (h *Handlers) writeErrorReq(w http.ResponseWriter, r *http.Request, code in
 }
 
 func (h *Handlers) writeJSON(w http.ResponseWriter, code int, v interface{}) {
+	// Encode the payload to a buffer FIRST. The previous streaming encoder
+	// wrote bytes straight to the socket while ranging over live state maps
+	// (e.g. scene_plan_analyses); if a background task mutated one of those
+	// maps mid-encode the resulting concurrent map read/write is an
+	// unrecoverable runtime throw that kills the whole server process — the
+	// browser then saw exactly this symptom: GETs keep answering for a moment,
+	// every button stops doing anything, and chapter loads hang forever.
+	// Buffering keeps the socket pristine until the payload is complete, so a
+	// marshal error (or a panic caught by the recovery middleware) can still be
+	// reported as a clean 500 instead of a truncated body that leaves frontend
+	// spinners waiting on a response that will never settle.
+	buf, err := json.Marshal(v)
+	if err != nil {
+		buf = []byte(`{"error":"json_encode_failed"}`)
+		code = http.StatusInternalServerError
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
+	w.Write(buf)
+}
+
+// newTaskTokenTracker builds the fresh per-task tracker and publishes it under
+// taskMu. tryStartTask calls it *before* acquiring its own lock (Go mutexes are
+// not reentrant), so the returned tracker is what /api/status snapshots and
+// what every context derived from h.taskCtx accumulates into.
+func (h *Handlers) newTaskTokenTracker() *llm.TaskTokenUsage {
+	usage := llm.NewTaskTokenUsage(h.logger)
+	h.taskMu.Lock()
+	h.taskTokens = usage
+	h.taskMu.Unlock()
+	return usage
+}
+
+// taskCeiling maps apiCfg.TaskDurationMinutes to the wall-clock ceiling handed
+// to llm.NewTaskContext. Unset/0 keeps the historical 30-minute default; a
+// negative value returns 0, which NewTaskContext interprets as "no deadline"
+// (the task runs until it completes or the user presses Stop). Callers hold
+// taskMu (tryStartTask), so read h.apiCfg directly — PutAPIConfig swaps the
+// pointer under the same mutex and refuses while a task runs.
+func (h *Handlers) taskCeiling() time.Duration {
+	minutes := 0
+	if h.apiCfg != nil {
+		minutes = h.apiCfg.TaskDurationMinutes
+	}
+	if minutes < 0 {
+		return 0 // no ceiling
+	}
+	if minutes == 0 {
+		return llm.MaxTaskDuration
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 func (h *Handlers) tryStartTask() bool {
+	// Fresh tracker first (its own short taskMu section): the previous run's
+	// tracker is orphaned once its context is cancelled, so /api/status must
+	// snapshot the new one.
+	tokens := h.newTaskTokenTracker()
 	h.taskMu.Lock()
 	defer h.taskMu.Unlock()
 	if h.taskRunning || h.activeWork > 0 {
@@ -206,19 +261,43 @@ func (h *Handlers) tryStartTask() bool {
 	h.forceKnowledgeSync = false
 	h.skipKnowledgeSync = false
 	h.activeWork = 1
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx, h.taskTokens = llm.WithTaskTokens(ctx, h.logger)
-	h.taskCtx = ctx
+	// Per-task wall-clock ceiling (api.json task_duration_minutes): the old
+	// hard 30-minute deadline aborted long chapter batches mid-flight even
+	// though every LLM call was healthy. <=0 keeps the llm.MaxTaskDuration
+	// default; a negative value disables the ceiling entirely (run until done
+	// or manual Stop). Per-call HTTP timeouts still bound each request either
+	// way, so a hung endpoint cannot live forever. Manual stop via
+	// taskCancel still works as before.
+	ctx, cancel := llm.NewTaskContext(context.Background(), h.taskCeiling())
+	// Publish h.taskCtx WITH the tracker already attached: goroutines snapshot
+	// h.taskCtx right after tryStartTask returns, and any LLM call made through a
+	// context lacking a TaskTokenUsage reports no counts at all — the frontend
+	// badge stayed empty for those generations.
+	h.taskCtx = llm.AttachTaskTokens(ctx, tokens)
 	h.taskCancel = cancel
+	h.manualStop = false
 	h.generationID++
 	devlog.Log("tryStartTask ok activeWork=1")
 	return true
 }
 
+// TaskStoppedByUser reports whether the CURRENT task's context was cancelled by
+// an explicit Stop (PostTaskStop) rather than by hitting MaxTaskDuration. The
+// two conditions used to be indistinguishable at the story layer — both surface
+// as a done context with DeadlineExceeded/Canceled cause — which made every
+// deadline abort look like a user cancellation in the log ("Chapter writing
+// aborted" even when it was really the 30-min ceiling). Handlers classify
+// errors with this instead of relying on context.Cause alone.
+func (h *Handlers) TaskStoppedByUser() bool {
+	h.taskMu.Lock()
+	defer h.taskMu.Unlock()
+	return h.manualStop
+}
+
 // generationID identifies the current task run. endTask bumps it so any
 // background goroutine that captured an older id knows its context was
 // cancelled by task teardown (normal completion or stop) rather than by a
-// real error — used to suppress spurious "API 调用失败: context canceled"
+// real error — used to suppress spurious "API use: context canceled"
 // logs when a chat turn's lock is released while child work finished first.
 
 func (h *Handlers) endTask() {
@@ -251,7 +330,7 @@ func (h *Handlers) endTask() {
 	devlog.Log("endTask activeWork=%d running=%v cancelled=%v", aw, running, cancelled)
 }
 
-// startChildWork 增加活跃工作计数（用于 Agent 子任务），不创建新 context
+// startChildWork alivemakecountnumber(usein Agent ), not new context
 func (h *Handlers) startChildWork() bool {
 	h.taskMu.Lock()
 	defer h.taskMu.Unlock()
@@ -262,6 +341,29 @@ func (h *Handlers) startChildWork() bool {
 	h.activeWork++
 	devlog.Log("startChildWork ok activeWork=%d", h.activeWork)
 	return true
+}
+
+// currentTaskTokens returns the tracker owned by the currently running task
+// (set by tryStartTask). Child work — e.g. a detached section generation
+// started from a chat turn — must accumulate its LLM tokens into this same
+// tracker: /api/status snapshots it and the SSE token_usage events feed the
+// frontend badge from it. A child that builds its own fresh tracker instead
+// makes the badge show nothing even though generation is running fine.
+func (h *Handlers) currentTaskTokens() *llm.TaskTokenUsage {
+	h.taskMu.Lock()
+	defer h.taskMu.Unlock()
+	return h.taskTokens
+}
+
+// ensureTaskTokens returns ctx with a token tracker attached, re-using the
+// current task's tracker when one exists. Used as a safety net by detached
+// runners so their LLM calls are always counted somewhere visible.
+func (h *Handlers) ensureTaskTokens(ctx context.Context) context.Context {
+	if llm.TaskTokensFromContext(ctx) != nil {
+		return ctx
+	}
+	usage := h.currentTaskTokens()
+	return llm.AttachTaskTokens(ctx, usage)
 }
 
 func (h *Handlers) isTaskRunning() bool {
@@ -276,9 +378,128 @@ func (h *Handlers) activeWorkCount() int {
 	return h.activeWork
 }
 
-// rejectIfTaskRunning 在 AI 任务运行期间拒绝编辑类请求，防止意外提交修改。
-// 返回 true 表示已写入 409 响应，调用方应直接 return。
+// reconcileTaskState is the server-side self-heal for the task bookkeeping.
+// Every LLM handler pairs tryStartTask() with `defer/go defer h.endTask()` and
+// logger.TaskStart/TaskEnd, but a panic inside one of those bodies skips both
+// endTask AND TaskEnd — leaving activeWork > 0 forever while the broadcaster's
+// task stack is empty. From then on every action POST is rejected with 409
+// ("task_running_wait") even though nothing runs: the UI stays clickable but
+// no button does anything anymore. /api/status is polled by the frontend
+// whenever it believes a task runs, so checking the invariant there (active
+// work claimed but zero live tasks on the broadcaster) heals the stuck counter
+// without a restart. The 3s grace keeps a legitimate in-flight start (the
+// window between tryStartTask and the goroutine's TaskStart emit) from being
+// mistaken for a leak.
+func (h *Handlers) reconcileTaskState() {
+	if !h.isTaskRunning() {
+		return
+	}
+	// A live task is one the broadcaster's TaskStart/TaskEnd stack still knows
+	// about. When the stack is empty AND the task context is alive, work may
+	// still be legitimately running: background bodies launched with
+	// context.Background() (scene-plan analysis, act critique) never observe
+	// the ceiling firing, and non-LLM phases (knowledge sync after endTask,
+	// plain file writes guarded by rejectIfTaskRunning) emit no task_start at
+	// all. Healing instantly on an empty stack would cancel those in-flight
+	// operations mid-write — worse than the stuck counter it tries to fix. So
+	// we only heal on proven signatures:
+	//   1. the task context is done (ceiling fired / Stop requested) yet
+	//      endTask never ran to reset the counters; or
+	//   2. the counters claim work while the task stack has been empty for
+	//      longer than a grace window — the fingerprint of a panicked or lost
+	//      background body whose deferred TaskEnd/endTask were skipped (the
+	//      "UI stays clickable but every POST answers 409 forever" symptom).
+	h.taskMu.Lock()
+	if h.taskCtx == nil {
+		h.taskCtx = context.Background()
+	}
+	cur := h.logger.CurrentTask()
+	ctxDone := h.taskCtx.Err() != nil
+	switch {
+	case cur != "":
+		// Task name still stacked: if its context is alive this is a normal
+		// running task — leave it alone. If the context finished, the goroutine
+		// may be unwinding right now; give it until the grace window expires.
+		if !ctxDone || time.Since(h.taskCtxDeadline()) < 3*time.Second {
+			h.stuckSince = time.Time{}
+			h.taskMu.Unlock()
+			return
+		}
+	case !ctxDone:
+		// Counters claim work, stack is empty, context is alive: could be a
+		// legitimate non-emitting phase. Start/keep the grace timer and only
+		// heal if this contradiction persists past it.
+		if h.stuckSince.IsZero() {
+			h.stuckSince = time.Now()
+			h.taskMu.Unlock()
+			return
+		}
+		if time.Since(h.stuckSince) < 5*time.Second {
+			h.taskMu.Unlock()
+			return
+		}
+	default:
+		// ctxDone with an empty stack: endTask was definitively skipped.
+	}
+	h.stuckSince = time.Time{}
+	aw := h.activeWork
+	h.activeWork = 0
+	h.taskRunning = false
+	cancelled := false
+	if h.taskCancel != nil {
+		h.taskCancel()
+		h.taskCancel = nil
+		cancelled = true
+	}
+	h.generationID++
+	h.taskMu.Unlock()
+	devlog.Log("reconcileTaskState healed stuck counters activeWork=%d cancelled=%v", aw, cancelled)
+	h.logger.Emit("task_end", map[string]interface{}{"task": "reconciled", "success": false})
+}
+
+// taskContextDone reports whether the current task's context has already been
+// cancelled or hit its wall-clock ceiling while the counters still claim work.
+func (h *Handlers) taskContextDone() bool {
+	h.taskMu.Lock()
+	ctx := h.taskCtx
+	h.taskMu.Unlock()
+	return ctx != nil && ctx.Err() != nil
+}
+
+// taskCtxDeadline reports when the current task's wall-clock ceiling fires.
+// A context without a deadline (ceiling disabled) reads as "started long ago"
+// so the reconciliation grace never blocks. Callers must hold taskMu.
+func (h *Handlers) taskCtxDeadline() time.Time {
+	if h.taskCtx == nil {
+		return time.Now().Add(-time.Hour)
+	}
+	if d, ok := h.taskCtx.Deadline(); ok {
+		// Deadline is absolute; approximate the start instant from the remaining
+		// budget only to detect FRESH tasks: any task whose deadline is more than
+		// its full ceiling away just started. Simpler and safe: treat "no way to
+		// know" as old (heal allowed), since a fresh task always has CurrentTask
+		// set within milliseconds anyway.
+		return d.Add(-h.taskCeilingOrDefault())
+	}
+	return time.Now().Add(-time.Hour)
+}
+
+func (h *Handlers) taskCeilingOrDefault() time.Duration {
+	if c := h.taskCeiling(); c > 0 {
+		return c
+	}
+	return llm.MaxTaskDuration
+}
+
+// rejectIfTaskRunning in AI travelexpectcompileclassplease, defendintentoutsideinteract.
+// return true tablealreadywriteenter 409 noiseshould, usesquareshouldconnect return.
 func (h *Handlers) rejectIfTaskRunning(w http.ResponseWriter, r *http.Request) bool {
+	// Reconcile first: if a background body died before endTask, the counters
+	// stay stuck and EVERY guarded write would 409 forever — exactly the
+	// "the UI is clickable but no button does anything" symptom. GET-only
+	// endpoints keep answering during the stuck window, so this is often the
+	// only request shape that can still reach the heal logic.
+	h.reconcileTaskState()
 	if h.isTaskRunning() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_locked")
 		return true
@@ -307,7 +528,7 @@ func (h *Handlers) GetAutoConfirm(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]bool{"enabled": h.isAutoConfirmOn()})
 }
 
-// PutAutoConfirm 切换自动确认模式，任务运行期间也可随时开关。
+// PutAutoConfirm cutmove, travelexpect-toocanalong withhouropenclose.
 func (h *Handlers) PutAutoConfirm(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
@@ -337,6 +558,7 @@ func (h *Handlers) PostTaskStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.taskCancel != nil {
+		h.manualStop = true
 		h.taskCancel()
 	}
 	devlog.Log("task_stop requested activeWork=%d current=%s", h.activeWork, h.logger.CurrentTask())
@@ -408,7 +630,7 @@ func (h *Handlers) PostAPITest(w http.ResponseWriter, r *http.Request) {
 
 	result := map[string]interface{}{
 		"success": true,
-		"message": "连接成功",
+		"message": "connectconnect",
 		"model":   testCfg.Model,
 	}
 	if len(resp) > 100 {
@@ -537,7 +759,7 @@ func (h *Handlers) DeletePendingConfigChanges(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handlers) GetProgress(w http.ResponseWriter, r *http.Request) {
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 // GetChapterContent returns one chapter with full prose content.
@@ -554,6 +776,32 @@ func (h *Handlers) GetChapterContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch := h.state.Chapters[idx]
+	// Self-heal editor bookkeeping (blocks + scene/trope spans + fallback plan)
+	// for chapters written before the chips UI landed. This is exactly what the
+	// manual "Refresh UI" button does, but it runs lazily on read so a plain F5
+	// shows every scene/subscene chip without pressing the button first. The
+	// repair is idempotent and cheap; it only re-tiles when the recorded spans
+	// are stale (interfaceSyncedAt==0 marks never-repaired chapters).
+	if ch.Content != "" && ch.InterfaceSyncedAt == 0 {
+		cch := &h.state.Chapters[idx]
+		before := *cch
+		before.Blocks = append([]story.Block(nil), cch.Blocks...)
+		story.ResyncChapterInterface(cch)
+		if !sameBlocks(before.Blocks, cch.Blocks) || before.NextBlockID != cch.NextBlockID {
+			// Block IDs/boundaries changed: persist so the next load is stable.
+			if err := story.SaveProgress(h.progressPath, h.state); err != nil {
+				h.state.Chapters[idx] = before
+				cch = &h.state.Chapters[idx]
+			}
+		} else {
+			// Prose already tiles cleanly: keep the previous block IDs intact and
+			// only persist the repaired scene-plan metadata.
+			cch.Blocks = before.Blocks
+			cch.NextBlockID = before.NextBlockID
+			_ = story.SaveProgress(h.progressPath, h.state)
+		}
+		ch = *cch
+	}
 	if ch.Content != "" {
 		ch.WordCount = prose.CountProseUnits(ch.Content)
 		ch.ContentRev = fmt.Sprintf("%x", story.HashContent(ch.Content))
@@ -561,7 +809,49 @@ func (h *Handlers) GetChapterContent(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, ch)
 }
 
-// —— story.Block 编辑 ——
+// sameBlocks reports whether two block lists are identical in ID, boundaries
+// and text (used by the lazy resync in GetChapterContent to decide whether the
+// re-tile actually changed anything worth persisting differently).
+func sameBlocks(a, b []story.Block) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Text != b[i].Text || a[i].ScenePos != b[i].ScenePos ||
+			a[i].TropeIndex != b[i].TropeIndex || a[i].TropeCount != b[i].TropeCount {
+			return false
+		}
+	}
+	return true
+}
+
+// GetChapterIVLocator returns the reader-side scene/subscene tiling of one
+// written chapter: units[scenePos][unitIdx] = [paraStart, paraEnd, unitText].
+// The sheet uses it to confine bestseller-critic inline highlights to the
+// targeted subscene's paragraphs (instead of tinting whole scenes when an
+// anchor cannot be located inside a single block). Computed with exactly the
+// same segmentation used when proposals are stamped and after-resync
+// realignment runs, so marks land where Apply would rewrite.
+func (h *Handlers) GetChapterIVLocator(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	numStr := r.PathValue("num")
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num")
+		return
+	}
+	idx := story.FindChapterIdx(h.state, num)
+	if idx < 0 {
+		h.writeErrorReq(w, r, http.StatusNotFound, "chapter_n_not_found", num)
+		return
+	}
+	units := story.ChapterInterventionLocator(h.state, num)
+	h.writeJSON(w, http.StatusOK, map[string]any{"units": units})
+}
+
+// —— story.Block compile ——
 
 // parseChapterBlockIDs extracts {num} and {id} path values.
 func parseChapterBlockIDs(r *http.Request) (num, id int, err error) {
@@ -634,7 +924,15 @@ func (h *Handlers) PutChapterBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.blockEditChapter(w, r, num, func(ch *story.ChapterState) error {
-		return story.UpdateBlock(ch, id, body.Text)
+		if err := story.UpdateBlock(ch, id, body.Text); err != nil {
+			return err
+		}
+		// Surgical repair of a subscene re-derives that chapter's fact/critic
+		// findings roll-up so the colored dots on the blocks reflect the edited
+		// text instead of the stale pre-edit state (the underlying conflict /
+		// analysis records are untouched; only the per-unit mapping is rebuilt).
+		story.RefreshTropeIssuesForChapter(h.state, ch)
+		return nil
 	})
 }
 
@@ -663,14 +961,29 @@ func (h *Handlers) PostChapterBlockInsert(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body struct {
-		AfterID int    `json:"after_id"`
-		Text    string `json:"text"`
+		AfterID  int    `json:"after_id"`
+		BeforeID int    `json:"before_id"`
+		Text     string `json:"text"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "block_text_required")
 		return
 	}
 	h.blockEditChapter(w, r, num, func(ch *story.ChapterState) error {
+		// before_id anchors the new block right BEFORE that block (used by the
+		// "Add subscene before" chip action); after_id keeps the legacy semantics.
+		if body.BeforeID != 0 {
+			i := story.FindBlockIdx(ch, body.BeforeID)
+			if i < 0 {
+				return story.ErrBlockNotFound
+			}
+			anchor := 0 // i==0 -> insert at the very beginning
+			if i > 0 {
+				anchor = ch.Blocks[i-1].ID
+			}
+			_, err := story.InsertBlockAfter(ch, anchor, body.Text)
+			return err
+		}
 		_, err := story.InsertBlockAfter(ch, body.AfterID, body.Text)
 		return err
 	})
@@ -745,10 +1058,6 @@ func (h *Handlers) PostChapterBlockRevise(w http.ResponseWriter, r *http.Request
 
 // GetBookExport streams the whole book as plain text.
 func (h *Handlers) GetBookExport(w http.ResponseWriter, r *http.Request) {
-	lang := i18n.LangZH
-	if h.cfg != nil {
-		lang = i18n.NormalizeLanguage(h.cfg.Language)
-	}
 	title := h.state.Title
 	if h.cfg != nil && h.cfg.Story.Title != "" {
 		title = h.cfg.Story.Title
@@ -759,11 +1068,7 @@ func (h *Handlers) GetBookExport(w http.ResponseWriter, r *http.Request) {
 		if ch.Content == "" {
 			continue
 		}
-		if lang == i18n.LangEN {
-			fmt.Fprintf(w, "\n\n## Chapter %d: %s\n\n%s", ch.Num, ch.Title, ch.Content)
-		} else {
-			fmt.Fprintf(w, "\n\n## 第 %d 章 %s\n\n%s", ch.Num, ch.Title, ch.Content)
-		}
+		fmt.Fprintf(w, "\n\n## Chapter %d: %s\n\n%s", ch.Num, ch.Title, ch.Content)
 	}
 }
 
@@ -779,7 +1084,7 @@ func (h *Handlers) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.state = &story.Progress{Phase: "outline"}
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 func (h *Handlers) PostOutlineConfirm(w http.ResponseWriter, r *http.Request) {
@@ -798,13 +1103,13 @@ func (h *Handlers) PostOutlineConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := story.ConfirmOutlineAction(h.state, h.progressPath); err != nil {
+	if err := story.ConfirmOutlineAction(h.state, h.progressPath, h.cfg.Story); err != nil {
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "outline_confirm_failed", err)
 		return
 	}
 
 	h.logger.SuccessKey("log.outline_confirmed")
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 func (h *Handlers) PostOutlineRevise(w http.ResponseWriter, r *http.Request) {
@@ -882,7 +1187,7 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 		notes := strings.TrimSpace(item.Description)
 		if role := strings.TrimSpace(item.Role); role != "" {
 			if notes != "" {
-				notes += "；"
+				notes += "; "
 			}
 			notes += role
 		}
@@ -890,7 +1195,7 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 			ID:         h.settings.NextCharacterID(),
 			Name:       name,
 			Background: notes,
-			Notes:      fmt.Sprintf("首次登场：第%d章", item.ChapterNum),
+			Notes:      fmt.Sprintf("times: #%dchapter", item.ChapterNum),
 		})
 		existing[name] = true
 	}
@@ -903,12 +1208,21 @@ func (h *Handlers) PostOutlineCharactersConfirm(w http.ResponseWriter, r *http.R
 	if h.state.LastOutlineCharacterReport != nil {
 		h.state.LastOutlineCharacterReport.HasSuggestions = false
 		h.state.LastOutlineCharacterReport.Suggestions = nil
-		h.state.LastOutlineCharacterReport.Summary = "已采纳建议并登记角色"
+		h.state.LastOutlineCharacterReport.Summary = "alreadyandhorn"
 		_ = story.SaveProgress(h.progressPath, h.state)
 	}
 
 	h.logger.SettingsUpdated()
 	h.writeJSON(w, http.StatusOK, h.settings.Characters)
+}
+
+// asScenePlanPending reports whether err is the scene-plan review gate pause.
+func asScenePlanPending(err error) (*story.ScenePlanPendingError, bool) {
+	var spErr *story.ScenePlanPendingError
+	if errors.As(err, &spErr) {
+		return spErr, true
+	}
+	return nil, false
 }
 
 func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
@@ -934,25 +1248,55 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 			err := story.GenerateChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, h.logger)
 
 			if err != nil {
-				if ctx.Err() != nil {
+				// Three distinct outcomes, previously conflated into a single
+				// "Chapter writing cancelled" log that made every stop look like a
+				// user cancel and hid the fact that prose was checkpointed:
+				//  - explicit Stop (taskCtx cancelled): genuine cancellation; any
+				//    finished prose was already checkpointed by the abort helpers.
+				//  - task deadline hit (context.DeadlineExceeded): NOT a user cancel —
+				//    report it as an abort with saved progress.
+				//  - summary-step failure after expensive prose: draft resumable via
+				//    POST /api/chapters/{n}/resume.
+				switch {
+				case h.TaskStoppedByUser():
+					// Explicit Stop pressed by the user — never mislabel it as the
+					// MaxTaskDuration deadline: endTask also cancels the task context on
+					// normal exit, so context.Cause alone cannot tell them apart.
 					h.logger.WarnKey("log.chapter_write_cancelled")
-				} else {
+				case errors.Is(context.Cause(ctx), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded):
+					h.logger.WarnKey("log.chapter_write_aborted_deadline")
+				case story.IsSummaryStepFailed(err):
+					// Draft checkpoint + explanatory warn already logged inside
+					// abortChapterWithDraftCheckpoint; keep the batch stopped but do
+					// not claim the work was lost. The wrapped cause carries the
+					// precise step failure (cancelled/timeout/api_error/…).
+					h.logger.WarnKey("log.chapter_write_aborted", err.Error())
+				case ctx.Err() != nil:
+					h.logger.WarnKey("log.chapter_write_cancelled")
+				default:
 					var wcErr *story.WritingConflictError
 					if errors.As(err, &wcErr) {
 						h.logger.WarnKey("log.chapter_write_conflict_pause")
+					} else if _, ok := asScenePlanPending(err); ok {
+						// Scene-plan review gate: not an error — the plan was
+						// generated and awaits approval (GenerateChapterAction
+						// already logged it and persisted the pause marker in
+						// state.PendingScenePlanChapter). Stop the batch cleanly;
+						// the UI auto-opens the plan editor from progress.
 					} else {
 						h.logger.ErrorKey("log.chapter_write_failed", err)
 					}
 				}
+			} else {
+				h.logger.SuccessKey("log.chapter_write_done", chIdx+1, chTitle)
+			}
+			h.broadcastProgress()
+			if err != nil {
 				h.logger.TaskEnd("chapter_generation", false)
-				h.broadcastProgress()
 				return
 			}
 
-			h.logger.SuccessKey("log.chapter_write_done", chIdx+1, chTitle)
-			h.broadcastProgress()
-
-			// 自动确认模式：自动确认本章并继续生成下一章；关闭开关后在本章结束时停止
+			// move: movethischapterandlifeloweronechapter; closeopencloselaterinthischapterhourstop
 			if !h.isAutoConfirmOn() {
 				break
 			}
@@ -961,6 +1305,12 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			h.logger.SuccessKey("log.chapter_autoconfirmed", chIdx+1, chTitle)
+			// Bestseller act critic: when this confirmed chapter closes a
+			// pre-planning act, queue the act analysis (it only launches if
+			// no other task owns the pipeline; the batch tail retries).
+			if chIdx < len(h.state.Chapters) {
+				h.maybeAnalyzeCompletedAct(h.state.Chapters[chIdx].Num)
+			}
 			if err := story.SyncPendingKnowledge(ctx, h.apiCfg, h.cfg, h.state, h.settings, h.progressPath, h.logger); err != nil {
 				h.logger.WarnKey("log.knowledge_failed", err)
 				if knowledgeSyncMustStop(ctx, err) {
@@ -982,6 +1332,11 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 
 		h.logger.TaskEnd("chapter_generation", success)
 		h.broadcastProgress()
+		// Late trigger for acts whose last chapter was auto-confirmed while
+		// this batch owned the pipeline (maybeAnalyzeCompletedAct deferred).
+		if success {
+			h.maybeAnalyzeCompletedActIfIdle()
+		}
 	}()
 
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
@@ -1030,7 +1385,7 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 		}
 		h.logger.SuccessKey("log.chapter_kept_review", ch.Num)
 		h.broadcastProgress()
-		h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+		h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	case "retry":
 		if h.state.PendingWritingConflict == nil {
 			h.writeErrorReq(w, r, http.StatusBadRequest, "writing_conflict_none")
@@ -1043,6 +1398,155 @@ func (h *Handlers) PostChapterConflictResolve(w http.ResponseWriter, r *http.Req
 		}
 		h.broadcastProgress()
 		h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "retry"})
+	case "revise_from_feedback":
+		if h.state.PendingWritingConflict == nil {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "writing_conflict_none")
+			return
+		}
+		if strings.TrimSpace(h.state.Chapters[h.state.PendingWritingConflict.ChapterIndex].Content) == "" {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "conflict_chapter_no_draft")
+			return
+		}
+		if !h.tryStartTask() {
+			h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+			return
+		}
+		go func() {
+			defer h.endTask()
+			h.logger.TaskStart("chapter_revision")
+			story.RecordReviseAttempt(h.state)
+			ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterRevise, true)
+			err := story.ReviseFromConflictAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, h.logger)
+			if err != nil {
+				var wcErr *story.WritingConflictError
+				switch {
+				case ctx.Err() != nil:
+					h.logger.WarnKey("log.chapter_revise_cancelled")
+				case errors.As(err, &wcErr):
+					// Successor conflict raised: the pass ran to completion, it just
+					// did not clear the checks. preserveSurgicalHistory already carries
+					// the attempt counters; no failure note (nothing errored).
+					h.logger.WarnKey("log.chapter_write_conflict_pause")
+				default:
+					// Hard error (bad config / timeout / provider failure): persist WHY
+					// on a recreated conflict so the panel keeps offering Retry instead
+					// of dying silently.
+					story.RecordConflictFailure(h.state, h.progressPath, "revise", err, h.logger)
+					h.logger.ErrorKey("log.chapter_revise_failed", err)
+				}
+				h.logger.TaskEnd("chapter_revision", false)
+				h.broadcastProgress()
+				return
+			}
+			h.logger.TaskEnd("chapter_revision", true)
+			h.broadcastProgress()
+		}()
+		h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "revising"})
+	case "surgical_trope":
+		// Repair ONLY the subscene owning the first locatable issue — the rest
+		// of the chapter stays untouched. Then re-run the fact-check pass so a
+		// clean draft leaves review-ready state and a still-failing one raises a
+		// fresh conflict with updated targets.
+		c := h.state.PendingWritingConflict
+		if c == nil {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "writing_conflict_none")
+			return
+		}
+		idx := c.ChapterIndex
+		target := [2]int{-1, -1}
+		for _, t := range c.SceneTargets {
+			if t[0] >= 0 {
+				target = t
+				break
+			}
+		}
+		if target[0] < 0 || idx < 0 || idx >= len(h.state.Chapters) ||
+			strings.TrimSpace(h.state.Chapters[idx].Content) == "" {
+			h.writeErrorReq(w, r, http.StatusBadRequest, "conflict_no_surgical_target")
+			return
+		}
+		feedback := strings.TrimSpace(c.Summary)
+		var fbParts []string
+		for i, iss := range c.Issues {
+			if i < len(c.SceneTargets) && c.SceneTargets[i][0] == target[0] && c.SceneTargets[i][1] == target[1] {
+				fbParts = append(fbParts, iss)
+			}
+		}
+		if len(fbParts) == 0 {
+			fbParts = c.Issues
+		}
+		if feedback != "" {
+			fbParts = append([]string{feedback}, fbParts...)
+		}
+		joinedFB := strings.Join(fbParts, "\n")
+		chNum := h.state.Chapters[idx].Num
+		scTitle := ""
+		if plan := h.state.Chapters[idx].ScenePlan; plan != nil && target[0] < len(plan.Scenes) {
+			sc := plan.Scenes[target[0]]
+			scTitle = sc.Title
+			if scTitle == "" {
+				scTitle = sc.Description
+			}
+		}
+		surgicalConflict := c // carried copy: restored on hard failure with counters + WHY
+		h.state.PendingWritingConflict = nil
+		if err := story.SaveProgress(h.progressPath, h.state); err != nil {
+			h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err)
+			return
+		}
+		if !h.tryStartTask() {
+			h.state.PendingWritingConflict = surgicalConflict
+			_ = story.SaveProgress(h.progressPath, h.state)
+			h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+			return
+		}
+		go func() {
+			defer h.endTask()
+			h.logger.TaskStart("chapter_surgical_trope")
+			h.logger.InfoKey("log.surgical_trope_start", chNum, scTitle, target[0]+1, target[1]+1)
+			ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterFactCheck, true)
+			newContent, err := story.SurgicalTropeRepair(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, idx, target[0], target[1], joinedFB, h.settings, h.logger)
+			if err != nil {
+				if ctx.Err() != nil {
+					h.state.PendingWritingConflict = surgicalConflict
+					_ = story.SaveProgress(h.progressPath, h.state)
+					h.logger.WarnKey("log.chapter_write_cancelled")
+				} else {
+					// Hard failure: restore the conflict (with attempt counters + WHY)
+					// so the panel keeps offering Retry / Rewrite instead of a dead end.
+					story.RecordConflictFailure(h.state, h.progressPath, "surgical", err, h.logger)
+					h.logger.ErrorKey("log.surgical_trope_failed", err)
+				}
+				h.logger.TaskEnd("chapter_surgical_trope", false)
+				h.broadcastProgress()
+				return
+			}
+			_ = newContent
+			err = story.FactCheckChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, chNum, h.logger)
+			if err != nil {
+				var wcErr *story.WritingConflictError
+				switch {
+				case errors.As(err, &wcErr):
+					// Re-check still failing: FactCheckChapterAction raised the successor
+					// conflict itself; preserveSurgicalHistory carried the counters over.
+					h.logger.WarnKey("log.chapter_write_conflict_pause")
+				case ctx.Err() != nil:
+					h.state.PendingWritingConflict = surgicalConflict
+					_ = story.SaveProgress(h.progressPath, h.state)
+					h.logger.WarnKey("log.chapter_write_cancelled")
+				default:
+					story.RecordConflictFailure(h.state, h.progressPath, "surgical", err, h.logger)
+					h.logger.ErrorKey("log.chapter_factcheck_failed", err)
+				}
+				h.logger.TaskEnd("chapter_surgical_trope", false)
+				h.broadcastProgress()
+				return
+			}
+			h.logger.SuccessKey("log.surgical_trope_done", chNum)
+			h.logger.TaskEnd("chapter_surgical_trope", true)
+			h.broadcastProgress()
+		}()
+		h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "surgical_repair"})
 	default:
 		h.writeErrorReq(w, r, http.StatusBadRequest, "unsupported_action", body.Action)
 	}
@@ -1092,8 +1596,157 @@ func (h *Handlers) PostChapterConfirm(w http.ResponseWriter, r *http.Request) {
 
 	ch := h.state.Chapters[h.state.CurrentChapterIndex-1]
 	h.logger.SuccessKey("log.chapter_confirmed", ch.Num)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	// Bestseller act critic: if this manual confirmation closes a
+	// pre-planning act, launch the act analysis in the background.
+	h.maybeAnalyzeCompletedAct(ch.Num)
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
+}
+
+// chapterRecoveryTarget resolves {num} from the URL and validates it is a real
+// chapter index. Shared by the resume/fact-check/reset handlers.
+func (h *Handlers) chapterRecoveryTarget(w http.ResponseWriter, r *http.Request) (int, bool) {
+	numStr := r.PathValue("num")
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_chapter_num", numStr)
+		return 0, false
+	}
+	idx := -1
+	for i := range h.state.Chapters {
+		if h.state.Chapters[i].Num == num {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		h.writeErrorReq(w, r, http.StatusNotFound, "chapter_not_found", num)
+		return 0, false
+	}
+	return idx, true
+}
+
+// PostChapterResume re-runs ONLY the cheap post-prose steps (summary →
+// critic/fact-check → memory) on the draft that an interrupted generation
+// checkpointed (DraftSavedAt). The prose itself is never regenerated.
+func (h *Handlers) PostChapterResume(w http.ResponseWriter, r *http.Request) {
+	if !h.tryStartTask() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	idx, ok := h.chapterRecoveryTarget(w, r)
+	if !ok {
+		h.endTask()
+		return
+	}
+	if h.state.Phase != "writing" {
+		h.endTask()
+		h.writeErrorReq(w, r, http.StatusBadRequest, "phase_not_writing")
+		return
+	}
+	chNum := h.state.Chapters[idx].Num
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("chapter_resume")
+		ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterGenerate, true)
+		err := story.ResumeChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, chNum, h.logger)
+		if err != nil {
+			var wcErr *story.WritingConflictError
+			switch {
+			case errors.As(err, &wcErr):
+				h.logger.WarnKey("log.chapter_write_conflict_pause")
+			case h.TaskStoppedByUser():
+				h.logger.WarnKey("log.chapter_write_cancelled")
+			case story.IsSummaryStepFailed(err):
+				// The resume itself hit the task deadline / stop mid-summary — the
+				// draft stays resumable; say so instead of a generic failure.
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+					h.logger.WarnKey("log.chapter_write_aborted_deadline")
+				} else {
+					h.logger.WarnKey("log.chapter_write_aborted", err.Error())
+				}
+			case ctx.Err() != nil:
+				h.logger.WarnKey("log.chapter_write_cancelled")
+			default:
+				h.logger.ErrorKey("log.chapter_resume_failed", err)
+			}
+			h.logger.TaskEnd("chapter_resume", false)
+			h.broadcastProgress()
+			return
+		}
+		h.logger.TaskEnd("chapter_resume", true)
+		h.broadcastProgress()
+	}()
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "resuming"})
+}
+
+// PostChapterFactCheck re-runs the critic/fact-check pass over the CURRENT
+// draft of a chapter without regenerating its prose or summary.
+func (h *Handlers) PostChapterFactCheck(w http.ResponseWriter, r *http.Request) {
+	if !h.tryStartTask() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	idx, ok := h.chapterRecoveryTarget(w, r)
+	if !ok {
+		h.endTask()
+		return
+	}
+	if h.state.Phase != "writing" {
+		h.endTask()
+		h.writeErrorReq(w, r, http.StatusBadRequest, "phase_not_writing")
+		return
+	}
+	chNum := h.state.Chapters[idx].Num
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("chapter_factcheck")
+		ctx := h.activateSkills(h.taskCtx, story.SkillScopeChapterFactCheck, true)
+		err := story.FactCheckChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.skills, chNum, h.logger)
+		if err != nil {
+			var wcErr *story.WritingConflictError
+			switch {
+			case errors.As(err, &wcErr):
+				h.logger.WarnKey("log.chapter_write_conflict_pause")
+			case h.TaskStoppedByUser():
+				h.logger.WarnKey("log.chapter_write_cancelled")
+			case ctx.Err() != nil:
+				h.logger.WarnKey("log.chapter_write_aborted_deadline")
+			default:
+				h.logger.ErrorKey("log.chapter_factcheck_failed", err)
+			}
+			h.logger.TaskEnd("chapter_factcheck", false)
+			h.broadcastProgress()
+			return
+		}
+		h.logger.TaskEnd("chapter_factcheck", true)
+		h.broadcastProgress()
+	}()
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "factchecking"})
+}
+
+// PostChapterReset discards the generated prose/summary/blocks of the CURRENT
+// chapter so the next generation starts clean. Synchronous (no LLM calls).
+func (h *Handlers) PostChapterReset(w http.ResponseWriter, r *http.Request) {
+	if h.isTaskRunning() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	idx, ok := h.chapterRecoveryTarget(w, r)
+	if !ok {
+		return
+	}
+	if h.state.Phase != "writing" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "phase_not_writing")
+		return
+	}
+	chNum := h.state.Chapters[idx].Num
+	if err := story.ResetChapterAction(h.state, h.progressPath, chNum, h.logger); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "chapter_reset_failed", err.Error())
+		return
+	}
+	h.broadcastProgress()
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 }
 
 func (h *Handlers) PostChapterEdit(w http.ResponseWriter, r *http.Request) {
@@ -1195,8 +1848,8 @@ func (h *Handlers) PostChapterRevise(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostChapterReviseSpecific 对指定编号章节做定向最小化修订（含已确认章节），
-// 仅修改该章正文与摘要，不影响其他章节和大纲。
+// PostChapterReviseSpecific revisa un capítulo concreto por número (incluso aceptados);
+// solo afecta a ese capítulo, no a otros capítulos ni a las tramas.
 func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Request) {
 	numStr := r.PathValue("num")
 	var num int
@@ -1246,8 +1899,8 @@ func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Requ
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostChaptersSmoothTransitions 批量优化已确认章节之间的衔接。
-// 逐章检查上一章结尾与本章开头的衔接，仅在生硬时最小化重写本章开头片段。
+// PostChaptersSmoothTransitions revisa en lote las uniones entre capítulos escritos.
+// Conecta el final del capítulo anterior con la apertura de este; escribe solo lo mínimo necesario para abrir el capítulo actual.
 func (h *Handlers) PostChaptersSmoothTransitions(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1321,7 +1974,7 @@ func (h *Handlers) DeleteChapter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.chapter_deleted", num)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
 }
 
@@ -1351,7 +2004,7 @@ func (h *Handlers) DeleteOutline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.outline_deleted")
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
 }
 
@@ -1397,7 +2050,7 @@ func (h *Handlers) PutChapterOutline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.chapter_outline_updated", num)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	if len(h.state.Foreshadows) > 0 {
 		background = true
 		go h.runForeshadowOutlineCheck()
@@ -1496,7 +2149,7 @@ func (h *Handlers) DeleteChaptersFrom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.SuccessKey("log.chapters_deleted_from", num, deletedCount)
-	h.writeJSON(w, http.StatusOK, story.ProgressView(h.state))
+	h.writeJSON(w, http.StatusOK, story.SnapshotProgress(h.state))
 	h.startKnowledgeSync()
 }
 
@@ -1535,11 +2188,25 @@ func (h *Handlers) GetVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) GetStatus(w http.ResponseWriter, r *http.Request) {
-	lang := i18n.LangZH
+	lang := i18n.LangEN
 	if h.cfg != nil {
 		lang = i18n.NormalizeLanguage(h.cfg.Language)
 	}
+	// Self-heal first: the frontend polls /api/status exactly when it believes
+	// a task runs, so this is the only recurring touchpoint that can rescue
+	// stuck counters (a panicked background body never reaches endTask, and
+	// from then on every POST is rejected with 409 — buttons stop doing
+	// anything while GETs keep answering).
+	h.reconcileTaskState()
 	running := h.isTaskRunning()
+	if h.state == nil {
+		// No project selected: /api/status must still answer (the frontend
+		// polls it unconditionally) instead of panicking on the state derefs.
+		h.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"is_task_running": running,
+		})
+		return
+	}
 	totalChapters, _ := chapterProgress(h.state.Chapters)
 	resp := map[string]interface{}{
 		"phase":            h.state.Phase,
@@ -1824,9 +2491,9 @@ func (h *Handlers) PostForeshadowsConfirm(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// —— 导入流水线 handlers ——
+// —— enterwaterthread handlers ——
 
-// PostImportSplit 本地切章预览（同步，无 AI）。不持久化任何内容。
+// PostImportSplit this cutchapterbrowse(, no AI). not howinside.
 func (h *Handlers) PostImportSplit(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1842,7 +2509,7 @@ func (h *Handlers) PostImportSplit(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]any{"chapters": story.BuildImportPreview(chapters)})
 }
 
-// PostImportStart 开始导入流水线（异步）：切章落盘 → 元信息分析 → 逐章大纲/摘要（断点续跑）→ 分卷汇总。
+// PostImportStart openenterwaterthread(): cutchapterpassageplate → yuandivide → chapterbig/want to(disconnectdotrun)→ dividevolumeremit.
 func (h *Handlers) PostImportStart(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1872,7 +2539,7 @@ func (h *Handlers) PostImportStart(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// PostImportResume 从断点恢复导入流水线（异步）。
+// PostImportResume fromdisconnectdotenterwaterthread().
 func (h *Handlers) PostImportResume(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -1910,7 +2577,7 @@ func (h *Handlers) finishImportTask(ctx context.Context, err error) {
 	h.broadcastProgress()
 }
 
-// GetImportStatus 查询导入断点状态（同步）。
+// GetImportStatus enterdisconnectdotposture().
 func (h *Handlers) GetImportStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w, r) {
 		return
@@ -2556,7 +3223,7 @@ func (h *Handlers) GetChatSessions(w http.ResponseWriter, r *http.Request) {
 		idx = &story.ChatSessionIndex{}
 	}
 
-	// 清理空会话：删除 msg_count == 0 且不在当前会话中的条目
+	// clearemptyassociation: except msg_count == 0 andnot inwhenfrontassociationmiddle strip
 	var cleaned []story.ChatSessionMeta
 	for _, m := range idx.Sessions {
 		if m.MsgCount == 0 {
@@ -2575,14 +3242,14 @@ func (h *Handlers) PostChatSession(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Format(time.RFC3339)
 	session := &story.ChatSession{
 		ID:        story.GenerateSessionID(),
-		Title:     "新会话",
+		Title:     "newassociation",
 		Messages:  []story.ChatMessage{},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	// 保存会话文件但不加入索引，等首次发消息时 story.SaveChatSession 才入索引，
-	// 避免产生 0 条记录的空会话。
+	// insuredepositassociationitembutnot entercord, etctimeshairhour story.SaveChatSession only thenentercord,
+	// life 0 strip emptyassociation.
 	dir := story.ChatSessionsDir(h.sessionsDir)
 	os.MkdirAll(dir, 0755)
 	path := filepath.Join(dir, session.ID+".json")
@@ -2660,18 +3327,18 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 缓存消息用于重试
+	// deposituseinheavy
 	h.lastChatMessage = req.Content
 
 	go func() {
-		// defer 确保任何错误路径都会释放任务锁，否则后续所有任务将永久 409
+		// defer insurehowroadallassociationputpadlock, thenlaterhasBA 409
 		defer h.endTask()
 		h.logger.TaskStart("chat_message")
 		// Snapshot the task context: endTask() cancels h.taskCancel when the last
 		// unit of work finishes. If the agent's generate_section tool starts a
 		// child generation that completes *before* this chat turn does, endTask
 		// would cancel the context underneath the still-running agent loop,
-		// producing "步骤 N: API 调用失败: context canceled". Capturing h.taskCtx
+		// producing " N: API use: context canceled". Capturing h.taskCtx
 		// here (while the lock is definitely held) keeps this turn alive until it
 		// really ends; later tryStartTask() creates a fresh context anyway.
 		chatCtx := h.taskCtx
@@ -2705,10 +3372,23 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 					// Book-level plan: dedicated detached runner (writes Progress, not config).
 					return h.StartDetachedPrePlanGenerate()
 				}
+				enf, end := forcedSectionEnhancePair(fastForced)
+				if enf == "" {
+					// Back-compat: legacy differentiating_idea enhance travelled
+					// through EnhanceText only.
+					end = forcedSectionEnhance(fastForced)
+					if sectionName == "differentiating_idea" && end != "" {
+						enf = "differentiating_idea"
+					}
+				}
 				return h.StartDetachedSectionGenerate(agent.SectionGenRequest{
-					Section:   sectionName,
-					StoryIdea: strings.TrimSpace(h.cfg.Story.StoryIdea),
-					Story:     &h.cfg.Story,
+					Section:         sectionName,
+					StoryIdea:       strings.TrimSpace(h.cfg.Story.StoryIdea),
+					Story:           &h.cfg.Story,
+					CreativityLevel: forcedSectionCreativity(fastForced),
+					EnhanceText:     end,
+					EnhanceField:    enf,
+					EnhanceDraft:    end,
 				})
 			}
 			genErr = startOnce()
@@ -2806,8 +3486,8 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 				return h.StartDetachedPrePlanGenerate()
 			},
 			StartAsync: func(taskName string, fn func(goCtx context.Context) error) {
-				// 子任务必须计入 activeWork，否则 Agent 主循环结束后锁被释放，
-				// 子任务仍在运行时新任务可并发进入，造成数据竞争。
+				// comprueba si hay trabajo activo y luego libera el bloqueo del agente
+				// stillintravelhournewcanandhairadvanceenter, buildnumberreceipt.
 				if !h.startChildWork() {
 					h.logger.WarnKey("log.child_task_start_failed", taskName)
 					return
@@ -2825,7 +3505,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 
 		reply, newHistory, err := agent.RunAgentLoop(ctx, agentCtx, req.Content, history, 30)
 		if err != nil {
-			// 即使失败也保存已产生的对话步骤，避免上下文丢失
+			// i.e.make-tooinsuredepositalreadylife to, upperlower
 			saveAgentSteps(session, newHistory[len(history):])
 			session.UpdatedAt = time.Now().Format(time.RFC3339)
 			if saveErr := story.SaveChatSession(h.sessionsDir, session); saveErr != nil {
@@ -2874,7 +3554,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
-// saveAgentSteps 将 Agent 步骤追加为会话消息。
+// saveAgentSteps BA Agent chaseforassociation.
 func saveAgentSteps(session *story.ChatSession, steps []agent.AgentStep) {
 	for _, step := range steps {
 		if step.Role == "assistant" {

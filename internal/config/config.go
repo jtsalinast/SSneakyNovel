@@ -13,17 +13,18 @@ import (
 type APIConfig struct {
 	APIKey              string `json:"api_key"`
 	BaseURL             string `json:"base_url"`
-	URLStrict           bool   `json:"url_strict,omitempty"` // true = 不自动插入 /v1，仅补 /chat/completions
+	URLStrict           bool   `json:"url_strict,omitempty"` // true = do not auto-insert /v1, only append /chat/completions
 	Model               string `json:"model"`
-	MaxTokens           int    `json:"max_tokens,omitempty"` // 0 = 模型默认；新建默认 32768；Agent 调用建议 ≥ 8192
+	MaxTokens           int    `json:"max_tokens,omitempty"` // 0 = model default; new configs default to 32768; Agent calls recommend >= 8192
 	HTTPTimeoutSeconds  int    `json:"http_timeout_seconds"`
-	ContextBudgetTokens int    `json:"context_budget_tokens"` // 模型上下文预算，默认 300000
+	ContextBudgetTokens int    `json:"context_budget_tokens"`      // model context budget, default 300000
+	TaskDurationMinutes int    `json:"task_duration_minutes,omitempty"` // per-task wall-clock ceiling in minutes; 0/unset = llm.MaxTaskDuration default (30); NEGATIVE = no ceiling (task runs until it finishes or the user presses Stop). Long chapter batches with several rewrite passes legitimately exceed 30 min — the old hard deadline aborted them mid-flight.
 }
 
 type Config struct {
 	ProjectFormatVersion int           `json:"project_format_version"`
 	CreatedWithVersion   string        `json:"created_with_version,omitempty"`
-	Language             string        `json:"language"` // "zh" 或 "en"，影响 AI 提示词与生成内容
+	Language             string        `json:"language"` // "en" (default); affects AI prompts and generated content
 	Story                StoryConfig   `json:"story"`
 	Prompts              PromptsConfig `json:"prompts"`
 	SkillConfig          *SkillConfig  `json:"skill_config,omitempty"`
@@ -32,33 +33,40 @@ type Config struct {
 type StoryConfig struct {
 	Type                  string `json:"type"`
 	Title                 string `json:"title"`
-	Subgenre              string `json:"subgenre,omitempty"`               // 子类型（受 Type 约束），借鉴 NovelWriter 的 Genre/Subgenre 参数
-	Theme                 string `json:"theme,omitempty"`                  // 主题
-	Tone                  string `json:"tone,omitempty"`                   // 基调
-	Author                string `json:"author,omitempty"`                 // 作者名
-	StoryLength           string `json:"story_length,omitempty"`           // 篇幅：short/novella/novel/epic，联动章节数与结构选项
-	Structure             string `json:"structure,omitempty"`              // 故事结构框架（3幕/英雄之旅等，随篇幅变化）
-	Motif                 string `json:"motif,omitempty"`                  // 文学母题：可随机生成，注入大纲/写作/生成 prompts
-	InspirationalPieces   string `json:"inspirational_pieces,omitempty"`   // 灵感作品（Inspirational pieces）：作为风格/氛围参考注入大纲、写作与区块生成 prompts；可由 LLM 根据已填参数生成，不依赖故事构想
-	OutputLanguage        string `json:"output_language,omitempty"`        // 生成内容语言（Story language）："en" / "es"；为空时跟随项目 Language。强制所有 AI 生成内容（大纲、正文、区块）使用该语言，避免生成中途换语言
-	StoryIdea             string `json:"story_idea,omitempty"`             // 故事构想（Story idea）：作为 AI 生成风格/角色/组织/关系的依据；旧配置中的 "brief" 键由 normalizeLegacyStoryKeys 迁移
-	ConflictScale         string `json:"conflict_scale,omitempty"`         // 冲突规模（借鉴 NovelWriter conflict_scales；"other" 时使用 ConflictOther）
-	ConflictOther         string `json:"conflict_other,omitempty"`         // 自定义冲突规模
-	SpecificSettings      string `json:"specific_settings,omitempty"`      // 特定设定，每行一条（借鉴 implied_settings）
-	ProtagonistType       string `json:"protagonist_type,omitempty"`       // 主角类型（借鉴 protagonist_types；"other" 时使用 ProtagonistOther）
-	ProtagonistOther      string `json:"protagonist_other,omitempty"`      // 自定义主角类型
-	TargetAudience        string `json:"target_audience,omitempty"`        // 目标读者：kid/middle_grade/ya/new_adult/adult/all_ages；影响语言难度、尺度与题材处理（原 YA/儿童文学从类型层级移到这里）
-	AudienceProfile       string `json:"audience_profile,omitempty"`       // 目标读者画像：自由文本，描述理想读者的阅读偏好；可由 LLM 根据已填参数生成
-	RomanceLevel          string `json:"romance_level,omitempty"`          // 恋爱线比重：random/none/subplot/moderate/central
-	SexualContent         string `json:"sexual_content,omitempty"`         // 性描写尺度：random/clean/fade_to_black/explicit
-	GoreLevel             string `json:"gore_level,omitempty"`             // 暴力血腥尺度：random/none/mid/explicit
-	WorldDarkness         string `json:"world_darkness,omitempty"`         // 世界黑暗与残酷度：idyllic/temperate/gritty/grim/abyssal
-	GenderBias            string `json:"gender_bias,omitempty"`            // 人物性别倾向：empty/random/male/female/balanced；默认 random，不强制
-	LocationsEnabled      bool   `json:"locations_enabled,omitempty"`      // 启用地点/场景实体（借鉴 NovelWriter locations）：生成设定与大纲时纳入地点
-	CharacterArcsEnabled  bool   `json:"character_arcs_enabled,omitempty"` // 启用角色弧光字段（goals/flaws/strengths/arc，借鉴 NovelWriter lore）
+	Subgenre              string `json:"subgenre,omitempty"`               // subgenre (constrained by Type), inspired by NovelWriter Genre/Subgenre params
+	Theme                 string `json:"theme,omitempty"`                  // theme
+	Tone                  string `json:"tone,omitempty"`                   // tone
+	Author                string `json:"author,omitempty"`                 // author name
+	StoryLength           string `json:"story_length,omitempty"`           // length: short/novella/novel/epic; drives chapter count and structure options
+	Structure             string `json:"structure,omitempty"`              // story structure framework (3-act / hero's journey etc., varies with length)
+	Motif                 string `json:"motif,omitempty"`                  // literary motif: can be randomly generated; injected into outline/writing/generation prompts
+	PhilosophicalDilemma  string `json:"philosophical_dilemma,omitempty"` // philosophical and/or operational dilemma at the heart of the work: generated together with theme/motif/tone by the Theme & Motif card button; injected into outline/writing prompts
+	ReaderExpectation     string `json:"reader_expectation,omitempty"`    // target reader's expectation: genre conventions and mandatory motifs the target reader expects; generated by its own button in the Theme & Motif card; injected into outline/writing prompts
+	InspirationalPieces   string `json:"inspirational_pieces,omitempty"`   // inspirational pieces: style/mood references injected into outline, writing and block-generation prompts; can be generated by the LLM from filled parameters, independent of the story idea
+	OutputLanguage        string `json:"output_language,omitempty"`        // generated-content language (Story language): "en" / "es"; follows project Language when empty. Forces all AI-generated content (outline, prose, blocks) to use it, preventing mid-generation language switches
+	StoryIdea             string `json:"story_idea,omitempty"`             // story idea: basis for AI-generated style/characters/organizations/relationships; legacy "brief" key migrated by normalizeLegacyStoryKeys
+	ForcesInTension       string `json:"forces_in_tension,omitempty"`      // narrative forces in tension: driving/pro-tagging forces FOR the work's thesis and the opposing forces AGAINST it; generated together with story_idea by the Story idea card button; injected into outline/writing prompts
+	ElevatorPitch         string `json:"elevator_pitch,omitempty"`         // elevator pitch: 2-4 sentence high-concept hook selling the book; generated together with story_idea; injected into outline/writing prompts as the north-star hook
+	LighthouseSentence    string `json:"lighthouse_sentence,omitempty"`    // lighthouse sentence: one immutable guiding sentence (the story's fixed point / core question) every chapter must navigate by; generated together with story_idea; injected into outline/writing prompts
+	DifferentiatingIdea   string `json:"differentiating_idea,omitempty"`   // differentiating idea ("Story appeal"): the unique selling angle that sets this work apart from its genre shelf; generated by its own button with an explicit creativity level (1 pragmatic .. 5 disruptive); injected into outline/writing prompts
+	CreativityLevel       int    `json:"creativity_level,omitempty"`       // creativity level used for the last differentiating-idea generation: 1 Pragmatic / 2 Conservative / 3 Balanced / 4 Bold / 5 Disruptive (0 = unset/default balanced)
+	ConflictScale         string `json:"conflict_scale,omitempty"`         // conflict scale (inspired by NovelWriter conflict_scales; uses ConflictOther when "other")
+	ConflictOther         string `json:"conflict_other,omitempty"`         // custom conflict scale
+	SpecificSettings      string `json:"specific_settings,omitempty"`      // specific settings, one per line (inspired by implied_settings)
+	ProtagonistType       string `json:"protagonist_type,omitempty"`       // protagonist type (inspired by protagonist_types; uses ProtagonistOther when "other")
+	ProtagonistOther      string `json:"protagonist_other,omitempty"`      // custom protagonist type
+	TargetAudience        string `json:"target_audience,omitempty"`        // target audience: kid/middle_grade/ya/new_adult/adult/all_ages; affects language difficulty, rating and subject handling (former YA/children's literature moved here from the genre hierarchy)
+	AudienceProfile       string `json:"audience_profile,omitempty"`       // audience profile: free text describing the ideal reader's preferences; can be generated by the LLM from filled parameters
+	RomanceLevel          string `json:"romance_level,omitempty"`          // romance weight: random/none/subplot/moderate/central
+	SexualContent         string `json:"sexual_content,omitempty"`         // sexual content rating: random/clean/fade_to_black/explicit
+	GoreLevel             string `json:"gore_level,omitempty"`             // violence/gore rating: random/none/mid/explicit
+	WorldDarkness         string `json:"world_darkness,omitempty"`         // world darkness/cruelty: idyllic/temperate/gritty/grim/abyssal
+	GenderBias            string `json:"gender_bias,omitempty"`            // character gender bias: empty/random/male/female/balanced; defaults to random, not enforced
+	LocationsEnabled      bool   `json:"locations_enabled,omitempty"`      // enable location/scene entities (inspired by NovelWriter locations): include places when generating settings and outlines
+	CharacterArcsEnabled  bool   `json:"character_arcs_enabled,omitempty"` // enable character arc fields (goals/flaws/strengths/arc, inspired by NovelWriter lore)
 	TargetWordsPerChapter int    `json:"target_words_per_chapter"`
 	WritingStyle          string `json:"writing_style"`
-	WritingPOV            string `json:"writing_pov"` // 叙述视角，如第一人称女主、第三人称限知等
+	WritingPOV            string `json:"writing_pov"` // narrative POV, e.g. first-person female lead, third-person limited, etc.
 }
 
 // splitMultiField parses a comma-separated multi-value field (the wire format
@@ -119,8 +127,9 @@ func (s *StoryConfig) EffectiveProtagonist() string {
 	return effectiveMulti(s.ProtagonistType, s.ProtagonistOther)
 }
 
-// EffectiveMotif returns the literary motif. Theme and Motif are merged in the
-// UI into a single field, so the effective motif is either Motif or Theme.
+// EffectiveMotif returns the literary motif. When the dedicated Motif field is
+// empty it falls back to Theme (legacy configs stored both merged in one
+// field), so prompts never lose the motif information entirely.
 func (s *StoryConfig) EffectiveMotif() string {
 	if m := strings.TrimSpace(s.Motif); m != "" {
 		return m
@@ -171,14 +180,14 @@ func EffectiveOutputLanguage(cfg *Config) string {
 // —— Novel parameters: length & structure options (borrowed from NovelWriter) —
 
 const (
-	LengthFlash      = "flash"       // 微型小说/闪小说
-	LengthShort      = "short"       // 短篇
-	LengthNovelette  = "novelette"   // 短中篇
-	LengthNovella    = "novella"     // 中篇
-	LengthLightNovel = "light_novel" // 轻小说（日系：章节长、节奏快）
-	LengthAnthology  = "anthology"   // 短篇小说集/选集
-	LengthNovel      = "novel"       // 长篇（标准）
-	LengthEpic       = "epic"        // 长篇（史诗）
+	LengthFlash      = "flash"       // micro fiction / flash fiction
+	LengthShort      = "short"       // short story
+	LengthNovelette  = "novelette"   // novelette
+	LengthNovella    = "novella"     // novella
+	LengthLightNovel = "light_novel" // light novel (Japanese-style: longer chapters, fast pace)
+	LengthAnthology  = "anthology"   // short story collection / anthology
+	LengthNovel      = "novel"       // novel (standard)
+	LengthEpic       = "epic"        // epic novel
 )
 
 // LengthKeys is the ordered list of selectable story lengths.
@@ -311,7 +320,7 @@ func DefaultAPIConfig() *APIConfig {
 }
 
 func DefaultConfig() *Config {
-	return DefaultConfigForLang(i18n.LangZH)
+	return DefaultConfigForLang(i18n.LangEN)
 }
 
 func DefaultConfigForLang(lang string) *Config {
@@ -336,16 +345,16 @@ func LoadAPIConfig(path string) (*APIConfig, error) {
 		if os.IsNotExist(err) {
 			cfg := DefaultAPIConfig()
 			if saveErr := saveAPIConfig(path, cfg); saveErr != nil {
-				return nil, fmt.Errorf("创建默认API配置文件失败: %w", saveErr)
+				return nil, fmt.Errorf("failed to save API config file: %w", saveErr)
 			}
 			return cfg, nil
 		}
-		return nil, fmt.Errorf("读取API配置文件失败: %w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	var cfg APIConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("解析API配置文件失败: %w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	if cfg.HTTPTimeoutSeconds <= 0 {
@@ -371,16 +380,16 @@ func LoadConfig(path string) (*Config, error) {
 		if os.IsNotExist(err) {
 			cfg := DefaultConfig()
 			if saveErr := SaveConfig(path, cfg); saveErr != nil {
-				return nil, fmt.Errorf("创建默认配置文件失败: %w", saveErr)
+				return nil, fmt.Errorf("failed to save API config file: %w", saveErr)
 			}
 			return cfg, nil
 		}
-		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("解析配置文件失败: %w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	// Legacy migration: the story field once called "brief" (easily confused
@@ -418,10 +427,10 @@ func LoadConfig(path string) (*Config, error) {
 
 	cfg.Language = i18n.NormalizeLanguage(cfg.Language)
 
-	// 保存 applyDefaults 前的 prompts 状态，用于判断是否有字段被填充
+	// save prompts state before applyDefaults to detect whether any field was filled in
 	oldPrompts := cfg.Prompts
 	cfg.Prompts.ApplyDefaults(cfg.Language)
-	// 如果有字段被填充（从空变为默认值），写回磁盘
+	// if any field was filled in (empty -> default value), write back to disk
 	if cfg.Prompts != oldPrompts {
 		SaveConfig(path, &cfg)
 	}
@@ -528,10 +537,7 @@ func (p *PromptsConfig) ApplyDefaults(lang string) {
 }
 
 func DefaultPromptsForLang(lang string) PromptsConfig {
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return DefaultPromptsEN
-	}
-	return DefaultPromptsZH
+	return DefaultPromptsEN
 }
 
 // —— Novel parameters: genre presets (borrowed from NovelWriter genre_configs) —
@@ -830,58 +836,58 @@ func MatchGenreKey(storyType string) string {
 	}
 	kws := []kw{
 		// specific subgenre-flavored keys first
-		{"xianxia", []string{"xianxia", "仙侠", "修仙"}},
-		{"wuxia", []string{"wuxia", "武侠", "江湖"}},
-		{"litrpg", []string{"litrpg", "lit rpg", "game novel", "system flow", "游戏文", "系统流", "无限流"}},
-		{"cyberpunk", []string{"cyberpunk", "cyber-punk", "赛博朋克", "赛博"}},
-		{"solarpunk", []string{"solarpunk", "solar punk", "太阳朋克"}},
-		{"space_opera", []string{"space opera", "星际歌剧", "太空歌剧"}},
-		{"romantasy", []string{"romantasy", "romantic fantasy", "epic romance", "恋与", "浪漫奇幻"}},
-		{"dystopian", []string{"dystopia", "dystopian", "反乌托邦", "乌托邦崩塌"}},
-		{"postapo", []string{"post-apocalyp", "post apocalyp", "postapoc", "zombie", "末日", "废土", "丧尸", "生存游戏"}},
-		{"military", []string{"military", "war novel", "军旅", "战争", "军事"}},
-		{"heist", []string{"heist", "caper", "robbery", "盗梦", "劫案", "千门"}},
-		{"cozy", []string{"cozy", "comfort read", "治愈系", "温馨推理", "田园"}},
-		{"urban", []string{"urban", "contemporary fantasy", "city", "都市", "现代异能"}},
+		{"xianxia", []string{"xianxia"}},
+		{"wuxia", []string{"wuxia"}},
+		{"litrpg", []string{"litrpg", "lit rpg", "game novel", "system flow"}},
+		{"cyberpunk", []string{"cyberpunk", "cyber-punk"}},
+		{"solarpunk", []string{"solarpunk", "solar punk"}},
+		{"space_opera", []string{"space opera"}},
+		{"romantasy", []string{"romantasy", "romantic fantasy", "epic romance"}},
+		{"dystopian", []string{"dystopia", "dystopian"}},
+		{"postapo", []string{"post-apocalyp", "post apocalyp", "postapoc", "zombie"}},
+		{"military", []string{"military", "war novel"}},
+		{"heist", []string{"heist", "caper", "robbery"}},
+		{"cozy", []string{"cozy", "comfort read"}},
+		{"urban", []string{"urban", "contemporary fantasy", "city"}},
 		// round 4: demoted subgenres -> composite "parent:subgenre" keys (matched by Type+Subgenre)
-		{"scifi:steampunk", []string{"steampunk", "steam punk", "蒸汽朋克"}},
-		{"scifi:superhero", []string{"superhero", "super hero", "supervillain", "超级英雄", "超人"}},
-		{"scifi:time_travel", []string{"time travel", "time-travel", "穿越时空", "时间旅行"}},
-		{"scifi:cli_fi", []string{"cli-fi", "clifi", "climate fiction", "气候小说"}},
-		{"scifi:afrofuturism", []string{"afrofuturism", "afro-futurism", "非洲未来主义"}},
-		{"scifi:hard", []string{"hard scifi", "hard sci-fi", "hard science fiction", "硬科幻"}},
-		{"horror:dark_academia", []string{"dark academia", "暗黑学院", "校园秘密社团"}},
-		{"horror:gothic", []string{"gothic", "哥特"}},
-		{"adventure:swashbuckler", []string{"swashbuckl", "pirate", "corsair", "海盗", "大航海"}},
-		{"adventure:nautical", []string{"nautical", "seafaring", "voyage at sea", "航海", "海难"}},
-		{"adventure:picaresque", []string{"picaresque", "rogue tale", "流浪汉", "骗子冒险"}},
-		{"romance:romcom", []string{"romantic comedy", "rom-com", "romcom", "爱情喜剧", "甜宠喜剧"}},
-		{"mystery:police_procedural", []string{"police procedural", "detective squad", "cold case", "警匪剧", "刑侦", "罪案小组"}},
-		{"literary", []string{"literary fiction", "literary novel", "existential", "philosophical novel", "纯文学", "文艺小说", "存在主义", "哲学小说"}},
+		{"scifi:steampunk", []string{"steampunk", "steam punk"}},
+		{"scifi:superhero", []string{"superhero", "super hero", "supervillain"}},
+		{"scifi:time_travel", []string{"time travel", "time-travel"}},
+		{"scifi:cli_fi", []string{"cli-fi", "clifi", "climate fiction"}},
+		{"scifi:afrofuturism", []string{"afrofuturism", "afro-futurism"}},
+		{"scifi:hard", []string{"hard scifi", "hard sci-fi", "hard science fiction"}},
+		{"horror:dark_academia", []string{"dark academia"}},
+		{"horror:gothic", []string{"gothic"}},
+		{"adventure:swashbuckler", []string{"swashbuckl", "pirate", "corsair"}},
+		{"adventure:nautical", []string{"nautical", "seafaring", "voyage at sea"}},
+		{"adventure:picaresque", []string{"picaresque", "rogue tale"}},
+		{"romance:romcom", []string{"romantic comedy", "rom-com", "romcom"}},
+		{"mystery:police_procedural", []string{"police procedural", "detective squad", "cold case"}},
+		{"literary", []string{"literary fiction", "literary novel", "existential", "philosophical novel"}},
 		// round 6: Drama as a first-class parent genre (checked before generic keys)
-		{"drama", []string{"drama", "family saga", "coming of age", "coming-of-age", "bildungsroman", "psychorealism", "metafiction", "domestic saga", "slice of life drama", "剧情", "家庭史诗", "成长小说", "文艺"}},
-		{"graphic_novel", []string{"graphic novel", "comic", "manga script", "图像小说", "漫画"}},
+		{"drama", []string{"drama", "family saga", "coming of age", "coming-of-age", "bildungsroman", "psychorealism", "metafiction", "domestic saga", "slice of life drama"}},
+		{"graphic_novel", []string{"graphic novel", "comic", "manga script"}},
 		// Round 14 audit: new parent genres and hybrid subgenre keys. Hybrids are
 		// checked before their parents so "science fantasy"/"technomagic" resolve to
 		// the sci_fantasy key instead of falling through to generic fantasy/scifi.
-		{"sci_fantasy", []string{"science fantasy", "science-fiction fantasy", "sci-fi fantasy", "sf fantasy", "technomagic", "techno-magic", "cyberfantasy", "cyber-fantasy", "科技奇幻", "魔导科技", "赛博奇幻"}},
-		{"comedy", []string{"comedy", "comedic", "farce", "parody", "satirical novel", "humor fiction", "喜剧", "搞笑", "讽刺小说", "无厘头"}},
+		{"sci_fantasy", []string{"science fantasy", "science-fiction fantasy", "sci-fi fantasy", "sf fantasy", "technomagic", "techno-magic", "cyberfantasy", "cyber-fantasy"}},
+		{"comedy", []string{"comedy", "comedic", "farce", "parody", "satirical novel", "humor fiction"}},
 		// parent genres after the specific ones
-		{"fantasy", []string{"fantasy", "奇幻", "玄幻", "魔幻"}},
-		{"scifi", []string{"sci-fi", "scifi", "science fiction", "科幻"}},
+		{"fantasy", []string{"fantasy"}},
+		{"scifi", []string{"sci-fi", "scifi", "science fiction"}},
 		// Round 15: "Mystery" and "Thriller" are a single parent genre in the
 		// UI; the backend key stays "mystery" and absorbs the thriller keywords so
 		// previously-saved configs still resolve. The standalone "action", "crime"
 		// and "mythology" parents were folded into adventure/mystery/fantasy.
-		{"mystery", []string{"mystery", "detective", "悬疑", "推理", "侦探", "crime fiction", "thriller", "spy", "惊悚", "谍战"}},
-		{"romance", []string{"romance", "言情", "爱情"}},
-		{"horror", []string{"horror", "恐怖", "灵异", "克苏鲁", "cosmic horror", "folk horror"}},
-		{"historical", []string{"historical", "history", "历史"}},
-		{"western", []string{"western", "西部"}},
+		{"mystery", []string{"mystery", "detective", "crime fiction", "thriller", "spy"}},
+		{"romance", []string{"romance"}},
+		{"horror", []string{"horror", "cosmic horror", "folk horror"}},
+		{"historical", []string{"historical", "history"}},
+		{"western", []string{"western"}},
 		// Round 15: "Action & Adventure" is one parent genre (key "adventure"); it
 		// also matches pure-action text plus the crime/mythology word sets that used
 		// to hit their own parent keys, so those stories keep resolving somewhere.
-		{"adventure", []string{"adventure", "exploration", "expedition", "tomb raiding", "盗墓", "探险", "冒险", "action", "martial arts", "fighting novel", "combat fiction", "warrior tale", "动作", "格斗", "武侠动作", "热血战斗", "mythology", "mythological", "folklore", "folktale", "legend cycle", "fairy tale collection", "神话", "传说", "民间故事", "志怪", "crime", "criminal", "mafia", "gangster", "organized crime", "detective bureau", "犯罪", "黑帮", "刑侦罪案", "警匪"}},
+		{"adventure", []string{"adventure", "exploration", "expedition", "tomb raiding", "action", "martial arts", "fighting novel", "combat fiction", "warrior tale", "mythology", "mythological", "folklore", "folktale", "legend cycle", "fairy tale collection", "crime", "criminal", "mafia", "gangster", "organized crime", "detective bureau"}},
 	}
 	for _, k := range kws {
 		for _, w := range k.words {
@@ -1153,6 +1159,18 @@ var SubgenreHints = map[string][2]string{
 	"cattle drive western":       {"Una manada, una larga ruta y días de polvo: el trabajo como épica menor.", "A herd, a long trail and dusty days: labor as minor epic."},
 	"sitcom-style ensemble":      {"Reparto fijo, situaciones recurrentes y chistes en cadena.", "Fixed cast, recurring setups and joke-after-joke rhythm."},
 	"revenge":                    {"Una deuda personal impulsa toda la trama: preparación, caída del objetivo y coste.", "A personal debt drives the whole plot: preparation, the target's fall and the cost."},
+	// frontend-mirror labels (subgenreLabelParents / frontendOnlySubgenreParents)
+	// that previously had no hint; keys use their exact display spelling.
+	"war epic":         {"Large-scale war seen through entire armies and nations.", "A sweeping campaign across fronts, strategy and the human cost of total war."},
+	"polar expedition": {"Hielo, frío extremo y logística al límite en el fin del mundo.", "Ice, extreme cold and logistics pushed to the limit at the end of the world."},
+	"desert trek":      {"Travesía de arena donde cada cantimplora cuenta.", "A sand crossing where every canteen counts and thirst is the antagonist."},
+	"sky pirate":       {"Buques voladores, abordajes y botín entre las nubes.", "Skyships, boarding actions and plunder among the clouds."},
+	"cozy":             {"Misterio amable en una comunidad entrañable.", "Gentle mystery wrapped in a warm, welcoming community."},
+	"exploration":      {"Cartografiar lo desconocido: asombro, riesgo y recompensa.", "Charting the unknown: wonder, risk and hard-won knowledge."},
+	"mountain climb":   {"La cima como juez: altura, clima y orgullo.", "The summit as judge: altitude, weather and pride on trial."},
+	"space adventure":  {"Viajes interestelares con tripulaciones improvisadas.", "Interstellar voyages with scrappy crews and strange new worlds."},
+	"sea adventure":    {"Voyages, storms and treasures on the high seas.", "Voyages, storms and buried treasure on the high seas."},
+	"road-trip comedy": {"Una ruta, un coche y una cadena de desastres divertidos.", "One road, one car and a chain of comic disasters."},
 }
 
 // AudienceKeys lists the valid target_audience values. YA/middle-grade moved here
@@ -1163,17 +1181,17 @@ var AudienceKeys = []string{"kid", "middle_grade", "ya", "new_adult", "adult", "
 func AudienceLabel(audience, lang string) string {
 	switch strings.TrimSpace(audience) {
 	case "kid":
-		return pickLang(lang, "儿童（5-9岁）", "Children (5-9)")
+		return "Children (5-9)"
 	case "middle_grade":
-		return pickLang(lang, "中童（8-12岁）", "Middle grade (8-12)")
+		return "Middle grade (8-12)"
 	case "ya":
-		return pickLang(lang, "青少年（13-18岁）", "Young adult (13-18)")
+		return "Young adult (13-18)"
 	case "new_adult":
-		return pickLang(lang, "新成年（17-25岁）", "New adult (17-25)")
+		return "New adult (17-25)"
 	case "adult":
-		return pickLang(lang, "成人", "Adult")
+		return "Adult"
 	case "all_ages":
-		return pickLang(lang, "全年龄", "All ages")
+		return "All ages"
 	}
 	return strings.TrimSpace(audience)
 }
@@ -1182,23 +1200,17 @@ func AudienceLabel(audience, lang string) string {
 func AudienceGuidance(audience, lang string) string {
 	switch strings.TrimSpace(audience) {
 	case "kid":
-		return pickLang(lang, "【目标读者】儿童（约5-9岁）：主角为儿童视角，语言简单、篇幅短小，基调温暖安全，冲突温和且必被妥善解决，无恐怖或露骨内容。",
-			"[TARGET AUDIENCE] Children (approx. 5-9): child-age protagonists and viewpoint, simple short prose, warm and safe tone, gentle conflicts always resolved, no horror or explicit content.")
+		return "[TARGET AUDIENCE] Children (approx. 5-9): child-age protagonists and viewpoint, simple short prose, warm and safe tone, gentle conflicts always resolved, no horror or explicit content."
 	case "middle_grade":
-		return pickLang(lang, "【目标读者】中童（约8-12岁）：主角略长于读者，友谊与家庭为核心，幽默与惊奇并存，浪漫最多到暗恋，暴力不细节化，结局积极。",
-			"[TARGET AUDIENCE] Middle grade (approx. 8-12): protagonists slightly older than readers, friendship/family at the core, humor and wonder, romance at most a crush, violence never graphic, hopeful endings.")
+		return "[TARGET AUDIENCE] Middle grade (approx. 8-12): protagonists slightly older than readers, friendship/family at the core, humor and wonder, romance at most a crush, violence never graphic, hopeful endings."
 	case "ya":
-		return pickLang(lang, "【目标读者】青少年（约13-18岁）：青少年主角与身份认同主线，情感强度高、节奏快，可涉及成人题材但聚焦于青少年体验，避免过度露骨。",
-			"[TARGET AUDIENCE] Young adult (approx. 13-18): teen protagonists, identity-driven arcs, high emotional intensity and pace; mature themes allowed but filtered through the teen experience, nothing gratuitously explicit.")
+		return "[TARGET AUDIENCE] Young adult (approx. 13-18): teen protagonists, identity-driven arcs, high emotional intensity and pace; mature themes allowed but filtered through the teen experience, nothing gratuitously explicit."
 	case "new_adult":
-		return pickLang(lang, "【目标读者】新成年（约17-25岁）：主角处于大学/初入社会阶段，处理独立、职业与亲密关系的试错；情感与身体关系可更直接，仍重成长。",
-			"[TARGET AUDIENCE] New adult (approx. 17-25): protagonists in college or first-job years; independence, career and intimate-relationship trial-and-error; emotions and physicality more direct, growth still central.")
+		return "[TARGET AUDIENCE] New adult (approx. 17-25): protagonists in college or first-job years; independence, career and intimate-relationship trial-and-error; emotions and physicality more direct, growth still central."
 	case "adult":
-		return pickLang(lang, "【目标读者】成年读者：默认成人复杂度——道德灰度、长期后果、职业与家庭细节均可充分展开，语言不必回避成熟题材。",
-			"[TARGET AUDIENCE] Adult readers: full adult complexity by default—moral gray areas, long-term consequences, career/family detail; prose need not shy away from mature material.")
+		return "[TARGET AUDIENCE] Adult readers: full adult complexity by default—moral gray areas, long-term consequences, career/family detail; prose need not shy away from mature material."
 	case "all_ages":
-		return pickLang(lang, "【目标读者】全年龄向：各年龄段均可阅读——不含露骨或创伤性内容，主题层次让儿童与成人各有所得。",
-			"[TARGET AUDIENCE] All ages: readable by every age group—no explicit or traumatic content, layered so children and adults each get something.")
+		return "[TARGET AUDIENCE] All ages: readable by every age group—no explicit or traumatic content, layered so children and adults each get something."
 	}
 	return ""
 }
@@ -1220,15 +1232,15 @@ var (
 func RomanceLevelLabel(key, lang string) string {
 	switch strings.TrimSpace(key) {
 	case "random":
-		return pickLang(lang, "随机", "Random")
+		return "Random"
 	case "none":
-		return pickLang(lang, "无恋爱线", "None")
+		return "None"
 	case "subplot":
-		return pickLang(lang, "支线感情", "Subplot")
+		return "Subplot"
 	case "moderate":
-		return pickLang(lang, "中等比重", "Moderate")
+		return "Moderate"
 	case "central":
-		return pickLang(lang, "核心主线", "Central")
+		return "Central"
 	}
 	return strings.TrimSpace(key)
 }
@@ -1237,13 +1249,13 @@ func RomanceLevelLabel(key, lang string) string {
 func SexualContentLabel(key, lang string) string {
 	switch strings.TrimSpace(key) {
 	case "random":
-		return pickLang(lang, "随机", "Random")
+		return "Random"
 	case "clean":
-		return pickLang(lang, "全年龄干净", "Clean")
+		return "Clean"
 	case "fade_to_black":
-		return pickLang(lang, "渐黑留白", "Fade to Black")
+		return "Fade to Black"
 	case "explicit":
-		return pickLang(lang, "露骨直写", "Explicit")
+		return "Explicit"
 	}
 	return strings.TrimSpace(key)
 }
@@ -1252,13 +1264,13 @@ func SexualContentLabel(key, lang string) string {
 func GoreLevelLabel(key, lang string) string {
 	switch strings.TrimSpace(key) {
 	case "random":
-		return pickLang(lang, "随机", "Random")
+		return "Random"
 	case "none":
-		return pickLang(lang, "无血腥", "None")
+		return "None"
 	case "mid":
-		return pickLang(lang, "中度血腥", "Mid")
+		return "Mid"
 	case "explicit":
-		return pickLang(lang, "非常露骨", "Very Explicit")
+		return "Very Explicit"
 	}
 	return strings.TrimSpace(key)
 }
@@ -1267,15 +1279,15 @@ func GoreLevelLabel(key, lang string) string {
 func WorldDarknessLabel(key, lang string) string {
 	switch strings.TrimSpace(key) {
 	case "idyllic":
-		return pickLang(lang, "田园牧歌", "Idyllic")
+		return "Idyllic"
 	case "temperate":
-		return pickLang(lang, "温和写实", "Temperate")
+		return "Temperate"
 	case "gritty":
-		return pickLang(lang, "粗粝黑暗", "Gritty")
+		return "Gritty"
 	case "grim":
-		return pickLang(lang, "阴暗残酷", "Grim")
+		return "Grim"
 	case "abyssal":
-		return pickLang(lang, "深渊绝望", "Abyssal")
+		return "Abyssal"
 	}
 	return strings.TrimSpace(key)
 }
@@ -1313,13 +1325,9 @@ func (s *StoryConfig) EffectiveGoreLevel() string {
 // all-ages readers no matter what the selects say. Returns "" when nothing is set.
 func ContentGuidance(sc *StoryConfig, lang string) string {
 	var lines []string
-	add := func(zh, english string) {
-		if strings.TrimSpace(english) != "" || strings.TrimSpace(zh) != "" {
-			if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-				lines = append(lines, english)
-			} else {
-				lines = append(lines, zh)
-			}
+	add := func(english string) {
+		if strings.TrimSpace(english) != "" {
+			lines = append(lines, english)
 		}
 	}
 	aud := strings.TrimSpace(sc.TargetAudience)
@@ -1328,42 +1336,32 @@ func ContentGuidance(sc *StoryConfig, lang string) string {
 	if v := strings.TrimSpace(sc.RomanceLevel); v != "" {
 		switch sc.EffectiveRomanceLevel() {
 		case "none":
-			add("【恋爱线】本作不发展恋爱关系：人物之间可有深厚情谊，但不要写成恋情或表白。",
-				"[ROMANCE] No romance line in this book: deep bonds between characters are fine, but do not turn them into love stories or confessions.")
+			add("[ROMANCE] No romance line in this book: deep bonds between characters are fine, but do not turn them into love stories or confessions.")
 		case "subplot":
-			add("【恋爱线】恋爱只作为支线/暗线存在：点缀人物关系、服务主线，不占用主要篇幅，不喧宾夺主。",
-				"[ROMANCE] Romance stays a subplot/backstory thread: it colors relationships and serves the main plot without taking over screen time.")
+			add("[ROMANCE] Romance stays a subplot/backstory thread: it colors relationships and serves the main plot without taking over screen time.")
 		case "moderate":
-			add("【恋爱线】恋爱是重要副线：有完整的相识-发展-波折-进展弧线，与主线交织并互相推动，约占故事的三到四成。",
-				"[ROMANCE] Romance is a significant secondary line with its own meet-develop-setback-progress arc, interwoven with and feeding the main plot (roughly 30-40% of the story).")
+			add("[ROMANCE] Romance is a significant secondary line with its own meet-develop-setback-progress arc, interwoven with and feeding the main plot (roughly 30-40% of the story).")
 		case "central":
-			add("【恋爱线】恋爱关系是故事核心主线：情感推进、关系变化驱动情节，即使有其他冲突也服务于感情主线。",
-				"[ROMANCE] The romance itself is the central spine: emotional progression and relationship changes drive the plot; other conflicts serve the love story.")
+			add("[ROMANCE] The romance itself is the central spine: emotional progression and relationship changes drive the plot; other conflicts serve the love story.")
 		}
 	}
 
 	if v := strings.TrimSpace(sc.SexualContent); v != "" {
 		switch sc.EffectiveSexualContent() {
 		case "clean":
-			add("【性描写尺度】干净向（类似全年龄）：不出现任何性暗示场景的具体展开，亲密止步于牵手、拥抱级别的表达。",
-				"[SEXUAL CONTENT] Clean (all-ages style): no sexual situations depicted even implicitly; intimacy stops at hand-holding/hug-level expression.")
+			add("[SEXUAL CONTENT] Clean (all-ages style): no sexual situations depicted even implicitly; intimacy stops at hand-holding/hug-level expression.")
 		case "fade_to_black":
-			add("【性描写尺度】渐黑留白：亲密场景可被提及或以一句氛围带过，随后镜头移开，绝不描写过程与细节。",
-				"[SEXUAL CONTENT] Fade to black: intimate scenes may be acknowledged or bridged with a single atmospheric line, then the camera turns away—never depict process or detail.")
+			add("[SEXUAL CONTENT] Fade to black: intimate scenes may be acknowledged or bridged with a single atmospheric line, then the camera turns away—never depict process or detail.")
 			if young {
-				add("【性描写尺度·读者上限】目标读者为儿童/低龄或全年龄：即便设定允许，也只保留最轻微的浪漫暗示。",
-					"[SEXUAL CONTENT · AUDIENCE CEILING] The target audience is children or all-ages: keep at most the faintest romantic hint even where the setting would allow more.")
+				add("[SEXUAL CONTENT · AUDIENCE CEILING] The target audience is children or all-ages: keep at most the faintest romantic hint even where the setting would allow more.")
 			}
 		case "explicit":
 			if young {
-				add("【性描写尺度·读者上限】目标读者为儿童/低龄或全年龄：露骨内容一律禁止，自动降级为渐黑留白处理。",
-					"[SEXUAL CONTENT · AUDIENCE CEILING] Explicit content is forbidden for this child/all-ages audience: downgrade automatically to fade-to-black treatment.")
+				add("[SEXUAL CONTENT · AUDIENCE CEILING] Explicit content is forbidden for this child/all-ages audience: downgrade automatically to fade-to-black treatment.")
 			} else if aud == "ya" {
-				add("【性描写尺度·读者上限】目标读者为青少年：可承认角色间的亲密关系，但一切露骨细节必须回避，止于暗示与留白。",
-					"[SEXUAL CONTENT · AUDIENCE CEILING] Young-adult audience: acknowledge off-page intimacy between characters, but avoid all explicit detail—suggest, don't depict.")
+				add("[SEXUAL CONTENT · AUDIENCE CEILING] Young-adult audience: acknowledge off-page intimacy between characters, but avoid all explicit detail—suggest, don't depict.")
 			} else {
-				add("【性描写尺度】露骨向：成人之间的亲密场景可直接、具体地描写，服务于人物与情节而非单纯猎奇；须保持知情、自愿的基调。",
-					"[SEXUAL CONTENT] Explicit: adult intimate scenes may be written directly and concretely, serving character and plot rather than shock value; keep an informed, consensual register.")
+				add("[SEXUAL CONTENT] Explicit: adult intimate scenes may be written directly and concretely, serving character and plot rather than shock value; keep an informed, consensual register.")
 			}
 		}
 	}
@@ -1371,25 +1369,19 @@ func ContentGuidance(sc *StoryConfig, lang string) string {
 	if v := strings.TrimSpace(sc.GoreLevel); v != "" {
 		switch sc.EffectiveGoreLevel() {
 		case "none":
-			add("【血腥尺度】无血腥：暴力不发生在地面上——战斗点到为止，伤亡用概述带过，不描写伤口与痛苦细节。",
-				"[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.")
+			add("[GORE] No gore: violence happens off-page—fights stay stylized and brief, casualties summarized, never dwell on wounds or suffering.")
 		case "mid":
-			add("【血腥尺度】中度血腥：战斗后果可见（血、伤口、疼痛），但不堆砌残肢内脏等极端意象，感官描写克制。",
-				"[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.")
+			add("[GORE] Moderate: consequences of violence are visible (blood, wounds, pain) but avoid extreme dismemberment imagery; keep sensory detail restrained.")
 			if young {
-				add("【血腥尺度·读者上限】目标读者为儿童/低龄或全年龄：血腥自动降级为几乎不可见，仅以结果一笔带过。",
-					"[GORE · AUDIENCE CEILING] Child/all-ages audience: gore drops to nearly invisible—mention outcomes only.")
+				add("[GORE · AUDIENCE CEILING] Child/all-ages audience: gore drops to nearly invisible—mention outcomes only.")
 			}
 		case "explicit":
 			if young {
-				add("【血腥尺度·读者上限】目标读者为儿童/低龄或全年龄：禁止细致血腥，自动降级为中度以下处理。",
-					"[GORE · AUDIENCE CEILING] Child/all-ages audience: graphic gore is prohibited—downgrade automatically below moderate.")
+				add("[GORE · AUDIENCE CEILING] Child/all-ages audience: graphic gore is prohibited—downgrade automatically below moderate.")
 			} else if aud == "ya" {
-				add("【血腥尺度·读者上限】目标读者为青少年：暴力可以沉重，但避免细致入微的残虐描写，重在情绪冲击而非生理细节。",
-					"[GORE · AUDIENCE CEILING] Young-adult audience: violence can be heavy, but skip meticulous torture-level detail—prioritize emotional impact over physiological description.")
+				add("[GORE · AUDIENCE CEILING] Young-adult audience: violence can be heavy, but skip meticulous torture-level detail—prioritize emotional impact over physiological description.")
 			} else {
-				add("【血腥尺度】非常露骨：可直面描写创伤、尸体与痛苦的生理细节，用于营造真实感与冲击力；不为猎奇而滥用。",
-					"[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.")
+				add("[GORE] Very explicit: trauma, corpses and the physiology of pain may be faced head-on for realism and impact—use deliberately, not gratuitously.")
 			}
 		}
 	}
@@ -1397,40 +1389,24 @@ func ContentGuidance(sc *StoryConfig, lang string) string {
 	if v := strings.TrimSpace(sc.WorldDarkness); v != "" {
 		switch v {
 		case "idyllic":
-			add("【世界残酷度】田园世界：社会总体善良可信，威胁多来自外部或误会，恶意罕见且容易被化解，读完应感到温暖。",
-				"[WORLD DARKNESS] Idyllic: society is fundamentally kind and trustworthy; threats come from outside or from misunderstandings; malice is rare and easily resolved—the book should leave readers warm.")
+			add("[WORLD DARKNESS] Idyllic: society is fundamentally kind and trustworthy; threats come from outside or from misunderstandings; malice is rare and easily resolved—the book should leave readers warm.")
 		case "temperate":
-			add("【世界残酷度】温和写实：好人多但也有自私者，代价真实存在但世界总体讲理，黑暗存在于个体命运而非世界本质。",
-				"[WORLD DARKNESS] Temperate: mostly decent people with some selfish ones; real costs but a fundamentally fair world—darkness lives in individual fates, not in the world's nature.")
+			add("[WORLD DARKNESS] Temperate: mostly decent people with some selfish ones; real costs but a fundamentally fair world—darkness lives in individual fates, not in the world's nature.")
 		case "gritty":
-			add("【世界残酷度】粗粝黑暗：资源紧张、制度腐败、背叛常见，主角每前进一步都要付出可见代价，善意常常没有好报。",
-				"[WORLD DARKNESS] Gritty: scarce resources, corrupt institutions, frequent betrayal; every step forward costs something visible; kindness often goes unrewarded.")
+			add("[WORLD DARKNESS] Gritty: scarce resources, corrupt institutions, frequent betrayal; every step forward costs something visible; kindness often goes unrewarded.")
 		case "grim":
-			add("【世界残酷度】阴暗残酷：系统性压迫与暴力常态化，无辜者会惨死，希望稀薄且需以巨大牺牲换取，胜利往往残缺。",
-				"[WORLD DARKNESS] Grim: systemic oppression and normalized violence; innocents die horribly; hope is thin and bought with enormous sacrifice; victories remain partial.")
+			add("[WORLD DARKNESS] Grim: systemic oppression and normalized violence; innocents die horribly; hope is thin and bought with enormous sacrifice; victories remain partial.")
 		case "abyssal":
-			add("【世界残酷度】深渊绝望：世界本身充满敌意甚至恶意，道德在生存面前普遍崩塌，角色面对的往往是坏选择与更坏选择，主题直面苦难的意义本身。",
-				"[WORLD DARKNESS] Abyssal: the world itself is hostile or outright malicious; morality collapses under survival; characters face bad choices and worse ones; the story confronts the meaning of suffering itself.")
+			add("[WORLD DARKNESS] Abyssal: the world itself is hostile or outright malicious; morality collapses under survival; characters face bad choices and worse ones; the story confronts the meaning of suffering itself.")
 		}
 	}
 
 	if p := strings.TrimSpace(sc.AudienceProfile); p != "" {
-		add("【目标读者画像】理想读者素描（写作时想象 TA 在阅读，贴合其口味与雷点）：\n"+p,
-			"[IDEAL READER PROFILE] Sketch of the ideal reader (write as if they are reading; match their tastes and avoid their deal-breakers):\n"+p)
+		add("[IDEAL READER PROFILE] Sketch of the ideal reader (write as if they are reading; match their tastes and avoid their deal-breakers):\n" + p)
 	}
 
 	if len(lines) == 0 {
 		return ""
 	}
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return "CONTENT RATING & MATURITY SETTINGS (hard constraints unless overridden above):\n" + strings.Join(lines, "\n")
-	}
-	return "内容与尺度设定（除上文另有说明外均为硬性约束）：\n" + strings.Join(lines, "\n")
-}
-
-func pickLang(lang, zh, en string) string {
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return en
-	}
-	return zh
+	return "CONTENT RATING & MATURITY SETTINGS (hard constraints unless overridden above):\n" + strings.Join(lines, "\n")
 }

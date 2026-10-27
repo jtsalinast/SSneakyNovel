@@ -21,7 +21,7 @@ type projectCompatibilityError struct {
 }
 
 func (e *projectCompatibilityError) Error() string {
-	return "项目格式不兼容: " + e.compatibility
+	return "itemgridnot : " + e.compatibility
 }
 
 // detectProjectCompatibility only reads old project metadata to recommend the
@@ -32,7 +32,7 @@ func detectProjectCompatibility(projectDir string) (string, error) {
 		if os.IsNotExist(err) {
 			return projectCompatibilityUnknown, nil
 		}
-		return "", fmt.Errorf("读取项目配置失败: %w", err)
+		return "", fmt.Errorf("leer directorio de proyecto: %w", err)
 	}
 	var configProbe struct {
 		ProjectFormatVersion int `json:"project_format_version"`
@@ -58,7 +58,7 @@ func detectProjectCompatibility(projectDir string) (string, error) {
 		if os.IsNotExist(err) {
 			return projectCompatibilityUnknown, nil
 		}
-		return "", fmt.Errorf("读取项目进度失败: %w", err)
+		return "", fmt.Errorf("leer archivo de progreso: %w", err)
 	}
 	var progressProbe struct {
 		Chapters []struct {

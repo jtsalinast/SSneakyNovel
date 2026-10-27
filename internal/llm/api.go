@@ -21,6 +21,43 @@ type ChatRequest struct {
 	Stream        bool           `json:"stream,omitempty"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
 	MaxTokens     int            `json:"max_tokens,omitempty"`
+	// Temperature is only serialized when set (>0). The creativity slider of
+	// the "differentiating idea" generator maps its 1-5 level to a sampling
+	// temperature through CallAPIWithTemperature below.
+	Temperature *float64 `json:"temperature,omitempty"`
+}
+
+// WithTemperature returns a shallow copy of apiCfg carrying the given sampling
+// temperature (nil = provider default). It never mutates the shared project
+// config: h.apiCfg stays untouched and each caller passes the derived copy to
+// one specific call.
+func WithTemperature(apiCfg *config.APIConfig, temp *float64) *config.APIConfig {
+	if apiCfg == nil || temp == nil {
+		return apiCfg
+	}
+	cp := *apiCfg
+	return &cp
+}
+
+// temperatureFromContext retrieves the per-call temperature attached with
+// ContextWithTemperature, or nil when none was set.
+func temperatureFromContext(ctx context.Context) *float64 {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(temperatureCtxKey{}).(*float64); ok {
+		return v
+	}
+	return nil
+}
+
+type temperatureCtxKey struct{}
+
+// ContextWithTemperature returns a context carrying a sampling temperature for
+// downstream chat calls (used by CallAPIWithTemperature / llmJSONWithTemp).
+func ContextWithTemperature(ctx context.Context, temp float64) context.Context {
+	t := temp
+	return context.WithValue(ctx, temperatureCtxKey{}, &t)
 }
 
 type streamOptions struct {
@@ -128,8 +165,8 @@ func EnsureContextBudget(apiCfg *config.APIConfig) {
 	}
 }
 
-// FetchModelContextWindow 从 API 的 /models 端点获取指定模型的上下文窗口大小。
-// 成功返回 context_window > 0，失败返回 0（调用方应使用默认值）。
+// FetchModelContextWindow from API /models dotwithdrawfinger upperlowerwindowmouthbigsmall.
+// return context_window > 0, return 0(usesquareshouldmakeusevalue).
 func FetchModelContextWindow(apiCfg *config.APIConfig) int {
 	if apiCfg == nil || strings.TrimSpace(apiCfg.BaseURL) == "" || strings.TrimSpace(apiCfg.Model) == "" {
 		return 0
@@ -167,44 +204,118 @@ func FetchModelContextWindow(apiCfg *config.APIConfig) int {
 	return result.ContextWindow
 }
 
+// sharedHTTPClient returns a client that reuses TCP connections (keep-alive)
+// across calls. Creating a fresh http.Client per request prevented connection
+// reuse, so retry storms opened hundreds of sockets and flooded the local
+// network stack — one of the causes of machine freezes during generation.
+func sharedHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 8
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
 func ValidateConfig(apiCfg *config.APIConfig) error {
 	if strings.TrimSpace(apiCfg.BaseURL) == "" {
-		return fmt.Errorf("API Base URL 未配置")
+		return fmt.Errorf("API Base URL not configured")
 	}
 	if strings.TrimSpace(apiCfg.Model) == "" {
-		return fmt.Errorf("Model 未配置")
+		return fmt.Errorf("model not configured")
 	}
 	return nil
+}
+
+// isStreamUnsupportedError reports whether err is the server rejecting the
+// streaming request itself (HTTP 400 on a stream=true call). Only in that
+// case does retrying with a plain non-streaming completion make sense; every
+// other fatal error (auth, budget, oversized payload) would fail identically
+// on the second call.
+func isStreamUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "status code: 400") {
+		return false
+	}
+	// A context-budget rejection would fail identically without streaming;
+	// never spend a second HTTP call on it.
+	var budget *contextBudgetError
+	if errors.As(err, &budget) {
+		return false
+	}
+	return true
+}
+
+// IsOutputTruncation reports whether the model hit its output token cap
+// (finish_reason=length). The partial text is NOT carried inside the error:
+// callers receive it through CompletionResult.Content alongside this error.
+// Chapter generation treats truncation as RECOVERABLE: the partial draft is
+// handed to the length controller (which keeps, expands or regenerates it)
+// rather than aborting the chapter outright.
+func IsOutputTruncation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var limit *outputLimitError
+	return errors.As(err, &limit)
 }
 
 func IsFatalAPIError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Truncation is deliberately NOT fatal anymore: retrying with the same
+	// request would truncate identically, but throwing the partial draft away
+	// lost whole chapters that were merely slightly short of max_tokens. The
+	// streaming caller returns the partial content plus this error so the
+	// length-control loop can decide (keep / expand / regenerate).
 	var limit *outputLimitError
 	if errors.As(err, &limit) {
-		return true
+		return false
 	}
 	var budget *contextBudgetError
 	if errors.As(err, &budget) {
 		return true
 	}
 	msg := err.Error()
-	// 注意：不要把所有 "dial tcp" 都当作致命错误——
-	// "dial tcp ... i/o timeout" 等临时网络故障应当重试。
+	// Note: we deliberately do NOT treat every "dial tcp" occurrence as fatal —
+	// "dial tcp ... i/o timeout" is transient and should be retried.
 	if strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "no such host") {
 		return true
 	}
-	if strings.Contains(msg, "状态码: 401") ||
-		strings.Contains(msg, "状态码: 403") ||
-		strings.Contains(msg, "状态码: 404") {
+	if strings.Contains(msg, "status code: 401") ||
+		strings.Contains(msg, "status code: 403") ||
+		strings.Contains(msg, "status code: 404") {
 		return true
+	}
+	// Request-level 4xx errors will never succeed on retry: the server rejected
+	// the payload itself (too large / malformed / unsupported parameter).
+	// Retrying these used to hammer the API until the machine froze.
+	for _, code := range []string{"400", "413", "422"} {
+		if strings.Contains(msg, "status code: "+code) {
+			return true
+		}
 	}
 	if strings.Contains(msg, "context canceled") {
 		return true
 	}
 	return false
+}
+
+// maxErrorBodyRunes bounds how much of an API error response body is kept in
+// the returned error. Some providers echo the entire rejected prompt back in
+// the error body; without a cap this giant string was copied into every log
+// line and broadcast over SSE, saturating memory and UI channels.
+const maxErrorBodyRunes = 600
+
+func truncateErrorBody(body string) string {
+	body = strings.TrimSpace(body)
+	r := []rune(body)
+	if len(r) <= maxErrorBodyRunes {
+		return body
+	}
+	return string(r[:maxErrorBodyRunes]) + "… [truncated]"
 }
 
 // PromptInputBudget reserves output capacity and a small provider/tokenizer
@@ -240,13 +351,14 @@ func CallAPI(ctx context.Context, apiCfg *config.APIConfig, system, user string)
 	})
 }
 
-// CallAPIMessages 以完整的多轮消息数组调用 API。
-// 内部优先走流式并缓冲全文，使 token 计数在等待期间也能更新；流式不可用时回退同步请求。
+// CallAPIMessages calls the API with a full message list. It streams the
+// response, and only when streaming yields no content at all and the error is
+// transient does it fall back to one synchronous call.
 func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []Message) (string, error) {
 	messages = applyPromptAddon(ctx, messages)
 	result, err := CallAPIStreamMessages(ctx, apiCfg, messages, nil)
 	if err == nil && result.Content != "" {
-		return completionText(result, nil, apiCfg.MaxTokens)
+		return completionText(result, nil, maxTokensFor(apiCfg))
 	}
 	if ctx.Err() != nil {
 		if result.Content != "" {
@@ -257,15 +369,24 @@ func CallAPIMessages(ctx context.Context, apiCfg *config.APIConfig, messages []M
 	if result.Content != "" {
 		return result.Content, err
 	}
-	if err != nil && IsFatalAPIError(err) {
+	// Fall back to the synchronous endpoint only when the server explicitly
+	// rejected the streaming request itself (HTTP 400 on the stream call).
+	// Other fatal errors (auth, budget, oversized payload, 413/422) will also
+	// fail synchronously, so they must not trigger a second HTTP call — that
+	// doubled the connection pressure and log volume during generation storms.
+	if !isStreamUnsupportedError(err) {
 		return "", err
 	}
-	// Fall back only before any stream content has been received.
 	syncResult, syncErr := CallAPIMessagesSync(ctx, apiCfg, messages)
-	return completionText(syncResult, syncErr, apiCfg.MaxTokens)
+	if syncErr != nil {
+		// If the non-streaming fallback hit the output limit, surface that
+		// diagnostic instead of the original "stream unsupported" error.
+		return "", syncErr
+	}
+	return completionText(syncResult, nil, maxTokensFor(apiCfg))
 }
 
-// CallAPIMessagesSync 同步 HTTP 调用（仅作流式失败时的回退）。
+// CallAPIMessagesSync performs one plain (non-streaming) HTTP completion.
 func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages []Message) (CompletionResult, error) {
 	if err := validateContextBudget(apiCfg, messages); err != nil {
 		return CompletionResult{}, err
@@ -275,9 +396,10 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	tracker.beginCall(messages)
 
 	reqBody := ChatRequest{
-		Model:     apiCfg.Model,
-		Messages:  messages,
-		MaxTokens: apiCfg.MaxTokens,
+		Model:       apiCfg.Model,
+		Messages:    messages,
+		MaxTokens:   apiCfg.MaxTokens,
+		Temperature: temperatureFromContext(ctx),
 	}
 
 	bts, err := json.Marshal(reqBody)
@@ -296,7 +418,10 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	}
 
 	timeout := time.Duration(apiCfg.HTTPTimeoutSeconds) * time.Second
-	client := &http.Client{Timeout: timeout}
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
+	client := sharedHTTPClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return CompletionResult{}, err
@@ -309,7 +434,7 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return CompletionResult{}, fmt.Errorf("API 响应错误，状态码: %d, 返回内容: %s", resp.StatusCode, string(bodyBytes))
+		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, truncateErrorBody(string(bodyBytes)))
 	}
 
 	var chatResp ChatResponse
@@ -328,64 +453,81 @@ func CallAPIMessagesSync(ctx context.Context, apiCfg *config.APIConfig, messages
 		}
 		return CompletionResult{Content: content, FinishReason: chatResp.Choices[0].FinishReason}, nil
 	}
-	return CompletionResult{}, fmt.Errorf("接口未响应有效 Choices 文本")
+	return CompletionResult{}, fmt.Errorf("API returned no valid Choices text")
+}
+
+// MaxAPIRetries bounds the retry loop in CallAPIWithRetry/CallAPIWithRetryLog.
+// Without a ceiling, transient errors or empty responses caused an infinite
+// retry loop that saturated CPU, connections and log channels (this was the
+// root cause of machine freezes when a generation task kept hammering the API).
+const MaxAPIRetries = 8
+
+func callWithRetryLoop(ctx context.Context, apiCfg *config.APIConfig, system, user string, onRetry func(err error, attempt, waitSec int)) string {
+	for retryCount := 1; ; retryCount++ {
+		if ctx.Err() != nil {
+			return ""
+		}
+		result, err := CallAPI(ctx, apiCfg, system, user)
+		if err == nil && strings.TrimSpace(result) != "" {
+			return result
+		}
+		if IsFatalAPIError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return ""
+		}
+		if retryCount >= MaxAPIRetries {
+			if onRetry != nil {
+				e := err
+				if e == nil {
+					e = fmt.Errorf("API returned empty response")
+				}
+				onRetry(e, retryCount, 0)
+			}
+			return ""
+		}
+		waitTime := RetryWaitTime(retryCount)
+		if onRetry != nil {
+			e := err
+			if e == nil {
+				e = fmt.Errorf("API returned empty response")
+			}
+			onRetry(e, retryCount, waitTime)
+		}
+		select {
+		case <-time.After(time.Duration(waitTime) * time.Second):
+		case <-ctx.Done():
+			return ""
+		}
+	}
 }
 
 func CallAPIWithRetry(ctx context.Context, apiCfg *config.APIConfig, system, user string) string {
-	retryCount := 0
-	for {
-		if ctx.Err() != nil {
-			return ""
-		}
-		result, err := CallAPI(ctx, apiCfg, system, user)
-		if err == nil && result != "" {
-			return result
-		}
-		if IsFatalAPIError(err) {
-			fmt.Printf(" ❌ [致命错误] %v，不再重试\n", err)
-			return ""
-		}
-
-		retryCount++
-		waitTime := RetryWaitTime(retryCount)
-		fmt.Printf(" ⚠️ [错误] API调用失败: %v。第 %d 次重试，等待 %ds 后重试...\n", err, retryCount, waitTime)
-		select {
-		case <-time.After(time.Duration(waitTime) * time.Second):
-		case <-ctx.Done():
-			return ""
-		}
-	}
+	return callWithRetryLoop(ctx, apiCfg, system, user, func(err error, attempt, waitSec int) {
+		fmt.Printf(" ⚠️ API call failed: %v. Retry %d/%d, waiting %ds...\n", err, attempt, MaxAPIRetries, waitSec)
+	})
 }
 
 func CallAPIWithRetryLog(ctx context.Context, apiCfg *config.APIConfig, system, user string, logger *sse.LogBroadcaster) string {
-	retryCount := 0
-	for {
-		if ctx.Err() != nil {
-			return ""
+	return callWithRetryLoop(ctx, apiCfg, system, user, func(err error, attempt, waitSec int) {
+		if logger != nil {
+			logger.WarnKey("log.api_retry", err, attempt, waitSec)
+		} else {
+			fmt.Printf(" ⚠️ API call failed: %v. Retry %d/%d, waiting %ds...\n", err, attempt, MaxAPIRetries, waitSec)
 		}
-		result, err := CallAPI(ctx, apiCfg, system, user)
-		if err == nil && result != "" {
-			return result
-		}
-		if IsFatalAPIError(err) {
-			logger.ErrorKey("log.fatal_no_retry", err)
-			return ""
-		}
+	})
+}
 
-		retryCount++
-		waitTime := RetryWaitTime(retryCount)
-		logger.WarnKey("log.api_retry", err, retryCount, waitTime)
-		select {
-		case <-time.After(time.Duration(waitTime) * time.Second):
-		case <-ctx.Done():
-			return ""
-		}
-	}
+// CallAPITemperature is the retrying call variant used by generators that need
+// an explicit sampling temperature (e.g. the differentiating-idea creativity
+// level). The temperature travels through the context so both the streaming
+// and synchronous paths serialize it into the chat request body.
+func CallAPITemperature(ctx context.Context, apiCfg *config.APIConfig, system, user string, logger *sse.LogBroadcaster, temperature float64) string {
+	ctx = ContextWithTemperature(ctx, temperature)
+	return CallAPIWithRetryLog(ctx, apiCfg, system, user, logger)
 }
 
 func RetryWaitTime(retry int) int {
-	if retry > 6 {
-		return 30
+	if retry > 4 {
+		return 20
 	}
 	return retry * 5
 }
@@ -405,10 +547,20 @@ func CallAPIStream(ctx context.Context, apiCfg *config.APIConfig, system, user s
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}, onChunk)
-	return completionText(result, err, apiCfg.MaxTokens)
+	return completionText(result, err, maxTokensFor(apiCfg))
 }
 
-// CallAPIStreamMessages 以完整的多轮消息数组调用 API（流式）。
+// maxTokensFor resolves the effective output cap actually sent to the API so
+// truncation diagnostics report the real limit instead of a raw 0 when the
+// project leaves MaxTokens unset (DefaultMaxTokens is applied per-request).
+func maxTokensFor(apiCfg *config.APIConfig) int {
+	if apiCfg != nil && apiCfg.MaxTokens > 0 {
+		return apiCfg.MaxTokens
+	}
+	return config.DefaultMaxTokens
+}
+
+// CallAPIStreamMessages calls the streaming API with a full message list.
 func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messages []Message, onChunk func(string)) (CompletionResult, error) {
 	if err := validateContextBudget(apiCfg, messages); err != nil {
 		return CompletionResult{}, err
@@ -423,6 +575,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 		MaxTokens:     apiCfg.MaxTokens,
+		Temperature:   temperatureFromContext(ctx),
 	}
 
 	bts, err := json.Marshal(reqBody)
@@ -441,7 +594,10 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 	}
 
 	timeout := time.Duration(apiCfg.HTTPTimeoutSeconds) * time.Second
-	client := &http.Client{Timeout: timeout}
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
+	client := sharedHTTPClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return CompletionResult{}, err
@@ -449,8 +605,8 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return CompletionResult{}, fmt.Errorf("API 响应错误，状态码: %d, 返回内容: %s", resp.StatusCode, string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return CompletionResult{}, fmt.Errorf("API error, status code: %d, response body: %s", resp.StatusCode, truncateErrorBody(string(bodyBytes)))
 	}
 
 	var fullContent strings.Builder
@@ -459,6 +615,40 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 	var finishReason string
 	var readErr error
 	done := false
+
+	// Some OpenAI-compatible servers ignore "stream": true and answer with a
+	// plain JSON completion. Detect that shape up front (content-type is not
+	// text/event-stream) and parse the body as a non-stream response instead of
+	// silently producing an empty stream error.
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		var chatResp ChatResponse
+		if jerr := json.Unmarshal(bodyBytes, &chatResp); jerr == nil && len(chatResp.Choices) > 0 {
+			content := chatResp.Choices[0].Message.Content
+			fr := chatResp.Choices[0].FinishReason
+			if tracker != nil {
+				if chatResp.Usage != nil {
+					tracker.finishCall(chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, true, messages, content)
+				} else {
+					tracker.finishCall(0, 0, false, messages, content)
+				}
+			}
+			if content != "" && onChunk != nil {
+				onChunk(content)
+			}
+			completion := CompletionResult{Content: content, FinishReason: fr}
+			if ctx.Err() != nil {
+				return completion, ctx.Err()
+			}
+			if content == "" {
+				return completion, fmt.Errorf("non-streaming response was empty")
+			}
+			return completion, nil
+		}
+		// Not valid JSON either: fall through to the SSE loop, which will
+		// surface a proper "stream ended" error.
+		reader = bufio.NewReader(bytes.NewReader(bodyBytes))
+	}
 
 	for readErr == nil {
 		if ctx.Err() != nil {
@@ -520,7 +710,7 @@ func CallAPIStreamMessages(ctx context.Context, apiCfg *config.APIConfig, messag
 		return completion, fmt.Errorf("stream ended without finish_reason or [DONE] after %d bytes: %w", len(result), io.ErrUnexpectedEOF)
 	}
 	if result == "" {
-		return completion, fmt.Errorf("流式响应为空")
+		return completion, fmt.Errorf("streaming response was empty")
 	}
 	return completion, nil
 }

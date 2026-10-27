@@ -21,7 +21,8 @@
   },
   "optionalDependencies": {
     "@rollup/rollup-darwin-arm64": "4.61.1",
-    "@rollup/rollup-darwin-x64": "4.61.1"
+    "@rollup/rollup-darwin-x64": "4.61.1",
+    "@rollup/rollup-linux-x64-gnu": "4.61.1"
   },
   "dependencies": {
     "@types/node": "^26.6.3",

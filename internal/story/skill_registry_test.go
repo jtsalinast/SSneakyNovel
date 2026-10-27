@@ -74,7 +74,7 @@ func TestSkillZipRejectsTraversalAndSymlink(t *testing.T) {
 }
 
 func TestResolveSkillsUsesEnabledLanguageAndScope(t *testing.T) {
-	skills := []Skill{{ID: "a", Lang: "en", AppliesTo: []string{SkillScopeChapterGenerate}}, {ID: "b", Lang: "en", AppliesTo: []string{SkillScopeChapterPolish}}, {ID: "c", Lang: "zh", AppliesTo: []string{SkillScopeChapterGenerate}}}
+	skills := []Skill{{ID: "a", Lang: "en", AppliesTo: []string{SkillScopeChapterGenerate}}, {ID: "b", Lang: "en", AppliesTo: []string{SkillScopeChapterPolish}}, {ID: "c", Lang: "es", AppliesTo: []string{SkillScopeChapterGenerate}}}
 	sc := &config.SkillConfig{EnabledSkills: map[string]bool{"a": true, "b": true, "c": true}}
 	got := ResolveSkills(skills, sc, SkillScopeChapterGenerate, "en")
 	if len(got) != 1 || got[0].ID != "a" {

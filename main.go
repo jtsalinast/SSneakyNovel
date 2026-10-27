@@ -40,7 +40,7 @@ func main() {
 	if progDir == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Printf(" [错误] 无法获取当前目录: %v\n", err)
+			fmt.Printf(" [] nowithdrawwhenfront: %v\n", err)
 			os.Exit(1)
 		}
 		progDir = cwd
@@ -54,14 +54,14 @@ func main() {
 	apiCfgPath := filepath.Join(progDir, "api.json")
 	apiCfg, err := config.LoadAPIConfig(apiCfgPath)
 	if err != nil {
-		fmt.Printf(" [错误] 加载API配置失败: %v\n", err)
+		fmt.Printf(" [] APIplace: %v\n", err)
 		os.Exit(1)
 	}
 	llm.EnsureContextBudget(apiCfg)
 
 	if apiCfg.BaseURL == "" || apiCfg.Model == "" {
-		fmt.Println(" [系统] 检测到空白API配置，已自动生成 api.json")
-		fmt.Println(" [系统] 请通过 Web UI 配置 API 地址和模型后再使用")
+		fmt.Println(" [is] toemptywhiteAPIplace, alreadymovelife api.json")
+		fmt.Println(" [is] pleasepass Web UI place API andlateragainmakeuse")
 	}
 
 	port := os.Getenv("PORT")
@@ -76,16 +76,16 @@ func main() {
 
 	devlog.Init(progDir, version)
 
-	fmt.Printf(" [系统] 版本: %s\n", version)
-	fmt.Printf(" [系统] 程序目录: %s\n", progDir)
-	fmt.Printf(" [系统] 项目目录: %s\n", storysDir)
+	fmt.Printf(" [is] this: %s\n", version)
+	fmt.Printf(" [is] order: %s\n", progDir)
+	fmt.Printf(" [is] item: %s\n", storysDir)
 	if devlog.Enabled() {
-		fmt.Printf(" [系统] 开发日志: %s\n", filepath.Join(progDir, "dev.log"))
+		fmt.Printf(" [is] openhairsunambition: %s\n", filepath.Join(progDir, "dev.log"))
 	}
 
 	staticFS, err := fs.Sub(staticFiles, "frontend/dist")
 	if err != nil {
-		log.Fatalf("嵌入静态文件失败: %v", err)
+		log.Fatalf("enterquietpostureitem: %v", err)
 	}
 
 	httpapi.StartWebServer(apiCfg, apiCfgPath, logger, port, progDir, version, staticFS)

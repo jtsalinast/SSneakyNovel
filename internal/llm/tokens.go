@@ -35,9 +35,51 @@ func newTaskTokenUsage(logger *sse.LogBroadcaster) *TaskTokenUsage {
 	return &TaskTokenUsage{logger: logger}
 }
 
+// NewTaskTokenUsage builds a standalone tracker (exported wrapper around the
+// private constructor) for detached runners that must own their token counts —
+// see StartDetachedPrePlanGenerate.
+func NewTaskTokenUsage(logger *sse.LogBroadcaster) *TaskTokenUsage {
+	return newTaskTokenUsage(logger)
+}
+
 func WithTaskTokens(ctx context.Context, logger *sse.LogBroadcaster) (context.Context, *TaskTokenUsage) {
 	usage := newTaskTokenUsage(logger)
 	return context.WithValue(ctx, taskTokenCtxKey{}, usage), usage
+}
+
+// AttachTaskTokens re-uses an existing tracker for ctx: it returns a derived
+// context whose LLM calls accumulate into usage. When usage is nil the context
+// is returned unchanged (calls then report no usage, same as before). Used by
+// detached background work (Generate buttons) so its tokens land in the same
+// badge the UI reads via /api/status instead of an orphaned tracker.
+func AttachTaskTokens(ctx context.Context, usage *TaskTokenUsage) context.Context {
+	if usage == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, taskTokenCtxKey{}, usage)
+}
+
+// MaxTaskDuration is the DEFAULT hard wall-clock ceiling for a single
+// background generation task. Without it, a persistently failing or hanging
+// API endpoint could keep a task (and its retry loops) alive forever,
+// saturating CPU, connections and log channels — the root cause of machine
+// freezes during generation. Callers must invoke the returned cancel func when
+// the task ends normally so resources are released early.
+const MaxTaskDuration = 30 * time.Minute
+
+// NewTaskContext builds the root context for a background generation task:
+// cancellable on demand (manual stop) and bounded by maxDuration. A
+// non-positive maxDuration means NO wall-clock ceiling — the task runs until
+// it completes or the user presses Stop. This is what the configurable
+// task_duration_minutes setting maps to: long chapter batches that include
+// several rewrite passes legitimately exceed 30 minutes, and previously the
+// deadline killed them mid-flight even though every individual LLM call was
+// healthy (per-call HTTP timeouts still apply either way).
+func NewTaskContext(parent context.Context, maxDuration time.Duration) (context.Context, context.CancelFunc) {
+	if maxDuration <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, maxDuration)
 }
 
 func TaskTokensFromContext(ctx context.Context) *TaskTokenUsage {
