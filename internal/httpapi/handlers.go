@@ -3377,6 +3377,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 					StoryIdea:       strings.TrimSpace(h.cfg.Story.StoryIdea),
 					Story:           &h.cfg.Story,
 					CreativityLevel: forcedSectionCreativity(fastForced),
+					EnhanceText:     forcedSectionEnhance(fastForced),
 				})
 			}
 			genErr = startOnce()

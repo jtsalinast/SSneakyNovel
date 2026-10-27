@@ -36,6 +36,11 @@ type SectionGenRequest struct {
 	// 3 Balanced / 4 Bold / 5 Disruptive (0 = balanced default). Ignored by
 	// every other section.
 	CreativityLevel int
+	// EnhanceText switches the "differentiating_idea" generator from CREATE
+	// (write a brand-new idea at the creativity level) to ENHANCE: rewrite the
+	// author's own draft carried in this field, keeping every idea already
+	// expressed. Empty = normal creation. Ignored by every other section.
+	EnhanceText string
 	// WorldviewCategory optionally overrides the category derived from a
 	// per-category worldview section key (wv_geography, ...). The HTTP layer
 	// accepts it in the request body; empty means derive it from Section.

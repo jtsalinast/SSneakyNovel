@@ -1359,6 +1359,58 @@ function randomizeStoryParams() {
   // in-flight state (spinner inside the bulb, width lock, disabled).
   $: appealSuggesting = !!genBusy['differentiating_idea'];
 
+  // —— Wand "Enhance" button (user request) ——
+  // Appears at the TOP-RIGHT INSIDE the Story appeal textarea while it has
+  // focus. It takes the CURRENT textarea text and sends it to the LLM through
+  // the chat pipeline: the deterministic fast path ([generate-section:...;
+  // enhance=<draft>], internal/httpapi forcedSectionEnhance + EnhanceText)
+  // rewrites the draft with buildEnhancePrompt and updates only the
+  // differentiating_idea field. A pre-generation undo snapshot is captured so
+  // the normal Generate-undo machinery can restore the author's original text.
+  let appealFocused = false;
+  let appealEnhancing = false;
+
+  async function enhanceDifferentiatingIdea() {
+    if (appealEnhancing || appealSuggesting) return;
+    const current = (localStoryCfg.differentiating_idea || '').trim();
+    if (!current) {
+      addToast($t('config.appeal.enhanceEmpty'), 'info');
+      return;
+    }
+    // Keep the wand visible while its own generation runs: clicking it moves
+    // focus out of the textarea (focusout fires), but the in-flight state must
+    // still show the spinner instead of making the button vanish mid-request.
+    appealEnhancing = true;
+    genBusy = { ...genBusy, differentiating_idea: true };
+    sharedGenBusy.differentiating_idea = true;
+    captureStoryFields('differentiating_idea', ['differentiating_idea']);
+    try {
+      await sendToChat(`${$t('config.generate.chat.differentiating_idea')} [enhance=${current}]`);
+      startGenPolling();
+      addToast($t('config.appeal.enhanced'), 'success');
+    } catch (e) {
+      console.log('[enhance] dispatch failed', e?.message || String(e));
+      delete sharedGenBusy.differentiating_idea;
+      genBusy = { ...genBusy, differentiating_idea: false };
+      if (!Object.values(sharedGenBusy).some(Boolean)) taskRunning.set(false);
+      addToast(e?.message || String(e), 'error');
+    } finally {
+      appealEnhancing = false;
+    }
+  }
+
+  // Click-flash state for the wand button (the magic border glow from the
+  // design preview) and the click handler that refocuses the textarea so the
+  // author can keep editing right after the enhanced text lands in the box.
+  let enhanceFlash = false;
+  function onEnhanceClick() {
+    enhanceDifferentiatingIdea();
+    enhanceFlash = true;
+    setTimeout(() => { enhanceFlash = false; }, 700);
+    const ta = document.querySelector('.appeal-box .appeal-textarea');
+    if (ta) ta.focus();
+  }
+
   const genClick = (section) => () => { generateSection(section); };
 
   $: resolvedChatURL = resolveChatCompletionsURL(localApiCfg.base_url, !!localApiCfg.url_strict);
@@ -2538,9 +2590,51 @@ function randomizeStoryParams() {
              here: Tailwind utility removal + `.appeal-box` scoped rules in the
              style block below (they also neutralize the global app.css
              `:focus-visible` outline and daisyUI textarea focus styles). -->
-        <div class="appeal-box relative bg-[#FAFAFA] rounded-2xl border border-[#E5E5E5] transition-all duration-200 overflow-hidden shadow-sm dark:bg-base-100 dark:border-base-300">
-          <textarea class="appeal-textarea w-full bg-transparent p-4 text-sm leading-relaxed font-mono focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
+        <div class="appeal-box relative bg-[#FAFAFA] rounded-2xl border border-[#E5E5E5] transition-all duration-200 shadow-sm dark:bg-base-100 dark:border-base-300"
+             on:focusin={() => appealFocused = true} on:focusout={() => appealFocused = false}>
+          <textarea class="appeal-textarea w-full bg-transparent p-4 pr-12 text-sm leading-relaxed focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
             bind:value={localStoryCfg.differentiating_idea} placeholder={$t('config.appeal.placeholder')}></textarea>
+          <!-- Wand "Enhance" (user request): appears TOP-RIGHT INSIDE the box
+               while the textarea has focus (or its own generation is in
+               flight). Expands left-to-right on hover exactly like the design
+               preview; sends the current draft to the LLM through the chat
+               fast path. `overflow` must stay visible on the wrapper for the
+               expanding width animation, so the button lives here as an
+               absolutely-positioned sibling of the textarea. -->
+          {#if appealFocused || appealEnhancing}
+            <button type="button" class="appeal-enhance-btn" class:clicked={enhanceFlash} class:busy={appealEnhancing}
+              disabled={appealEnhancing} aria-label={$t('config.appeal.enhance')} title={$t('config.appeal.enhance')}
+              on:click={onEnhanceClick}>
+              <span class="magic-border-glow"></span>
+              <span class="btn-content">
+                <span class="icon-container">
+                  {#if appealEnhancing}
+                    <span class="loading loading-spinner loading-xs"></span>
+                  {:else}
+                    <svg class="wand-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <defs>
+                        <linearGradient id="wandAuroraCfg" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" class="aurora-stop1" />
+                          <stop offset="50%" class="aurora-stop2" />
+                          <stop offset="100%" class="aurora-stop3" />
+                        </linearGradient>
+                      </defs>
+                      <g class="wand-body">
+                        <path d="M4.5 19.5L12.5 11.5" stroke="url(#wandAuroraCfg)" stroke-width="2.2" stroke-linecap="round"/>
+                        <path d="M12.5 11.5L15 9" stroke="url(#wandAuroraCfg)" stroke-width="2.2" stroke-linecap="round"/>
+                        <path d="M12 12L13 11" stroke="url(#wandAuroraCfg)" stroke-width="1.6" stroke-linecap="round"/>
+                        <path class="star-tip-linear" d="M17 1.5L18.4 4.8L21.8 5.2L19.2 7.5L20 10.8L17 9.1L14 10.8L14.8 7.5L12.2 5.2L15.6 4.8L17 1.5Z" stroke="url(#wandAuroraCfg)" stroke-width="1.5" stroke-linejoin="round" fill="#FAFAFA"/>
+                        <path class="particle-filled-1" d="M5 4.5L5.5 5.8L6.8 6.2L5.8 7.1L6.1 8.3L5 7.6L3.9 8.3L4.2 7.1L3.2 6.2L4.5 5.8L5 4.5Z" fill="url(#wandAuroraCfg)"/>
+                        <path class="particle-filled-2" d="M20 13.5L20.4 14.5L21.5 14.8L20.7 15.5L20.9 16.5L20 16L19.1 16.5L19.3 15.5L18.5 14.8L19.6 14.5L20 13.5Z" fill="url(#wandAuroraCfg)"/>
+                        <circle cx="10" cy="4" r="1" fill="url(#wandAuroraCfg)" />
+                      </g>
+                    </svg>
+                  {/if}
+                </span>
+                <span class="enhance-label">{$t('config.appeal.enhance')}</span>
+              </span>
+            </button>
+          {/if}
           <div class="border-t border-[#EFEFEF] bg-white p-3 flex flex-col gap-1 dark:bg-base-100 dark:border-base-300">
             <!-- Collapsible creativity bar (grid 0fr->1fr + fade, per design) -->
             <div class="appeal-collapsible" class:appeal-open={appealPanelOpen}>
@@ -2599,7 +2693,7 @@ function randomizeStoryParams() {
                         </svg>
                       {/if}
                     </span>
-                    <span class="appeal-label font-mono font-semibold text-[13px] whitespace-nowrap select-none">{$t('config.appeal.suggest')}</span>
+                    <span class="appeal-label font-semibold text-[13px] whitespace-nowrap select-none">{$t('config.appeal.suggest')}</span>
                   </button>
                 </div>
               </div>
@@ -3072,6 +3166,13 @@ function randomizeStoryParams() {
     box-shadow: none !important;
     border: none;
   }
+  /* Font (user request): the appeal textarea must use the same sans font as
+     the other fields of this tab (body's var(--font-sans) = Inter / Noto Sans
+     fallback stack), NOT the monospace it inherited via `font-mono`. Textareas
+     default to the browser monospace font, so set it explicitly. */
+  .appeal-box .appeal-textarea {
+    font-family: var(--font-sans);
+  }
 
   .appeal-collapsible {
     display: grid;
@@ -3196,6 +3297,21 @@ function randomizeStoryParams() {
     opacity: 0;
     transition: opacity 0.2s ease 0.06s, transform 0.3s ease 0.06s;
     pointer-events: none;
+    /* Text (user request): same animated aurora as the bulb icon — the label
+       is painted with the #fef08a -> #f472b6 -> #a78bfa gradient clipped to
+       the glyphs, sliding back and forth forever. `color` stays as a fallback
+       for browsers without background-clip:text. */
+    color: #ffffff;
+    background: linear-gradient(135deg, #fef08a 0%, #f472b6 50%, #a78bfa 100%);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: appealLabelAuroraShift 8s ease-in-out infinite alternate;
+  }
+  @keyframes appealLabelAuroraShift {
+    0%   { background-position: 0% 50%; }
+    100% { background-position: 100% 50%; }
   }
   .appeal-suggest-btn:hover:not(:disabled) .appeal-label,
   .appeal-suggest-btn.appeal-open .appeal-label {
@@ -3231,4 +3347,215 @@ function randomizeStoryParams() {
     45%, 70% { stop-color: #ffffff; }
     95%, 100% { stop-color: #a78bfa; }
   }
+
+  /* —— Wand "Enhance" button (user request) — ported from the HTML design
+     preview to this Svelte 4 component. Lives absolutely positioned at the
+     TOP-RIGHT INSIDE the .appeal-box textarea area, rendered only while the
+     box has focus (or its own generation is in flight). Collapsed 32px pill
+     that expands to the left-to-right "Enhance" label on hover, with the
+     neon pink / fuchsia / electric indigo / cyan aurora gradient shared by
+     icon and text, floating particles, a continuously-spinning tip star on
+     hover, and the magic border flash on click (.clicked). */
+  .appeal-enhance-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    height: 32px;
+    width: 32px;
+    padding: 0;
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 16px;
+    color: #111827;
+    cursor: pointer;
+    outline: none;
+    overflow: visible;
+    transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 0.25s ease,
+                box-shadow 0.35s ease,
+                transform 0.1s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06),
+                0 8px 16px -4px rgba(0, 0, 0, 0.08);
+    animation: enhancePopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes enhancePopIn {
+    from { opacity: 0; transform: scale(0.8); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .appeal-enhance-btn:hover:not(:disabled) {
+    width: 108px;
+    border-color: rgba(0, 0, 0, 0.2);
+    background: #ffffff;
+    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12),
+                0 2px 8px rgba(0, 0, 0, 0.04);
+  }
+  .appeal-enhance-btn:active:not(:disabled) { transform: scale(0.96); }
+  .appeal-enhance-btn:disabled { opacity: 0.85; cursor: wait; }
+  .appeal-enhance-btn .btn-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    height: 100%;
+    padding-left: 8px;
+  }
+  .enhance-label {
+    position: absolute;
+    left: 31px;
+    font-weight: 600;
+    font-size: 11.5px;
+    letter-spacing: -0.1px;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-8px);
+    /* Hidden immediately when hover ends; revealed with a soft delay on hover
+       (mirrors the design preview's asymmetric transitions). */
+    transition: opacity 0.12s ease 0s, transform 0.15s ease 0s, visibility 0s linear 0.15s;
+    user-select: none;
+    /* Vibrant palette: Neon Pink / Fuchsia / Electric Indigo / Cyan, animated
+       exactly like the wand icon so text and icon share one living gradient. */
+    color: #8b5cf6;
+    background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 50%, #06b6d4 100%);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: vibrantAuroraShift 4s ease infinite alternate;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .enhance-label {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+    transition: opacity 0.25s ease 0.12s,
+                transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) 0.12s,
+                visibility 0s linear 0s;
+  }
+  .appeal-enhance-btn .icon-container {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .appeal-enhance-btn .wand-svg {
+    width: 16px;
+    height: 16px;
+    overflow: visible;
+  }
+  /* Gradient stops always bright & colorfully animated (SVG stop-color). */
+  .aurora-stop1 { stop-color: #ec4899; animation: vibrantStop1 4s ease-in-out infinite alternate; }
+  .aurora-stop2 { stop-color: #8b5cf6; animation: vibrantStop2 4s ease-in-out infinite alternate; }
+  .aurora-stop3 { stop-color: #06b6d4; animation: vibrantStop3 4s ease-in-out infinite alternate; }
+  @keyframes vibrantAuroraShift {
+    0%   { background-position: 0% 50%; }
+    100% { background-position: 100% 50%; }
+  }
+  @keyframes vibrantStop1 {
+    0%   { stop-color: #ec4899; }
+    50%  { stop-color: #f43f5e; }
+    100% { stop-color: #8b5cf6; }
+  }
+  @keyframes vibrantStop2 {
+    0%   { stop-color: #8b5cf6; }
+    50%  { stop-color: #6366f1; }
+    100% { stop-color: #06b6d4; }
+  }
+  @keyframes vibrantStop3 {
+    0%   { stop-color: #06b6d4; }
+    50%  { stop-color: #3b82f6; }
+    100% { stop-color: #ec4899; }
+  }
+  /* Big linear star at the wand tip + small filled particles. */
+  .star-tip-linear {
+    transform-origin: 17px 6.15px;
+    transition: transform 0.3s ease;
+    animation: starFloatTip 2.5s ease-in-out infinite alternate;
+  }
+  .particle-filled-1 {
+    transform-origin: 5px 6px;
+    transition: transform 0.3s ease;
+    animation: particleFloat1 2.2s ease-in-out infinite alternate;
+  }
+  .particle-filled-2 {
+    transform-origin: 20px 14px;
+    transition: transform 0.3s ease;
+    animation: particleFloat2 2.8s ease-in-out infinite alternate;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .star-tip-linear {
+    animation: starContinuousRotate 2.5s linear infinite;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .particle-filled-1 {
+    animation: particlePulse1 0.75s ease-in-out infinite alternate;
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .particle-filled-2 {
+    animation: particlePulse2 0.9s ease-in-out 0.15s infinite alternate;
+  }
+  @keyframes starFloatTip {
+    0%   { transform: scale(0.95) rotate(-5deg); }
+    100% { transform: scale(1.1) rotate(12deg); }
+  }
+  /* Continuous one-direction spin while hovering the button. */
+  @keyframes starContinuousRotate {
+    0%   { transform: rotate(0deg) scale(1.1); }
+    100% { transform: rotate(360deg) scale(1.1); }
+  }
+  @keyframes particleFloat1 {
+    0%   { transform: scale(0.85) translate(0, 0); }
+    100% { transform: scale(1.15) translate(-0.5px, -1px); }
+  }
+  @keyframes particleFloat2 {
+    0%   { transform: scale(0.8) translate(0, 0); }
+    100% { transform: scale(1.2) translate(0.5px, 0.8px); }
+  }
+  @keyframes particlePulse1 {
+    0%   { transform: scale(0.8) rotate(0deg); }
+    100% { transform: scale(1.4) rotate(20deg); }
+  }
+  @keyframes particlePulse2 {
+    0%   { transform: scale(0.75) rotate(0deg); }
+    100% { transform: scale(1.35) rotate(-25deg); }
+  }
+  .wand-body {
+    transform-origin: 5px 19px;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .appeal-enhance-btn:hover:not(:disabled) .wand-body {
+    transform: rotate(-6deg) translateY(-0.5px);
+  }
+  /* Magic gradient border flash on click (.clicked toggled for 700ms). */
+  .magic-border-glow {
+    position: absolute;
+    inset: -1px;
+    border-radius: 16px;
+    border: 1.5px solid transparent;
+    background: linear-gradient(135deg, #ec4899, #8b5cf6, #06b6d4) border-box;
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: destination-out;
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .appeal-enhance-btn.clicked .magic-border-glow {
+    opacity: 1;
+    animation: borderFlash 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  @keyframes borderFlash {
+    0%   { opacity: 1; transform: scale(0.98); }
+    50%  { opacity: 0.9; transform: scale(1.03); }
+    100% { opacity: 0; transform: scale(1.05); }
+  }
+  /* In-flight spinner inherits the same aurora via currentColor-free CSS:
+     keep it subtle dark so it reads on the white pill. */
+  .appeal-enhance-btn.busy .loading-spinner,
+  .appeal-enhance-btn .icon-container .loading { color: #8b5cf6; }
 </style>

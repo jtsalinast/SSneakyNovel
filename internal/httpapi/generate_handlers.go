@@ -61,6 +61,9 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		// Creativity level for the differentiating-idea generator (1 Pragmatic ..
 		// 5 Disruptive); ignored by every other section.
 		Creativity int `json:"creativity"`
+		// EnhanceText switches the differentiating-idea generator from CREATE to
+		// ENHANCE mode (rewrite this draft instead of inventing a new idea).
+		EnhanceText string `json:"enhance_text"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.endTask()
@@ -80,6 +83,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		OrgID:             body.OrgID,
 		WorldviewCategory: body.WorldviewCategory,
 		CreativityLevel:   body.Creativity,
+		EnhanceText:       body.EnhanceText,
 		Ctx:               h.taskCtx, // snapshot: the caller holds the task lock
 	}
 	if err := h.validateSectionGen(req); err != nil {
@@ -335,7 +339,7 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 		case "reader_expectation":
 			err = h.generateReaderExpectation(ctx, &storyCfg)
 		case "differentiating_idea":
-			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel)
+			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -408,7 +412,7 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 		case "reader_expectation":
 			err = h.generateReaderExpectation(ctx, &storyCfg)
 		case "differentiating_idea":
-			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel)
+			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -504,6 +508,20 @@ func forcedSectionCreativity(call *agent.ToolCall) int {
 		_ = json.Unmarshal(call.Arguments, &params)
 	}
 	return params.Creativity
+}
+
+// forcedSectionEnhance extracts the optional enhance text carried by a forced
+// generate_section tool call (from a [generate-section:differentiating_idea;
+// enhance=<urlencoded draft>] tag) so the chat fast path rewrites the author's
+// own draft instead of creating a brand-new differentiating idea.
+func forcedSectionEnhance(call *agent.ToolCall) string {
+	var params struct {
+		Enhance string `json:"enhance"`
+	}
+	if call != nil {
+		_ = json.Unmarshal(call.Arguments, &params)
+	}
+	return params.Enhance
 }
 
 // storyParamsContext assembles the full novel parameters (including the story
@@ -936,6 +954,64 @@ func (h *Handlers) PostDifferentiatingIdeaSuggest(w http.ResponseWriter, r *http
 	})
 }
 
+// buildEnhancePrompt asks the LLM to rewrite/polish the user's own
+// differentiating-idea draft. Unlike buildDifferentiatingPrompt (which CREATES
+// an idea from scratch at a creativity level), this preserves the author's
+// intent and only sharpens wording, specificity and market punch. The answer
+// must keep the novel's output language so it drops straight back into the
+// textarea.
+func buildEnhancePrompt(sc *config.StoryConfig, lang string, text string) string {
+	prompt := storyParamsContext(sc, lang)
+	prompt += "\nThe author drafted this \"differentiating idea\" (the book's unique selling angle):\n---\n"
+	prompt += text
+	prompt += "\n---\nRewrite it so it is sharper, more concrete and more compelling on the genre shelf, while keeping every idea the author already expressed (do NOT invent new plot elements, do not summarize the story, do not change language). Keep 2-4 punchy sentences."
+	prompt += jsonRule(lang, `{"differentiating_idea": "..."}`)
+	return prompt
+}
+
+// PostDifferentiatingIdeaEnhance powers the wand "Enhance" button that appears
+// inside the Story appeal textarea on focus: it takes the CURRENT textarea
+// text, sends it through the chat pipeline (same deterministic
+// [generate-section:differentiating_idea;enhance] fast path used by the
+// aurora "Suggest" bulb) AND calls the LLM synchronously so the improved text
+// lands in the box immediately — no manual copy-paste from the chat needed.
+// Persisting still happens through the normal Save/PUT /api/config path.
+func (h *Handlers) PostDifferentiatingIdeaEnhance(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	var body struct {
+		Story *config.StoryConfig `json:"story"`
+		Text  string              `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "empty_text", "")
+		return
+	}
+	sc := h.cfg.Story
+	if body.Story != nil {
+		sc = *body.Story
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	prompt := buildEnhancePrompt(&sc, h.cfg.Language, text)
+	content := llm.CallAPIWithRetryLog(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger)
+	enhanced := parseDifferentiatingIdea(content)
+	if enhanced == "" {
+		h.writeErrorReq(w, r, http.StatusBadGateway, "empty_generation", "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"differentiating_idea": enhanced,
+	})
+}
+
 // generateDifferentiatingIdea writes the "differentiating idea": the single
 // angle that sets this book apart from everything else on its genre shelf.
 // Unlike every other generator it is driven by an explicit creativity level
@@ -944,11 +1020,16 @@ func (h *Handlers) PostDifferentiatingIdeaSuggest(w http.ResponseWriter, r *http
 // so low levels propose shelf-tested twists and high levels propose
 // category-breaking ones. This section ONLY fills differentiating_idea — it
 // never touches the other fields, and no other button overwrites it.
-func (h *Handlers) generateDifferentiatingIdea(ctx context.Context, sc *config.StoryConfig, level int) error {
+func (h *Handlers) generateDifferentiatingIdea(ctx context.Context, sc *config.StoryConfig, level int, enhanceText string) error {
 	if level < 1 || level > 5 {
 		level = 3
 	}
 	prompt := buildDifferentiatingPrompt(sc, h.cfg.Language, level)
+	if strings.TrimSpace(enhanceText) != "" {
+		// Enhance mode (wand button inside the textarea): rewrite the author's
+		// own draft instead of creating a brand-new idea from scratch.
+		prompt = buildEnhancePrompt(sc, h.cfg.Language, enhanceText)
+	}
 
 	content := llm.CallAPITemperature(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt, h.logger, agent.CreativityTemperature(level))
 	idea := parseDifferentiatingIdea(content)
