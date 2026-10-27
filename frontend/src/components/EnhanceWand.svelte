@@ -15,16 +15,31 @@
   // appeal-box wand uses — so every mount renders identically and the aurora
   // animations stay in sync. The SVG gradient id embeds `field` so multiple
   // mounted wands never collide on duplicate DOM ids.
+  // IMPORTANT (Svelte 4): the click contract is a REAL event, not an
+  // `onclick` prop. Parents MUST listen with `on:click` on this component —
+  // passing `onclick={handler}` as a plain attribute/prop was one of the
+  // reasons the wands never fired (see Config.svelte fix notes). We forward
+  // the native click through a <svelte:component this="button">-free
+  // dispatch() so both patterns keep working during migration, but the
+  // canonical wiring is `on:click`.
+  import { createEventDispatcher } from 'svelte';
   export let field = '';
   export let busy = false;
   export let flash = false;
   export let label = 'Enhance';
-  export let onclick = () => {};
+  // Legacy prop kept ONLY as a fallback so any stale `onclick={fn}` call site
+  // still works; new code uses the forwarded `click` event instead.
+  export let onclick = null;
+  const dispatch = createEventDispatcher();
+  function handleClick(e) {
+    if (typeof onclick === 'function') onclick(e);
+    dispatch('click', { field });
+  }
 </script>
 
 <button type="button" class="appeal-enhance-btn" class:clicked={flash} class:busy={busy}
   disabled={busy} aria-label={label} title={label}
-  on:click={onclick}>
+  on:click={handleClick}>
   <span class="magic-border-glow"></span>
   <span class="btn-content">
     <span class="icon-container">

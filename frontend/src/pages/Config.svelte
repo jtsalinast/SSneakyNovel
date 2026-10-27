@@ -1379,22 +1379,47 @@ function randomizeStoryParams() {
   function isFieldFocused(f) { return focusedField === f; }
   function isFieldBusy(f) { return enhancingField === f || !!genBusy[f]; }
   function showWandFor(f) { return (focusedField === f || enhancingField === f); }
+
+  // FIX #2 (root cause of "the wand never appears"): the wrappers used to
+  // clear `focusedField` on EVERY focusout — including the one that fires the
+  // instant the pointer enters the wand button itself (mousedown blurs the
+  // textarea). Because Svelte flushes DOM updates synchronously on state
+  // change, the `{#if showWandFor(f)}` block was destroyed BEFORE the click
+  // event could be dispatched: the button vanished mid-click and the handler
+  // never ran. The guard below keeps the wand mounted whenever the focus is
+  // moving INTO it (or anywhere inside the same wrapper), and only clears the
+  // tracked field when focus truly leaves the wrapper. `e.relatedTarget` is
+  // null when focus goes to a non-focusable node / outside the document — in
+  // that case we also check `activeElement`, which during focusout already
+  // points at the element receiving focus.
+  function blurField(f, e) {
+    const wrap = e && e.currentTarget;
+    let next = e ? e.relatedTarget : null;
+    if (!next && typeof document !== 'undefined') next = document.activeElement;
+    if (wrap && next && wrap.contains(next)) return;   // focus stayed inside (e.g. the wand)
+    if (focusedField === f) focusedField = '';
+  }
+  function focusField(f) { return () => { focusedField = f; }; }
+  function blurFieldHandler(f) { return (e) => blurField(f, e); }
   // Reactive alias for the appeal-box markup: the wand shows its spinner while
   // ITS OWN enhance runs — a plain Suggest/CREATE of differentiating_idea must
   // not freeze the wand (user request: per-field independent behavior).
   $: appealEnhancing = enhancingField === 'differentiating_idea';
 
   async function enhanceField(field) {
-    if (enhancingField || genBusy[field]) return;
+    if (!enhancingField && genBusy[field]) return;   // a plain Generate owns this field
+    if (enhancingField && enhancingField !== field) return; // another enhance is running
     const current = String(localStoryCfg[field] || '').trim();
     if (!current) {
       addToast($t('config.appeal.enhanceEmpty'), 'info');
+      if (enhancingField === field) enhancingField = '';
       return;
     }
     await persistStoryBeforeGenerate();
     // Keep the wand visible while its own generation runs: clicking it moves
     // focus out of the field (focusout fires), but the in-flight state must
     // still show the spinner instead of making the button vanish mid-request.
+    // (onEnhanceClick already pinned `enhancingField` synchronously.)
     enhancingField = field;
     genBusy = { ...genBusy, [field]: true };
     sharedGenBusy[field] = true;
@@ -1422,11 +1447,23 @@ function randomizeStoryParams() {
   // Click-flash state for the wand button (the magic border glow from the
   // design preview) and the click handler that refocuses the field so the
   // author can keep editing right after the enhanced text lands in the box.
-  let enhanceFlash = false;
+  // FIX: the flash is tracked PER FIELD (`flashedField`) instead of a global
+  // boolean combined with `focusedField === f` — during an in-flight enhance
+  // the focus may legitimately leave the wrapper, which made the old
+  // expression go false and killed the flash animation mid-way.
+  let flashedField = '';
   function onEnhanceClick(field) {
+    // Pin the wand visible BEFORE dispatching: enhanceField() runs async work
+    // (persistStoryBeforeGenerate) and the click itself moves focus; keeping
+    // `enhancingField` set synchronously guarantees showWandFor stays true for
+    // the whole request even if focusout slips through first.
+    enhancingField = field;
+    enhanceFlashFx(field);
     enhanceField(field);
-    enhanceFlash = true;
-    setTimeout(() => { enhanceFlash = false; }, 700);
+  }
+  function enhanceFlashFx(field) {
+    flashedField = field;
+    setTimeout(() => { if (flashedField === field) flashedField = ''; }, 700);
     const el = document.querySelector(`[data-enhance-field="${field}"] textarea, [data-enhance-field="${field}"] input`);
     if (el) el.focus();
   }
@@ -1435,7 +1472,10 @@ function randomizeStoryParams() {
   // one instance per ENHANCE_FIELDS entry, shown while its field has focus (or
   // its own enhance is in flight). Each SVG gradient id must be unique per
   // mount, hence `field` in the id. Spinner replaces the icon while busy.
-  function focusField(f) { return () => { focusedField = f; }; }
+  // NOTE: focusField(f) / blurFieldHandler(f) are declared next to the
+  // showWandFor helpers above — do NOT redeclare them here (a duplicate `let`
+  // binding in the same <script> throws at compile time and blanked the whole
+  // tab, which was why NO wand ever appeared).
   // Which fields share a wrapper: the motif card wraps theme/motif/
   // philosophical_dilemma/tone inside ONE relative container, so every field's
   // wand needs its own positioned inner wrapper (see markup below).
@@ -2529,28 +2569,28 @@ function randomizeStoryParams() {
         </div>
         <div class="space-y-1.5">
           <div class="relative" data-enhance-field="theme"
-               on:focusin={focusField('theme')} on:focusout={() => focusedField = ''}>
+               on:focusin={focusField('theme')} on:focusout={blurFieldHandler('theme')}>
             <!-- Target reader's expectation moved to the "Ideal reader profile"
                  card (user request): that card's Generate button now writes it
                  together with the audience profile. -->
             <span class="field-label">{$t('config.story.theme')}</span>
             <textarea class="textarea textarea-sm w-full text-sm pr-11" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning}></textarea>
             {#if showWandFor('theme')}
-              <EnhanceWand field="theme" busy={isFieldBusy('theme')} flash={enhanceFlash && focusedField === 'theme'}
-                label={$t('config.appeal.enhance')} onclick={wandClick('theme')} />
+              <EnhanceWand field="theme" busy={isFieldBusy('theme')} flash={flashedField === 'theme'}
+                label={$t('config.appeal.enhance')} on:click={wandClick('theme')} />
             {/if}
           </div>
           <div class="relative" data-enhance-field="motif"
-               on:focusin={focusField('motif')} on:focusout={() => focusedField = ''}>
+               on:focusin={focusField('motif')} on:focusout={blurFieldHandler('motif')}>
             <span class="field-label">{$t('config.motif.title')}</span>
             <textarea class="textarea textarea-sm w-full text-sm pr-11" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
             {#if showWandFor('motif')}
-              <EnhanceWand field="motif" busy={isFieldBusy('motif')} flash={enhanceFlash && focusedField === 'motif'}
-                label={$t('config.appeal.enhance')} onclick={wandClick('motif')} />
+              <EnhanceWand field="motif" busy={isFieldBusy('motif')} flash={flashedField === 'motif'}
+                label={$t('config.appeal.enhance')} on:click={wandClick('motif')} />
             {/if}
           </div>
           <div class="relative" data-enhance-field="philosophical_dilemma"
-               on:focusin={focusField('philosophical_dilemma')} on:focusout={() => focusedField = ''}>
+               on:focusin={focusField('philosophical_dilemma')} on:focusout={blurFieldHandler('philosophical_dilemma')}>
             <!-- Philosophical / operational dilemma: filled together with
                  theme/motif/tone by THIS card's Generate button (motif section
                  now returns five fields). No ⓘ tooltip (user request): the
@@ -2558,18 +2598,18 @@ function randomizeStoryParams() {
             <span class="field-label">{$t('config.dilemma.title')}</span>
             <textarea class="textarea textarea-sm w-full text-sm pr-11" rows="2" bind:value={localStoryCfg.philosophical_dilemma} placeholder={$t('config.dilemma.placeholder')} disabled={$taskRunning}></textarea>
             {#if showWandFor('philosophical_dilemma')}
-              <EnhanceWand field="philosophical_dilemma" busy={isFieldBusy('philosophical_dilemma')} flash={enhanceFlash && focusedField === 'philosophical_dilemma'}
-                label={$t('config.appeal.enhance')} onclick={wandClick('philosophical_dilemma')} />
+              <EnhanceWand field="philosophical_dilemma" busy={isFieldBusy('philosophical_dilemma')} flash={flashedField === 'philosophical_dilemma'}
+                label={$t('config.appeal.enhance')} on:click={wandClick('philosophical_dilemma')} />
             {/if}
           </div>
           <div>
             <span class="field-label">{$t('config.story.tone')}</span>
             <div class="relative" data-enhance-field="tone"
-                 on:focusin={focusField('tone')} on:focusout={() => focusedField = ''}>
+                 on:focusin={focusField('tone')} on:focusout={blurFieldHandler('tone')}>
               <input type="text" class="input input-sm w-full mb-1 pr-11" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
               {#if showWandFor('tone')}
-                <EnhanceWand field="tone" busy={isFieldBusy('tone')} flash={enhanceFlash && focusedField === 'tone'}
-                  label={$t('config.appeal.enhance')} onclick={wandClick('tone')} />
+                <EnhanceWand field="tone" busy={isFieldBusy('tone')} flash={flashedField === 'tone'}
+                  label={$t('config.appeal.enhance')} on:click={wandClick('tone')} />
               {/if}
             </div>
             {#if toneOpts.length}
@@ -2593,13 +2633,13 @@ function randomizeStoryParams() {
               on:click={() => generateSection('inspirational_pieces')} />
           </div>
           <div class="relative" data-enhance-field="inspirational_pieces"
-               on:focusin={focusField('inspirational_pieces')} on:focusout={() => focusedField = ''}>
+               on:focusin={focusField('inspirational_pieces')} on:focusout={blurFieldHandler('inspirational_pieces')}>
             <span class="field-label">{$t('config.inspiration.subtitle')}</span>
             <textarea class="textarea textarea-sm w-full text-xs pr-11" bind:value={localStoryCfg.inspirational_pieces}
               placeholder={$t('config.inspiration.placeholder')} disabled={$taskRunning} title={$t('config.tip.inspiration')}></textarea>
             {#if showWandFor('inspirational_pieces')}
-              <EnhanceWand field="inspirational_pieces" busy={isFieldBusy('inspirational_pieces')} flash={enhanceFlash && focusedField === 'inspirational_pieces'}
-                label={$t('config.appeal.enhance')} onclick={wandClick('inspirational_pieces')} />
+              <EnhanceWand field="inspirational_pieces" busy={isFieldBusy('inspirational_pieces')} flash={flashedField === 'inspirational_pieces'}
+                label={$t('config.appeal.enhance')} on:click={wandClick('inspirational_pieces')} />
             {/if}
           </div>
         </div>
@@ -2611,13 +2651,13 @@ function randomizeStoryParams() {
               on:click={() => generateSection('audience_profile')} />
           </div>
           <div class="relative" data-enhance-field="audience_profile"
-               on:focusin={focusField('audience_profile')} on:focusout={() => focusedField = ''}>
+               on:focusin={focusField('audience_profile')} on:focusout={blurFieldHandler('audience_profile')}>
             <span class="field-label">{$t('config.audience.profileSubtitle')}</span>
             <textarea class="textarea textarea-sm w-full text-xs pr-11" bind:value={localStoryCfg.audience_profile}
               placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
             {#if showWandFor('audience_profile')}
-              <EnhanceWand field="audience_profile" busy={isFieldBusy('audience_profile')} flash={enhanceFlash && focusedField === 'audience_profile'}
-                label={$t('config.appeal.enhance')} onclick={wandClick('audience_profile')} />
+              <EnhanceWand field="audience_profile" busy={isFieldBusy('audience_profile')} flash={flashedField === 'audience_profile'}
+                label={$t('config.appeal.enhance')} on:click={wandClick('audience_profile')} />
             {/if}
           </div>
           <div>
@@ -2628,13 +2668,13 @@ function randomizeStoryParams() {
                  "Genre conventions & obligatory motifs" subtitle was removed;
                  its guidance now lives in the placeholder. -->
             <div class="relative" data-enhance-field="reader_expectation"
-                 on:focusin={focusField('reader_expectation')} on:focusout={() => focusedField = ''}>
+                 on:focusin={focusField('reader_expectation')} on:focusout={blurFieldHandler('reader_expectation')}>
               <span class="field-label">{$t('config.readerExp.title')}</span>
               <textarea class="textarea textarea-sm w-full text-xs pr-11" rows="3" bind:value={localStoryCfg.reader_expectation}
                 placeholder={$t('config.readerExp.placeholder')} disabled={$taskRunning}></textarea>
               {#if showWandFor('reader_expectation')}
-                <EnhanceWand field="reader_expectation" busy={isFieldBusy('reader_expectation')} flash={enhanceFlash && focusedField === 'reader_expectation'}
-                  label={$t('config.appeal.enhance')} onclick={wandClick('reader_expectation')} />
+                <EnhanceWand field="reader_expectation" busy={isFieldBusy('reader_expectation')} flash={flashedField === 'reader_expectation'}
+                  label={$t('config.appeal.enhance')} on:click={wandClick('reader_expectation')} />
               {/if}
             </div>
           </div>
@@ -2661,7 +2701,7 @@ function randomizeStoryParams() {
              `:focus-visible` outline and daisyUI textarea focus styles). -->
         <div class="appeal-box relative bg-[#FAFAFA] border border-[#E5E5E5] transition-all duration-200 shadow-sm dark:bg-base-100 dark:border-base-300"
              data-enhance-field="differentiating_idea"
-             on:focusin={() => focusedField = 'differentiating_idea'} on:focusout={() => focusedField = ''}>
+             on:focusin={focusField('differentiating_idea')} on:focusout={blurFieldHandler('differentiating_idea')}>
           <textarea class="appeal-textarea w-full bg-transparent p-4 pr-12 text-sm leading-relaxed focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
             bind:value={localStoryCfg.differentiating_idea} placeholder={$t('config.appeal.placeholder')}></textarea>
           <!-- Wand "Enhance" (user request): appears TOP-RIGHT INSIDE the box
@@ -2672,8 +2712,8 @@ function randomizeStoryParams() {
                expanding width animation, so the button lives here as an
                absolutely-positioned sibling of the textarea. -->
           {#if showWandFor('differentiating_idea')}
-            <EnhanceWand field="differentiating_idea" busy={appealEnhancing} flash={enhanceFlash && focusedField === 'differentiating_idea'}
-              label={$t('config.appeal.enhance')} onclick={wandClick('differentiating_idea')} />
+            <EnhanceWand field="differentiating_idea" busy={appealEnhancing} flash={flashedField === 'differentiating_idea'}
+              label={$t('config.appeal.enhance')} on:click={wandClick('differentiating_idea')} />
           {/if}
           <div class="appeal-footer border-t border-[#EFEFEF] bg-white p-3 flex flex-col gap-1 dark:bg-base-100 dark:border-base-300">
             <!-- Collapsible creativity bar (grid 0fr->1fr + fade, per design) -->
