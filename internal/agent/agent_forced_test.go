@@ -143,3 +143,70 @@ func TestRunAgentLoopUntaggedKeepsModelBehavior(t *testing.T) {
 		t.Fatal("tool must not run for untagged messages")
 	}
 }
+
+// The creativity level must travel as a JSON number: generate_section decodes
+// it into an int field, and the old string form made every slider level fall
+// back to Balanced (or failed the tool call outright).
+func TestParseGenerateSectionTagCreativityIsNumber(t *testing.T) {
+	cases := map[string]int{
+		"[generate-section:differentiating_idea;creativity=4]":                  4,
+		"Please suggest [generate-section:differentiating_idea] [creativity=5]": 5,
+	}
+	for msg, want := range cases {
+		call := ParseGenerateSectionTag(msg)
+		if call == nil {
+			t.Fatalf("%q: tag not parsed", msg)
+		}
+		var params struct {
+			Creativity int `json:"creativity"`
+		}
+		if err := json.Unmarshal(call.Arguments, &params); err != nil {
+			t.Fatalf("%q: creativity must decode as a number: %v (%s)", msg, err, call.Arguments)
+		}
+		if params.Creativity != want {
+			t.Fatalf("%q: creativity = %d, want %d", msg, params.Creativity, want)
+		}
+	}
+}
+
+// A tagged turn has already run its tool on step 0: a failing summary endpoint
+// must be retried a bounded number of times, not for every remaining step.
+func TestRunAgentLoopForcedTagStopsAfterTwoAPIFailures(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ctxx := newForcedTestCtx(t, srv.URL)
+	ctxx.StartSectionGenerate = func(req SectionGenRequest) error { return nil }
+
+	reply, _, err := RunAgentLoop(context.Background(), ctxx,
+		"[generate-section:style] please generate the style", nil, 30)
+	if err != nil {
+		t.Fatalf("tagged turn must not hard-fail: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got > 2 {
+		t.Fatalf("summary endpoint called %d times, want at most 2", got)
+	}
+	if reply == "" {
+		t.Fatal("expected the deterministic reply after the API failures")
+	}
+}
+
+// The generic Enhance wand tag carries the target StoryConfig key so the chat
+// fast path can rewrite one Novel parameters field in place.
+func TestParseGenerateSectionTagEnhanceField(t *testing.T) {
+	call := ParseGenerateSectionTag("Please enhance the tone [generate-section:enhance;field=tone]")
+	if call == nil {
+		t.Fatal("enhance tag was not parsed")
+	}
+	var args map[string]string
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		t.Fatalf("args: %v", err)
+	}
+	if args["section"] != "enhance" || args["field"] != "tone" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}

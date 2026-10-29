@@ -9,8 +9,23 @@
   // Interfaz unificada: el selector de estado del formulario usa SmartSelect
   // en lugar del <select> nativo (búsqueda + popover ⓘ, como el resto).
   import SmartSelect from '../lib/components/SmartSelect.svelte';
+  import InfoTip from '../lib/components/InfoTip.svelte';
+  import { setRibbon } from '../lib/ribbon.js';
 
   let viewMode = 'list'; // list | timeline | markdown
+  // Section steps (rendered by the shell ribbon): Overview → Timeline →
+  // Roadmap doc. The ids double as view modes.
+  const fsTabDefs = [
+    { id: 'list', titleKey: 'fs.tabs.overview' },
+    { id: 'timeline', titleKey: 'fs.tabs.timeline' },
+    { id: 'markdown', titleKey: 'fs.tabs.roadmap' },
+  ];
+  $: setRibbon(
+    'foreshadows',
+    fsTabDefs.map(def => ({ id: def.id, label: $t(def.titleKey) })),
+    viewMode,
+    id => { switchView(id); }
+  );
   let roadmapMarkdown = '';
   let roadmapPath = '';
   let loadingRoadmap = false;
@@ -20,9 +35,9 @@
   let form = { name: '', description: '', plant_chapter: 1, target_chapter: 0, status: 'planted', resolution: '' };
 
   $: statusMeta = {
-    planted:     { label: $t('fs.status.planted'),     cls: 'badge-info' },
+    planted:     { label: $t('fs.status.planted'),     cls: 'badge-outline' },
     progressing: { label: $t('fs.status.progressing'), cls: 'badge-warning' },
-    resolved:    { label: $t('fs.status.resolved'),    cls: 'badge-success' },
+    resolved:    { label: $t('fs.status.resolved'),    cls: 'badge-neutral' },
     abandoned:   { label: $t('fs.status.abandoned'),   cls: 'badge-ghost' },
   };
 
@@ -232,12 +247,18 @@
   }
 </script>
 
-<div id="ForeshadowsPage" class="space-y-4">
+<div id="ForeshadowsPage" class="space-y-4 page-width">
   <!-- Stats and actions -->
   <div id="CardSection_ForeshadowOverview" class="card bg-base-200">
     <div class="card-body py-4 gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h2 class="card-title text-base">{$t('fs.title')}</h2>
+        <div class="flex items-center gap-1.5 group/fstitle">
+          <h2 class="card-title text-base">{$t('fs.title')}</h2>
+          <!-- Hover-only help trigger; the popover is the dark SmartSelect tip. -->
+          <span class="opacity-0 pointer-events-none group-hover/fstitle:opacity-100 group-hover/fstitle:pointer-events-auto group-focus-within/fstitle:opacity-100 group-focus-within/fstitle:pointer-events-auto transition-opacity duration-200">
+            <InfoTip dark width={320} text={$t('fs.systemTip')} label={$t('fs.systemTipLabel')} />
+          </span>
+        </div>
         <div class="flex flex-wrap gap-2">
           <button id="DesignForeshadowsAiButton" class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={suggestForeshadows}>
             {$t('fs.designAi')}
@@ -252,8 +273,8 @@
       </div>
       <div class="flex flex-wrap gap-2 text-sm">
         <span class="badge badge-ghost">{$t('fs.stats.total', { n: foreshadows.length })}</span>
-        <span class="badge badge-info badge-outline">{$t('fs.stats.active', { n: activeCount })}</span>
-        <span class="badge badge-success badge-outline">{$t('fs.stats.resolved', { n: resolvedCount })}</span>
+        <span class="badge badge-outline">{$t('fs.stats.active', { n: activeCount })}</span>
+        <span class="badge badge-neutral">{$t('fs.stats.resolved', { n: resolvedCount })}</span>
         {#if overdueList.length > 0}
           <span class="badge badge-error">{$t('fs.stats.overdue', { n: overdueList.length })}</span>
         {/if}
@@ -271,7 +292,7 @@
           <h3 class="font-semibold text-warning">{$t('fs.outlineConflict.title')}</h3>
           <div class="flex gap-2">
             <button id="RecheckOutlineConflictsButton" class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={runOutlineCheck}>{$t('fs.outlineConflict.recheck')}</button>
-            <button id="GotoOutlineFromConflictButton" class="btn btn-warning btn-xs" disabled={$taskRunning} on:click={gotoOutline}>{$t('fs.outlineConflict.gotoOutline')}</button>
+            <button id="GotoOutlineFromConflictButton" class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={gotoOutline}>{$t('fs.outlineConflict.gotoOutline')}</button>
           </div>
         </div>
         {#if outlineReport.summary}
@@ -292,7 +313,7 @@
 
   <!-- AI AI suggestion confirmation -->
   {#if $foreshadowShowSuggestions && $foreshadowSuggestions.length > 0}
-    <div id="CardSection_ForeshadowSuggestions" class="card bg-base-200 border border-primary/30 ">
+    <div id="CardSection_ForeshadowSuggestions" class="card bg-base-200">
       <div class="card-body py-4 gap-3">
         <h3 class="font-semibold">{$t('fs.suggestions.title', { n: $foreshadowSuggestions.length })}</h3>
         <p class="text-sm text-base-content/60">{$t('fs.suggestions.hint')}</p>
@@ -332,13 +353,6 @@
     </div>
   {/if}
 
-  <!-- View switch -->
-  <div id="ForeshadowViewTabs" class="tabs tabs-box bg-base-200 w-fit">
-    <button id="ForeshadowTabList" class="tab tab-sm" class:tab-active={viewMode === 'list'} on:click={() => viewMode = 'list'}>{$t('fs.tabs.list')}</button>
-    <button id="ForeshadowTabTimeline" class="tab tab-sm" class:tab-active={viewMode === 'timeline'} on:click={() => viewMode = 'timeline'}>{$t('fs.tabs.timeline')}</button>
-    <button id="ForeshadowTabMarkdown" class="tab tab-sm" class:tab-active={viewMode === 'markdown'} on:click={() => switchView('markdown')}>{$t('fs.tabs.markdown')}</button>
-  </div>
-
   {#if foreshadows.length === 0}
     <div id="ForeshadowEmptyState" class="card bg-base-200">
       <div class="card-body items-center text-center py-12 text-base-content/65">
@@ -347,10 +361,10 @@
       </div>
     </div>
   {:else if viewMode === 'list'}
-    <div id="ForeshadowListContainer" class="grid gap-3">
+    <div id="ForeshadowListContainer" class="grid gap-4">
       {#each foreshadows as fs}
-        <div id="ForeshadowCard_{fs.id}" class="card bg-base-200">
-          <div class="card-body py-4 gap-2">
+        <div id="ForeshadowCard_{fs.id}" class="card bg-base-200 group">
+          <div class="card-body p-12 gap-4">
             <div class="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <span class="text-xs text-base-content/65 mr-2">#{fs.id}</span>
@@ -360,9 +374,13 @@
                 </span>
                 {#if fs.inherited}<span class="badge badge-outline badge-sm ml-2">{$t('fs.inherited')}</span>{/if}
               </div>
-              <div class="flex gap-1">
-                <button id="EditForeshadowButton_{fs.id}" class="btn btn-outline btn-xs" disabled={$taskRunning} on:click={() => openEdit(fs)}>{$t('common.edit')}</button>
-                <button id="DeleteForeshadowButton_{fs.id}" class="btn btn-error btn-outline btn-xs" disabled={$taskRunning} on:click={() => deleteForeshadow(fs)}>{$t('common.delete')}</button>
+              <div class="flex gap-1 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
+                <button id="EditForeshadowButton_{fs.id}" class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} disabled={$taskRunning} on:click={() => openEdit(fs)}>
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                </button>
+                <button id="DeleteForeshadowButton_{fs.id}" class="btn row-act-btn row-act-delete btn-xs btn-square" title={$t('common.delete')} aria-label={$t('common.delete')} disabled={$taskRunning} on:click={() => deleteForeshadow(fs)}>
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
+                </button>
               </div>
             </div>
             <p class="text-sm text-base-content/70">{fs.description}</p>
@@ -383,21 +401,21 @@
               </div>
             {/if}
             {#if fs.resolution}
-              <div class="text-xs text-success/80">{$t('fs.resolution', { text: fs.resolution })}</div>
+              <div class="text-xs text-base-content/60">{$t('fs.resolution', { text: fs.resolution })}</div>
             {/if}
           </div>
         </div>
       {/each}
     </div>
   {:else if viewMode === 'timeline'}
-    <div id="ForeshadowTimelineContainer" class="space-y-3">
+    <div id="ForeshadowTimelineContainer" class="space-y-4">
       {#each timelineChapters as row}
         <div id="ForeshadowTimelineChapter_{row.num}" class="card bg-base-200">
-          <div class="card-body py-3 gap-2">
+          <div class="card-body p-12 gap-3">
             <h3 class="font-medium text-sm">{$t('fs.timeline.chapter', { num: row.num })}</h3>
             {#if row.plant.length}
               <div class="text-xs">
-                <span class="text-info">{$t('fs.timeline.plant')}</span>
+                <span class="text-base-content/60">{$t('fs.timeline.plant')}</span>
                 {#each row.plant as f}
                   <span class="badge badge-sm badge-outline ml-1">#{f.id} {f.name}</span>
                 {/each}
@@ -446,33 +464,33 @@
   {/if}
 </div>
 
-<!-- Edit/create modal (DaisyUI 5: avoid the removed form-control / old label-text) -->
+<!-- Edit/create modal (SneakyUI 5: avoid the removed form-control / old label-text) -->
 {#if showForm}
   <dialog id="ForeshadowFormModal" class="modal modal-open">
     <div class="modal-box max-w-lg">
-      <h3 class="font-bold text-lg">{editing ? $t('fs.form.edit') : $t('fs.form.create')}</h3>
+      <h3 class="card-title text-base">{editing ? $t('fs.form.edit') : $t('fs.form.create')}</h3>
       <div class="flex flex-col gap-3 mt-4">
         <div>
-          <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.name')}</span>
-          <input id="ForeshadowNameInput" class="input input-bordered input-sm w-full" bind:value={form.name} disabled={$taskRunning} />
+          <span class="field-label">{$t('fs.form.name')}</span>
+          <input id="ForeshadowNameInput" class="input input-sm w-full" bind:value={form.name} disabled={$taskRunning} />
         </div>
         <div>
-          <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.description')}</span>
-          <textarea id="ForeshadowDescriptionInput" class="textarea textarea-bordered text-sm w-full" rows="3" bind:value={form.description} disabled={$taskRunning}></textarea>
+          <span class="field-label">{$t('fs.form.description')}</span>
+          <textarea id="ForeshadowDescriptionInput" class="textarea text-sm w-full" rows="3" bind:value={form.description} disabled={$taskRunning}></textarea>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.plant')}</span>
-            <input id="ForeshadowPlantChapterInput" type="number" min="1" class="input input-bordered input-sm w-full" bind:value={form.plant_chapter} disabled={$taskRunning} />
+            <span class="field-label">{$t('fs.form.plant')}</span>
+            <input id="ForeshadowPlantChapterInput" type="number" min="1" class="input input-sm w-full" bind:value={form.plant_chapter} disabled={$taskRunning} />
           </div>
           <div>
-            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.target')}</span>
-            <input id="ForeshadowTargetChapterInput" type="number" min="0" class="input input-bordered input-sm w-full" bind:value={form.target_chapter} disabled={$taskRunning} />
+            <span class="field-label">{$t('fs.form.target')}</span>
+            <input id="ForeshadowTargetChapterInput" type="number" min="0" class="input input-sm w-full" bind:value={form.target_chapter} disabled={$taskRunning} />
           </div>
         </div>
         {#if editing}
           <div>
-            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.status')}</span>
+            <span class="field-label">{$t('fs.form.status')}</span>
             <!-- svelte-ignore a11y-no-redundant-roles -->
             <SmartSelect
               id="ForeshadowStatusSelect"
@@ -485,8 +503,8 @@
             />
           </div>
           <div>
-            <span class="text-xs text-base-content/65 mb-0.5 block">{$t('fs.form.resolution')}</span>
-            <input id="ForeshadowResolutionInput" class="input input-bordered input-sm w-full" bind:value={form.resolution} disabled={$taskRunning} />
+            <span class="field-label">{$t('fs.form.resolution')}</span>
+            <input id="ForeshadowResolutionInput" class="input input-sm w-full" bind:value={form.resolution} disabled={$taskRunning} />
           </div>
         {/if}
       </div>

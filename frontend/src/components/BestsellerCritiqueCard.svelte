@@ -131,7 +131,7 @@
 
   // 3-level importance badge, derived deterministically server-side from the
   // rubric numbers (score impact + criteria repaired).
-  const PRIORITY_BADGE = { high: 'badge-error', medium: 'badge-warning', low: 'badge-ghost' };
+  const scoreWash = (n) => (n >= 80 ? 'wash-green' : n >= 60 ? 'wash-amber' : 'wash-red');
   function priorityLabel(p) {
     const msg = $t('analysis.priority.' + p);
     return msg && msg !== 'analysis.priority.' + p ? msg : p;
@@ -300,7 +300,7 @@
           <span class="text-xs text-base-content/60 shrink-0">{$t('chapter.analysis.chapterLabel', { num: report.chapter_num })}</span>
         {/if}
         {#if report.overall_score}
-          <span class="badge badge-sm shrink-0 {report.overall_score >= 80 ? 'badge-success' : report.overall_score >= 60 ? 'badge-warning' : 'badge-error'}">{$t(`${kind}.analysis.score`)}: {report.overall_score}/100</span>
+          <span class="badge badge-sm shrink-0 {scoreWash(report.overall_score)}">{$t(`${kind}.analysis.score`)}: {report.overall_score}/100</span>
         {/if}
         {#if report.suggestions?.length}
           <span class="badge badge-outline badge-sm shrink-0">{report.suggestions.length}</span>
@@ -312,8 +312,8 @@
     <div class="grid transition-[grid-template-rows] duration-300 ease-in-out" style="grid-template-rows: {cardIsOpen ? '1fr' : '0fr'};">
       <div class="overflow-hidden min-h-0">
     {#if cardIsOpen}
-    <div class="card-body p-4 gap-3">
-      <div class="flex items-start justify-between gap-2 flex-wrap">
+    <div class="card-body p-6 gap-4">
+      <div class="flex items-start justify-between gap-4">
         <div class="flex items-start gap-1.5 min-w-0">
           <button type="button" class="btn btn-ghost btn-xs mt-0.5 shrink-0" aria-label={$t('analysis.collapseCard')} on:click={toggleCard}>
             <span class="inline-block transition-transform duration-200 ease-out rotate-90 text-base-content/60 text-xs">▶</span>
@@ -323,13 +323,13 @@
             <span class="field-label">{$t(`${kind}.analysis.subtitle`)}</span>
           </div>
         </div>
-        <button class="btn btn-ghost btn-xs shrink-0" on:click={clearReport} disabled={disabled}>{$t(`${kind}.analysis.clear`)}</button>
+        <button class="btn btn-outline btn-xs shrink-0" on:click={clearReport} disabled={disabled}>{$t(`${kind}.analysis.clear`)}</button>
       </div>
 
-      <div class="space-y-3">
+      <div class="space-y-4">
         <div class="flex items-center gap-3 text-sm text-base-content/70 flex-wrap">
           {#if report.overall_score}
-            <span class="badge badge-lg {report.overall_score >= 80 ? 'badge-success' : report.overall_score >= 60 ? 'badge-warning' : 'badge-error'}">
+            <span class="badge badge-lg {scoreWash(report.overall_score)}">
               {$t(`${kind}.analysis.score`)}: {report.overall_score}/100
             </span>
           {/if}
@@ -343,33 +343,33 @@
         </div>
 
         {#if report.summary}
-          <details open class="bg-base-100 rounded-lg p-3">
+          <details open class="bg-base-100 rounded-lg p-4">
             <summary class="cursor-pointer text-sm font-semibold">{$t(`${kind}.analysis.summary`)}</summary>
             <p class="whitespace-pre-wrap mt-2 text-sm text-base-content/80">{report.summary}</p>
           </details>
         {/if}
 
         {#if report.pillar_scores?.length}
-          <section class="rounded-lg border border-base-content/10 bg-base-100/40 p-3 space-y-2">
+          <section class="bg-base-100 rounded-lg p-4 space-y-3">
             <div class="flex items-center gap-2">
               <span class="text-sm font-semibold">{$t('analysis.pillarsTitle')}</span>
               {#if report.overall_score}
-                <span class="badge badge-sm {report.overall_score >= 80 ? "badge-success" : report.overall_score >= 60 ? "badge-warning" : "badge-error"}">{$t(`${kind}.analysis.score`)}: {report.overall_score}/100</span>
+                <span class="badge badge-sm {scoreWash(report.overall_score)}">{$t(`${kind}.analysis.score`)}: {report.overall_score}/100</span>
               {/if}
             </div>
-            <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {#each report.pillar_scores as pl (pl.key)}
                 {@const strong = pl.score >= 90 && !hasOpenSuggestionFor(pl.key)}
-                <div class="bg-base-100 rounded-lg p-2.5 space-y-1">
+                <div class="bg-base-300/25 rounded-lg p-3 space-y-1.5">
                   <div class="flex items-center justify-between gap-1">
-                    <span class="text-xs font-semibold truncate">{pillarLabel(pl.key)}</span>
-                    <span class="badge badge-sm {pl.score >= 90 ? 'badge-success' : pl.score >= 75 ? 'badge-info' : pl.score >= 60 ? 'badge-warning' : 'badge-error'}">{pl.score}</span>
+                    <span class="min-w-0 text-[11px] font-semibold leading-tight">{pillarLabel(pl.key)}</span>
+                    <span class="badge badge-sm {scoreWash(pl.score)}">{pl.score}</span>
                   </div>
                   {#if strong}
-                    <div class="text-xs text-success font-medium">✓ {$t(`${kind}.analysis.noChangesNeeded`)}</div>
+                    <div class="text-xs text-base-content/70 font-medium">✓ {$t(`${kind}.analysis.noChangesNeeded`)}</div>
                   {:else}
                     <div class="w-full h-1.5 rounded-full bg-base-content/10 overflow-hidden">
-                      <div class="h-full rounded-full {pl.score >= 90 ? 'bg-success' : pl.score >= 75 ? 'bg-info' : pl.score >= 60 ? 'bg-warning' : 'bg-error'}" style="width: {pl.score}%"></div>
+                      <div class="h-full rounded-full {pl.score >= 80 ? 'bg-[#86efac]' : pl.score >= 60 ? 'bg-[#f9d342]' : 'bg-[#fca5a5]'}" style="width: {pl.score}%"></div>
                     </div>
                   {/if}
                   {#if pl.note}<p class="text-[11px] leading-snug text-base-content/60 line-clamp-3">{pl.note}</p>{/if}
@@ -382,7 +382,7 @@
                         {#each sortedChecklist(pl) as c (c.key)}
                           <li class="flex items-center justify-between gap-1">
                             <span class="truncate text-base-content/70">{criterionLabel(c.key)}</span>
-                            <span class="shrink-0 font-mono {c.level >= 85 ? 'text-success' : c.level >= 60 ? 'text-warning' : 'text-error'}">{c.level < 0 ? '—' : c.level}</span>
+                            <span class="badge badge-xs shrink-0 {scoreWash(c.level)}">{c.level < 0 ? '—' : c.level}</span>
                           </li>
                         {/each}
                       </ul>
@@ -399,23 +399,23 @@
           <span class="font-semibold text-sm">{$t(`${kind}.analysis.suggestions`)} ({report.suggestions.length})</span>
         </div>
         {/if}
-        <div class="space-y-2">
+        <div class="space-y-3">
           {#each report.suggestions || [] as s (s.id)}
-            <section class="border border-base-content/10 rounded-lg p-3 space-y-2">
+            <section class="bg-base-100 rounded-lg p-4 space-y-3 group/suggestion">
               <div class="flex items-center gap-2 flex-wrap">
-                <span class="badge badge-outline badge-sm">{catLabel(s.category)}</span>
+                <span class="badge badge-sm badge-outline">{catLabel(s.category)}</span>
                 {#if s.priority}
-                  <span class="badge badge-sm {PRIORITY_BADGE[s.priority] || 'badge-ghost'}">{$t('analysis.priority.' + s.priority)}</span>
+                  <span class="badge badge-sm badge-ghost">{$t('analysis.priority.' + s.priority)}</span>
                 {/if}
-                <span class="font-semibold text-sm flex-1 min-w-0">{s.title}</span>
                 {#if s.score_impact}
-                  <span class="badge badge-success badge-sm shrink-0" title={$t('analysis.checklist.tip')}>{$t('analysis.scoreImpact', { n: s.score_impact })}</span>
+                  <span class="badge badge-ghost badge-sm shrink-0 ml-auto" title={$t('analysis.checklist.tip')}>{$t('analysis.scoreImpact', { n: s.score_impact })}</span>
                 {/if}
                 {#if s.status === 'applied'}
-                  <span class="badge badge-success badge-sm">✓ {$t(`${kind}.analysis.applied`)}</span>
+                  <span class="badge badge-sm wash-green">✓ {$t(`${kind}.analysis.applied`)}</span>
                 {/if}
               </div>
-              <div class="space-y-2">
+              <h4 class="font-semibold text-[15px] leading-snug">{s.title}</h4>
+              <div class="space-y-3">
               {#if s.criteria?.length}
                 <p class="text-xs text-base-content/60">
                   {$t('analysis.criteriaLabel')}
@@ -423,8 +423,14 @@
                   {#if s.pillar} · {pillarLabel(s.pillar)}{/if}
                 </p>
               {/if}
-              {#if s.detail}<p class="text-sm text-base-content/80 whitespace-pre-wrap">{s.detail}</p>{/if}
+              {#if s.detail}<p class="text-sm text-base-content/80 whitespace-pre-wrap mb-2">{s.detail}</p>{/if}
               {#if s.action}<p class="text-sm text-base-content/70 italic whitespace-pre-wrap">{s.action}</p>{/if}
+              {#if s.evidence}
+                <p class="text-xs text-base-content/70 border-l-2 border-[#c4b5fd] pl-3">
+                  <span class="font-semibold">{$t('analysis.evidence')}</span>
+                  <span class="italic">“{s.evidence}”</span>
+                </p>
+              {/if}
               {#if s.applies_to_chapters?.length}
                 <p class="text-xs text-base-content/60">{$t(`${kind}.analysis.chapters`, { list: s.applies_to_chapters.join(', ') })}</p>
               {/if}
@@ -438,7 +444,7 @@
                   {#each s.recommendations as rec (rec.chapter_num + ':' + rec.scene_id)}
                     {@const ms = mergeState(s, rec)}
                     {@const siblings = siblingSceneIds(s, rec)}
-                    <details class="bg-base-100 rounded p-2.5 text-xs" open={ms.on}>
+                    <details class="bg-base-300/25 rounded-lg p-3 text-xs" open={ms.on}>
                       <summary class="cursor-pointer font-semibold select-none flex items-center gap-2 flex-wrap">
                         <span>Ch. {rec.chapter_num} · {$t('sceneplan.analysis.sceneLabel', { id: rec.scene_id })}</span>
                         {#if ms.on && ms.target}
@@ -446,6 +452,9 @@
                         {:else if rec.merge_scene_ids?.includes(rec.scene_id)}
                           <span class="badge badge-warning badge-xs normal-case">{$t('analysis.mergeSurvivor')}</span>
                         {/if}
+                        <span class="zoom-in-icon ml-auto shrink-0 text-base-content/40" aria-hidden="true">
+                          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7" /><path d="m16.5 16.5 4.5 4.5M8 11h6M11 8v6" /></svg>
+                        </span>
                       </summary>
                       <div class="space-y-1.5 pt-1.5">
                         {#if rec.new_title}
@@ -468,7 +477,7 @@
                           {#if rec.new_pov}
                             <label class="flex items-center gap-1.5">
                               <span class="text-base-content/60">POV:</span>
-                              <input class="input input-xs input-bordered w-32" type="text"
+                              <input class="input input-xs w-32" type="text"
                                 value={recValue(s, rec, 'new_pov')}
                                 on:input={(e) => onRecInput(s, rec, 'new_pov', e)}
                                 disabled={disabled || s.status === 'applied'} />
@@ -477,7 +486,7 @@
                           {#if rec.new_words_budget}
                             <label class="flex items-center gap-1.5">
                               <span class="text-base-content/60">{$t('sceneplan.analysis.budget')}:</span>
-                              <input class="input input-xs input-bordered w-20" type="number" min="0"
+                              <input class="input input-xs w-20" type="number" min="0"
                                 value={recValue(s, rec, 'new_words_budget')}
                                 on:input={(e) => onRecInput(s, rec, 'new_words_budget', e)}
                                 disabled={disabled || s.status === 'applied'} />
@@ -485,7 +494,7 @@
                           {/if}
                         </div>
                         {#if kind === 'sceneplan' && siblings.length}
-                          <div class="pt-1 border-t border-base-300 flex flex-wrap items-center gap-2">
+                          <div class="pt-2 border-t border-base-content/10 flex flex-wrap items-center gap-2">
                             <label class="flex items-center gap-1.5 cursor-pointer">
                               <input type="checkbox" class="checkbox checkbox-xs"
                                 checked={ms.on}
@@ -496,7 +505,7 @@
                             {#if ms.on}
                               <label class="flex items-center gap-1.5">
                                 <span class="text-base-content/60">{$t('analysis.mergeTarget')}:</span>
-                                <select class="select select-xs select-bordered w-auto"
+                                <select class="select select-xs w-auto"
                                   value={ms.target}
                                   disabled={disabled || s.status === 'applied'}
                                   on:change={(e) => setMerge(s, rec, true, parseInt(e.currentTarget.value, 10))}>
@@ -521,12 +530,12 @@
               {#if s.interventions?.length}
                 <div class="space-y-1.5">
                   {#each s.interventions as iv, i (i)}
-                    <div class="bg-base-100 rounded p-2 text-xs flex items-start gap-2">
+                    <div class="bg-base-300/25 rounded-lg p-2.5 text-xs flex items-start gap-2">
                       <span class="badge badge-outline badge-xs normal-case shrink-0 mt-0.5">
                         {$t(`${kind}.analysis.tropeChip`, { ch: iv.chapter_num, scene: iv.scene_pos + 1, trope: iv.trope_label || '—' })}
                       </span>
                       <span class="flex-1 min-w-0 whitespace-pre-wrap text-base-content/80">{iv.feedback}</span>
-                      {#if iv.status === 'applied'}<span class="badge badge-success badge-xs shrink-0">✓</span>
+                      {#if iv.status === 'applied'}<span class="badge badge-neutral badge-xs shrink-0">✓</span>
                       {:else if iv.status === 'failed'}<span class="badge badge-error badge-xs shrink-0">✗</span>{/if}
                     </div>
                   {/each}
@@ -534,13 +543,13 @@
               {/if}
 
               {#if s.status !== 'applied'}
-                <div class="flex flex-wrap justify-end gap-2">
+                <div class="flex flex-wrap justify-end gap-2 opacity-0 pointer-events-none group-hover/suggestion:opacity-100 group-hover/suggestion:pointer-events-auto group-focus-within/suggestion:opacity-100 group-focus-within/suggestion:pointer-events-auto transition-opacity duration-200">
                   {#if s.recommendations?.length || s.interventions?.length}
                     <button class="btn btn-outline btn-xs" on:click={() => proposeForSuggestion(s)} disabled={disabled || proposingSuggestionId === s.id}>
                       {#if proposingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
                       {$t(`${kind}.analysis.addProposals`)}
                     </button>
-                    <button class="btn btn-success btn-xs" on:click={() => applySuggestion(s)} disabled={disabled || applyingSuggestionId === s.id}>
+                    <button class="btn btn-primary btn-xs" on:click={() => applySuggestion(s)} disabled={disabled || applyingSuggestionId === s.id}>
                       {#if applyingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
                       {$t(`${kind}.analysis.apply`)}
                     </button>
@@ -548,7 +557,7 @@
                     <p class="text-xs text-base-content/50 flex-1">
                       {$t(suggestionHasProposals(s) ? `${kind}.analysis.noApply` : `${kind}.analysis.adviceOnly`)}
                     </p>
-                    <button class="btn btn-outline btn-xs" on:click={() => proposeForSuggestion(s)} disabled={disabled || proposingSuggestionId === s.id}>
+                    <button class="btn btn-outline btn-xs opacity-0 pointer-events-none group-hover/suggestion:opacity-100 group-hover/suggestion:pointer-events-auto group-focus-within/suggestion:opacity-100 group-focus-within/suggestion:pointer-events-auto transition-opacity duration-200" on:click={() => proposeForSuggestion(s)} disabled={disabled || proposingSuggestionId === s.id}>
                       {#if proposingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
                       {$t(`${kind}.analysis.propose`)}
                     </button>
@@ -575,3 +584,7 @@
     </button>
   </div>
 {/if}
+
+<style>
+  details[open] .zoom-in-icon { display: none; }
+</style>

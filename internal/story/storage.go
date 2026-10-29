@@ -313,6 +313,13 @@ func loadChapterContents(progressPath string, p *Progress) error {
 		ch.BlockSep = cf.BlockSep
 		if len(ch.Blocks) == 0 && ch.Content != "" {
 			SyncChapterBlocks(ch)
+		} else if sceneMetaCollapsed(ch) {
+			// The scene plan was regenerated after this prose was tiled, so every
+			// block still points at scene 0 and the reader shows one Scene 1 chip.
+			// Repair the stale spans, then remap the EXISTING blocks (text, IDs and
+			// subscene labels stay intact) instead of re-tiling the prose.
+			repairSceneSpans(ch)
+			remapScenePositions(ch)
 		}
 		if ch.WordCount == 0 && ch.Content != "" {
 			ch.WordCount = prose.CountProseUnits(ch.Content)

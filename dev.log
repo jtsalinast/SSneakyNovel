@@ -1,2 +1,18 @@
-2026-10-19 01:01:23.485 devlog enabled path=/workspace/dev.log
-2026-10-19 01:04:18.654 devlog enabled path=/workspace/dev.log
+ [is] this: dev
+ [is] order: /Users/tom
+ [is] item: /Users/tom/storys
+ [is] openhairsunambition: /Users/tom/dev.log
+ [is] AI smallsaywritehand Web UI enablemovemiddle...
+ [is] ask : http://localhost:48090
+ [is] order: /Users/tom
+ [is] item: /Users/tom/storys
+2026/10/28 23:52:00  GET / (95.542µs)
+2026/10/28 23:52:00  GET /assets/index-Of60aZh5.css (421.917µs)
+2026/10/28 23:52:00  GET /assets/index-CbiKotaN.js (7.171834ms)
+2026/10/28 23:52:00  GET /api/projects/current (122.084µs)
+2026/10/28 23:52:00  GET /api/version (13.958µs)
+2026/10/28 23:52:00  GET /assets/sssnovelstudio-33gNg3hD.webp (533.667µs)
+2026/10/28 23:52:00  GET /api/projects (11.028459ms)
+ [system] Switched to project: nueu (/Users/tom/storys/nueu)
+2026/10/28 23:52:02  POST /api/projects/select (22.392125ms)
+2026/10/28 23:52:02  GET /api/status (73.708µs)

@@ -58,103 +58,187 @@
   }
 </script>
 
+<div class="page-width">
 {#if !complete}
   <div class="alert alert-info">{$t('proofread.completeRequired')}</div>
 {:else if !pp.backup_acknowledged}
-  <div class="card bg-base-200"><div class="card-body max-w-2xl">
-    <h2 class="card-title">{$t('proofread.backupTitle')}</h2><p class="text-sm">{$t('proofread.backupHint')}</p>
-    <div class="flex gap-2"><button class="btn btn-primary btn-sm" on:click={()=>download('/api/export/txt',()=>downloadedBook=true)}>{$t('proofread.downloadBook')}</button><button class="btn btn-primary btn-sm" on:click={()=>download('/api/export/outline',()=>downloadedOutline=true)}>{$t('proofread.downloadOutline')}</button></div>
-    <label class="label justify-start gap-2"><input class="checkbox checkbox-sm" type="checkbox" bind:checked={backupChecked}/><span>{$t('proofread.backupConfirm')}</span></label>
-    <button class="btn btn-success btn-sm w-fit" disabled={!backupChecked||!downloadedBook||!downloadedOutline} on:click={acknowledge}>{$t('proofread.enter')}</button>
-  </div></div>
+  <div class="card bg-base-200">
+    <div class="card-body p-12 max-w-2xl gap-3">
+      <h2 class="card-title text-base">{$t('proofread.backupTitle')}</h2>
+      <p class="text-sm text-base-content/70">{$t('proofread.backupHint')}</p>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn btn-outline btn-sm" on:click={()=>download('/api/export/txt',()=>downloadedBook=true)}>{$t('proofread.downloadBook')}</button>
+        <button class="btn btn-outline btn-sm" on:click={()=>download('/api/export/outline',()=>downloadedOutline=true)}>{$t('proofread.downloadOutline')}</button>
+      </div>
+      <label class="label justify-start gap-2">
+        <input class="checkbox checkbox-sm" type="checkbox" bind:checked={backupChecked}/>
+        <span class="text-sm">{$t('proofread.backupConfirm')}</span>
+      </label>
+      <button class="btn btn-primary btn-sm w-fit" disabled={!backupChecked||!downloadedBook||!downloadedOutline} on:click={acknowledge}>{$t('proofread.enter')}</button>
+    </div>
+  </div>
 {:else}
   <div class="space-y-3">
-    <div class="card bg-base-200"><div class="card-body p-4 gap-3">
-      <div class="flex gap-2 items-center flex-wrap"><h2 class="card-title flex-1">{$t('proofread.title')}</h2><button class="btn btn-outline btn-sm" on:click={()=>download('/api/export/txt',()=>{})}>{$t('proofread.downloadBook')}</button><button class="btn btn-outline btn-sm" on:click={()=>download('/api/export/outline',()=>{})}>{$t('proofread.downloadOutline')}</button><button class="btn btn-outline btn-sm" on:click={()=>download('/api/proofread/export',()=>{})}>{$t('proofread.downloadReport')}</button></div>
-      <p class="text-xs opacity-60">{$t('proofread.boundary')}</p>
-      <textarea class="textarea textarea-bordered textarea-sm w-full" bind:value={preferences} placeholder={$t('proofread.preferences')}></textarea>
-      <div class="flex gap-2"><button class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={applyAll}>{$t('proofread.apply')}</button><button class="btn btn-outline btn-sm" disabled={$taskRunning} on:click={analyze}>{$t('proofread.analyze')}</button></div>
-      {#if Object.keys(pp.apply_errors||{}).length}<div class="alert alert-warning text-xs">{$t('proofread.someFailed')}</div>{/if}
-    </div></div>
+    <div class="card bg-base-200">
+      <div class="card-body p-12 gap-3">
+        <div class="flex gap-2 items-center flex-wrap">
+          <h2 class="card-title text-base flex-1">{$t('proofread.title')}</h2>
+          <button class="btn btn-outline btn-sm" on:click={()=>download('/api/export/txt',()=>{})}>{$t('proofread.downloadBook')}</button>
+          <button class="btn btn-outline btn-sm" on:click={()=>download('/api/export/outline',()=>{})}>{$t('proofread.downloadOutline')}</button>
+          <button class="btn btn-outline btn-sm" on:click={()=>download('/api/proofread/export',()=>{})}>{$t('proofread.downloadReport')}</button>
+        </div>
+        <p class="text-xs text-base-content/60">{$t('proofread.boundary')}</p>
+        <textarea class="textarea textarea-sm w-full" bind:value={preferences} placeholder={$t('proofread.preferences')}></textarea>
+        <div class="flex flex-wrap gap-2">
+          <button class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={applyAll}>{$t('proofread.apply')}</button>
+          <button class="btn btn-outline btn-sm" disabled={$taskRunning} on:click={analyze}>{$t('proofread.analyze')}</button>
+        </div>
+        {#if Object.keys(pp.apply_errors||{}).length}<div class="alert alert-warning text-xs">{$t('proofread.someFailed')}</div>{/if}
+      </div>
+    </div>
 
     {#if pp.proofread_applied_at}
-      <div class="card bg-base-200"><div class="card-body p-4 gap-3">
-        <h3 class="font-bold">{$t('proofread.resultTitle')}</h3>
-        {#if (pp.revisions || []).length}
-          <p class="text-sm">{$t('proofread.resultSummary', {chapters:(pp.revisions || []).length, blocks:revisedBlocks})}</p>
-          <div class="space-y-2">
-            {#each pp.revisions || [] as revision}
-              <details class="border border-base-300 rounded">
-                <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{$t('proofread.resultChapter', {chapter:revision.chapter_num, blocks:(revision.changes || []).length})}</summary>
-                <div class="border-t border-base-300 p-3 space-y-3">
-                  {#each revision.changes || [] as change}
-                    <div class="space-y-2">
-                      <div class="text-xs opacity-60">{$t('proofread.resultBlock', {block:change.block_id})}</div>
-                      <div class="grid gap-2 min-[48rem]:grid-cols-2">
-                        <div><div class="text-xs font-medium mb-1">{$t('proofread.before')}</div><p class="text-sm whitespace-pre-wrap rounded bg-error/10 p-2">{change.before}</p></div>
-                        <div><div class="text-xs font-medium mb-1">{$t('proofread.after')}</div><p class="text-sm whitespace-pre-wrap rounded bg-success/10 p-2">{change.after}</p></div>
+      <div class="card bg-base-200">
+        <div class="card-body p-12 gap-3">
+          <h3 class="card-title text-base">{$t('proofread.resultTitle')}</h3>
+          {#if (pp.revisions || []).length}
+            <p class="text-sm text-base-content/70">{$t('proofread.resultSummary', {chapters:(pp.revisions || []).length, blocks:revisedBlocks})}</p>
+            <div class="space-y-2">
+              {#each pp.revisions || [] as revision}
+                <details class="bg-base-100 rounded-lg">
+                  <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{$t('proofread.resultChapter', {chapter:revision.chapter_num, blocks:(revision.changes || []).length})}</summary>
+                  <div class="border-t border-base-300 p-3 space-y-3">
+                    {#each revision.changes || [] as change}
+                      <div class="space-y-2">
+                        <div class="text-xs text-base-content/60">{$t('proofread.resultBlock', {block:change.block_id})}</div>
+                        <div class="grid gap-2 min-[48rem]:grid-cols-2">
+                          <div>
+                            <div class="text-xs font-medium mb-1">{$t('proofread.before')}</div>
+                            <p class="text-sm whitespace-pre-wrap rounded-lg bg-base-300/40 p-2">{change.before}</p>
+                          </div>
+                          <div>
+                            <div class="text-xs font-medium mb-1">{$t('proofread.after')}</div>
+                            <p class="text-sm whitespace-pre-wrap rounded-lg bg-primary/5 p-2">{change.after}</p>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  {/each}
-                </div>
-              </details>
-            {/each}
-          </div>
-        {:else}
-          <p class="text-sm opacity-60">{$t('proofread.noChanges')}</p>
-        {/if}
-      </div></div>
+                    {/each}
+                  </div>
+                </details>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-sm text-base-content/60">{$t('proofread.noChanges')}</p>
+          {/if}
+        </div>
+      </div>
     {/if}
 
     <div class="proofread-grid grid grid-cols-[345px_minmax(0,1fr)] gap-3 min-h-[520px]">
-      <div class="card bg-base-200"><div class="card-body p-3 gap-2 overflow-y-auto max-h-[70vh]">
-        <div class="flex gap-1">
-          <!-- svelte-ignore a11y-no-redundant-roles -->
-          <SmartSelect
-            classes="flex-1 min-w-0"
-            options={[
-              { value: 'all', label: $t('proofread.allStatus') },
-              { value: 'pending', label: $t('proofread.pending') },
-              { value: 'resolved', label: $t('proofread.resolved') },
-              { value: 'ignored', label: $t('proofread.ignored') },
-            ]}
-            emptyLabel={$t('proofread.allStatus')}
-            allowCustom={false}
-            allowClear={false}
-            ariaLabel={$t('proofread.allStatus')}
-            bind:value={selectedStatus}
-          />
-          <!-- svelte-ignore a11y-no-redundant-roles -->
-          <SmartSelect
-            classes="flex-1 min-w-0"
-            options={[
-              { value: 'all', label: $t('proofread.allCategory') },
-              ...categories.map((c) => ({ value: c, label: $t('proofread.category.' + c) })),
-            ]}
-            emptyLabel={$t('proofread.allCategory')}
-            allowCustom={false}
-            allowClear={false}
-            ariaLabel={$t('proofread.allCategory')}
-            bind:value={selectedCategory}
-          />
-        </div>
-        {#each filtered as issue}
-          <div class="border border-base-300 rounded p-2 space-y-1"><div class="font-medium text-sm">{issue.title}</div><div class="text-xs opacity-70">{issue.detail}</div><div class="text-xs">{$t('proofread.suggestion')}：{issue.suggestion}</div>
-            <div class="flex flex-wrap gap-1">{#each issue.anchors as a}<button class="btn btn-outline btn-xs" on:click={()=>jump(a)}>{$t('proofread.anchor',{chapter:a.chapter_num,block:a.block_id})}</button>{/each}</div>
-            <div class="tabs tabs-box tabs-xs w-fit"><button class="tab" class:tab-active={issue.status==='resolved'} on:click={()=>setStatus(issue,'resolved')}>{$t('proofread.resolved')}</button><button class="tab" class:tab-active={issue.status==='ignored'} on:click={()=>setStatus(issue,'ignored')}>{$t('proofread.ignored')}</button><button class="tab" class:tab-active={issue.status==='pending'} on:click={()=>setStatus(issue,'pending')}>{$t('proofread.pending')}</button></div>
+      <div class="card bg-base-200">
+        <div class="card-body p-3 gap-2 overflow-y-auto max-h-[70vh]">
+          <div class="flex gap-1">
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              classes="flex-1 min-w-0"
+              options={[
+                { value: 'all', label: $t('proofread.allStatus') },
+                { value: 'pending', label: $t('proofread.pending') },
+                { value: 'resolved', label: $t('proofread.resolved') },
+                { value: 'ignored', label: $t('proofread.ignored') },
+              ]}
+              emptyLabel={$t('proofread.allStatus')}
+              allowCustom={false}
+              allowClear={false}
+              ariaLabel={$t('proofread.allStatus')}
+              bind:value={selectedStatus}
+            />
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              classes="flex-1 min-w-0"
+              options={[
+                { value: 'all', label: $t('proofread.allCategory') },
+                ...categories.map((c) => ({ value: c, label: $t('proofread.category.' + c) })),
+              ]}
+              emptyLabel={$t('proofread.allCategory')}
+              allowCustom={false}
+              allowClear={false}
+              ariaLabel={$t('proofread.allCategory')}
+              bind:value={selectedCategory}
+            />
           </div>
-        {:else}<p class="text-sm opacity-50 text-center py-6">{$t('proofread.noIssues')}</p>{/each}
-      </div></div>
-      <div class="card bg-base-200"><div class="card-body p-4 overflow-y-auto max-h-[70vh]">
-        {#if chapter}<div class="flex items-center"><h3 class="font-bold flex-1">{$t('proofread.chapter',{n:chapter.num,title:chapter.title})}</h3>{#if (pp.revisions||[]).some(r=>r.chapter_num===chapter.num)}<button class="btn btn-warning btn-xs" on:click={()=>undo(chapter.num)}>{$t('proofread.undo')}</button>{/if}</div>
-          <div class="space-y-3 mt-3">{#each chapter.blocks||[] as b (b.id)}<div id={'proofread-block-'+b.id} class="relative rounded px-2 py-1 -mx-2 cursor-pointer transition-colors hover:bg-base-100/40 {highlighted===b.id ? 'bg-info/20' : selectedBlock===b.id ? 'bg-primary/10' : ''}" role="button" tabindex="0" aria-pressed={selectedBlock===b.id} on:click={() => selectBlock(b.id)} on:keydown={(e) => { if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectBlock(b.id); } }}>
-            {#if editing===b.id}<textarea class="textarea w-full" rows="5" bind:value={editText}></textarea><div class="flex gap-1 justify-end"><button class="btn btn-xs" on:click={()=>editing=0}>{$t('common.cancel')}</button><button class="btn btn-primary btn-xs" on:click={()=>saveBlock(b.id)}>{$t('common.save')}</button></div>
-            {:else}<p class="whitespace-pre-wrap leading-relaxed">{b.text}</p>{#if selectedBlock===b.id}<div class="absolute right-1 top-1 flex gap-1 bg-base-200 border border-base-content/20 rounded px-1 py-0.5"><button class="btn btn-outline btn-xs" on:click|stopPropagation={()=>{editing=b.id;editText=b.text}}>{$t('common.edit')}</button><button class="btn btn-outline btn-xs" on:click|stopPropagation={()=>{insertAfter=b.id;insertText=''}}>{$t('proofread.insert')}</button><button class="btn btn-error btn-outline btn-xs" on:click|stopPropagation={()=>deleteBlock(b.id)}>{$t('common.delete')}</button></div>{/if}{/if}
-            {#if insertAfter===b.id}<div class="mt-2"><textarea class="textarea w-full" bind:value={insertText}></textarea><button class="btn btn-primary btn-xs" disabled={!insertText.trim()} on:click={addBlock}>{$t('proofread.add')}</button></div>{/if}
-          </div>{/each}</div>
-        {:else}<p class="opacity-50 text-center py-12">{$t('proofread.pickIssue')}</p>{/if}
-      </div></div>
+          {#each filtered as issue}
+            <div class="bg-base-100 rounded-lg p-3 space-y-2">
+              <div class="font-medium text-sm">{issue.title}</div>
+              <div class="text-xs text-base-content/60">{issue.detail}</div>
+              <div class="text-xs text-base-content/70">{$t('proofread.suggestion')}：{issue.suggestion}</div>
+              <div class="flex flex-wrap gap-1">
+                {#each issue.anchors as a}<button class="btn btn-outline btn-xs" on:click={()=>jump(a)}>{$t('proofread.anchor',{chapter:a.chapter_num,block:a.block_id})}</button>{/each}
+              </div>
+              <div class="tabs tabs-box tabs-xs w-fit">
+                <button class="tab" class:tab-active={issue.status==='resolved'} on:click={()=>setStatus(issue,'resolved')}>{$t('proofread.resolved')}</button>
+                <button class="tab" class:tab-active={issue.status==='ignored'} on:click={()=>setStatus(issue,'ignored')}>{$t('proofread.ignored')}</button>
+                <button class="tab" class:tab-active={issue.status==='pending'} on:click={()=>setStatus(issue,'pending')}>{$t('proofread.pending')}</button>
+              </div>
+            </div>
+          {:else}
+            <p class="text-sm text-base-content/50 text-center py-6">{$t('proofread.noIssues')}</p>
+          {/each}
+        </div>
+      </div>
+      <div class="card bg-base-200">
+        <div class="card-body p-4 overflow-y-auto max-h-[70vh]">
+          {#if chapter}
+            <div class="flex items-center gap-2">
+              <h3 class="card-title text-base flex-1">{$t('proofread.chapter',{n:chapter.num,title:chapter.title})}</h3>
+              {#if (pp.revisions||[]).some(r=>r.chapter_num===chapter.num)}
+                <button class="btn btn-outline btn-xs" on:click={()=>undo(chapter.num)}>{$t('proofread.undo')}</button>
+              {/if}
+            </div>
+            <div class="space-y-3 mt-3">
+              {#each chapter.blocks||[] as b (b.id)}
+                <div id={'proofread-block-'+b.id} class="relative rounded-lg px-2 py-1 -mx-2 cursor-pointer transition-colors hover:bg-base-100/60 {highlighted===b.id ? 'bg-primary/20' : selectedBlock===b.id ? 'bg-primary/10' : ''}" role="button" tabindex="0" aria-pressed={selectedBlock===b.id} on:click={() => selectBlock(b.id)} on:keydown={(e) => { if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectBlock(b.id); } }}>
+                  {#if editing===b.id}
+                    <textarea class="textarea w-full" rows="5" bind:value={editText}></textarea>
+                    <div class="flex gap-1 justify-end">
+                      <button class="btn btn-ghost btn-xs" on:click={()=>editing=0}>{$t('common.cancel')}</button>
+                      <button class="btn btn-primary btn-xs" on:click={()=>saveBlock(b.id)}>{$t('common.save')}</button>
+                    </div>
+                  {:else}
+                    <p class="whitespace-pre-wrap leading-relaxed">{b.text}</p>
+                    {#if selectedBlock===b.id}
+                      <div class="absolute right-1 top-1 flex gap-1 bg-base-200 ring-1 ring-base-content/10 rounded-lg px-1 py-0.5">
+                        <button class="btn btn-outline btn-xs" on:click|stopPropagation={()=>{editing=b.id;editText=b.text}}>{$t('common.edit')}</button>
+                        <button class="btn btn-outline btn-xs" on:click|stopPropagation={()=>{insertAfter=b.id;insertText=''}}>{$t('proofread.insert')}</button>
+                        <button class="btn btn-error btn-outline btn-xs" on:click|stopPropagation={()=>deleteBlock(b.id)}>{$t('common.delete')}</button>
+                      </div>
+                    {/if}
+                  {/if}
+                  {#if insertAfter===b.id}
+                    <div class="mt-2">
+                      <textarea class="textarea w-full" bind:value={insertText}></textarea>
+                      <button class="btn btn-primary btn-xs" disabled={!insertText.trim()} on:click={addBlock}>{$t('proofread.add')}</button>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-base-content/50 text-center py-12">{$t('proofread.pickIssue')}</p>
+          {/if}
+        </div>
+      </div>
     </div>
-    <div class="card bg-base-200"><div class="card-body p-4"><h3 class="font-bold">{$t('proofread.continueTitle')}</h3><p class="text-xs opacity-60">{$t('proofread.continueHint')}</p><div class="join"><input class="input input-sm input-bordered join-item" bind:value={continuationName} placeholder={$t('proofread.continueName')}/><button class="btn btn-primary btn-sm join-item" disabled={!continuationName.trim()||$taskRunning} on:click={createContinuation}>{$t('proofread.createContinuation')}</button></div></div></div>
+    <div class="card bg-base-200">
+      <div class="card-body p-12 gap-2">
+        <h3 class="card-title text-base">{$t('proofread.continueTitle')}</h3>
+        <p class="text-xs text-base-content/60">{$t('proofread.continueHint')}</p>
+        <div class="join">
+          <input class="input input-sm join-item" bind:value={continuationName} placeholder={$t('proofread.continueName')}/>
+          <button class="btn btn-primary btn-sm join-item" disabled={!continuationName.trim()||$taskRunning} on:click={createContinuation}>{$t('proofread.createContinuation')}</button>
+        </div>
+      </div>
+    </div>
   </div>
 {/if}
+</div>

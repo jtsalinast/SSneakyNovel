@@ -4,7 +4,7 @@
 
 @import "@xianii/design-system/theme.css";
 
-:root, [data-theme="xianii"], [data-theme="xianii-light"] {
+:root, [data-theme="sneakystyle"], [data-theme="sneakystyle-light"] {
   --depth: 0;
   --color-base-100: oklch(98.5% 0 0);
   --color-base-200: oklch(100% 0 0);
@@ -15,18 +15,36 @@
 #WorkspaceMain { background: oklch(98.8% 0 0); }
 
 /* Light theme: keep the dark theme's coral accent as the highlight colour.
-   The xianii (dark) primary is a light coral — oklch(81% 0.117 11.638) — with
-   near-black content. The stock xianii-light primary was a darker, muted red
+   The dark theme's primary is a light coral — oklch(81% 0.117 11.638) — with
+   near-black content. The stock light theme's primary was a darker, muted red
    with white text, so we override the semantic tokens here to reproduce the
    exact coral + black-text look on action buttons, active tabs, badges,
    toggles, progress bars, links and focus rings. */
-[data-theme="xianii-light"] {
+[data-theme="sneakystyle-light"] {
+  color-scheme: light;
   --color-primary: oklch(81% 0.117 11.638);            /* coral del tema oscuro */
   --color-primary-content: oklch(26% 0 0);             /* texto negro sobre coral */
-  --color-secondary: oklch(82% 0.119 306.383);
-  --color-secondary-content: oklch(26% 0 0);
-  --color-accent: oklch(80% 0.08 185);
-  --color-accent-content: oklch(26% 0 0);
+  --color-secondary: oklch(45% 0 0);                   /* grey — decorative, not a second accent */
+  --color-secondary-content: oklch(98% 0 0);
+  --color-accent: oklch(45% 0 0);
+  --color-accent-content: oklch(98% 0 0);
+  /* Status palette is monochrome: success reads as ink and info as grey, so
+     chips/badges stop painting the UI green and blue. Warning (amber) and
+     error (red) keep their hue because they signal real problems. */
+  --color-success: oklch(32% 0 0);
+  --color-success-content: oklch(98% 0 0);
+  --color-info: oklch(55% 0 0);
+  --color-info-content: oklch(98% 0 0);
+  /* The dependency registers its themes as "xianii*"; restate the light tokens
+     here so data-theme="sneakystyle-light" keeps the full light palette. */
+  --color-base-300: oklch(87% 0 0);
+  --color-base-content: oklch(20% 0.001 286.375);
+  --color-neutral: oklch(20% 0.02 60);
+  --color-neutral-content: oklch(98% 0 0);
+  --color-warning: oklch(58% 0.14 85);
+  --color-warning-content: oklch(98% 0.01 85);
+  --color-error: oklch(50% 0.19 25);
+  --color-error-content: oklch(98% 0.01 25);
 }
 
 .btn, .modal-box, .alert, .card, .tabs-box {
@@ -73,31 +91,218 @@ body {
 
 /* Application shell and interaction system. */
 .app-shell { height: 100dvh; }
-.app-header { flex-wrap: wrap; align-content: center; padding-block: .5rem; }
-.app-brand { letter-spacing: -0.015em; }
-.app-project-title { flex: 1 1 20rem; overflow-wrap: anywhere; }
 .workspace { position: relative; }
-.workspace-main { margin-inline: auto; }
+.workspace-main { margin-inline: auto; background: #fbfbfb; }
 .workspace-main > * { max-width: 96rem; margin-inline: auto; }
 /* Every .space-y-3 container holds the reading width. */
 .space-y-3 {
   max-width: 52rem;
   margin-inline: auto;
 }
+/* Page-level counterpart of the novel-parameters reading width (Lore,
+   Outline, Foreshadows keep their own vertical rhythm). */
+.page-width {
+  max-width: 52rem;
+  margin-inline: auto;
+}
 
-.nav-divider { height: 1px; margin: .45rem .75rem; background: color-mix(in oklch, var(--color-base-content) 12%, transparent); }
+/* ── Shell header: project bar + ribbon ─────────────────────────────────── */
+.app-shell-header { background: #fff; }
+.project-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  min-height: 2rem;
+  padding: .2rem .75rem;
+  font-size: 11px;
+  color: #6b7280;
+}
+.project-bar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .375rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: .125rem .5rem;
+  color: #111827;
+  font-weight: 600;
+}
+.app-project-title { font-size: .75rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; text-align: center; }
+.project-title-wrap { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.project-switch-btn { font-size: 10px; font-weight: 500; color: #6b7280; padding: .125rem .5rem; border-radius: .375rem; white-space: nowrap; }
+.project-switch-btn:hover { background: #f3f4f6; color: #111827; }
+.project-switch-btn:disabled { opacity: .5; }
+@media (hover: hover) and (min-width: 768px) {
+  .project-switch-btn { position: absolute; left: 100%; top: 50%; transform: translateY(-50%); margin-left: .375rem; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .12s ease; }
+  .project-bar:hover .project-switch-btn, .project-title-wrap:focus-within .project-switch-btn { opacity: 1; visibility: visible; pointer-events: auto; }
+}
+.project-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: .375rem;
+  color: #4b5563;
+}
+.project-icon-btn:hover { background: #f3f4f6; color: #000; }
+
+.ribbon-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  min-height: 2.75rem;
+  padding-inline: 1rem;
+  background: #fff;
+}
+.ribbon-breadcrumb {
+  flex: 0 0 200px;
+  min-width: 0;
+  font-size: 1.125rem;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  color: #d1d5db;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ribbon-tabs {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: .25rem;
+  max-width: calc(100% - 2rem);
+  padding: .125rem;
+  background: rgb(243 244 246 / .8);
+  border: 1px solid rgb(229 231 235 / .6);
+  border-radius: .5rem;
+  overflow-x: auto;
+}
+.ribbon-tab {
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  padding: .25rem .75rem;
+  border-radius: .375rem;
+  font-size: .75rem;
+  font-weight: 500;
+  color: #6b7280;
+  white-space: nowrap;
+  transition: background-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out;
+}
+.ribbon-tab:hover { color: #000; }
+.ribbon-tab.active { background: #fff; color: #000; box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.ribbon-tab .tab-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  background: rgb(209 213 219 / .8);
+  color: #374151;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.ribbon-tab.active .tab-num { background: #9ca3af; color: #fff; }
+.ribbon-token {
+  flex: 0 0 200px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .375rem;
+  font-size: 10px;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+.ribbon-token-dot { width: .375rem; height: .375rem; border-radius: 9999px; background: #d1d5db; }
+.ribbon-token-dot.is-running { background: #34d399; animation: ribbon-pulse 1.6s ease-in-out infinite; }
+@keyframes ribbon-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.ribbon-progress { height: 2px; background: #f3f4f6; overflow: hidden; }
+.ribbon-progress > div { height: 100%; background: #9ca3af; transition: width .3s ease; }
+
 .nav-item { transition: background-color 160ms ease-out, color 160ms ease-out; }
 .workspace-scrim { display: none; }
 
-/* ── Collapsible lateral bar (desktop) ─────────────────────────────────── */
-.app-navigation { transition: width 240ms ease-out, padding 240ms ease-out, flex-basis 240ms ease-out; overflow: hidden; }
-.nav-collapse-btn { align-self: flex-start; }
-.nav-item-label { transition: opacity 140ms ease-out; }
+/* ── Collapsible lateral rail (desktop) ────────────────────────────────── */
+.app-navigation {
+  width: 16rem;
+  background: #fff;
+  border-right: 1px solid #eaeaea;
+  transition: width 240ms ease-out;
+  overflow: hidden;
+}
+.nav-brand-row { display: flex; align-items: center; gap: .5rem; padding: 2.5rem .75rem .25rem; flex: none; }
+.nav-spacer { height: .7rem; flex: none; }
+.nav-brand { display: flex; align-items: center; gap: .625rem; min-width: 0; flex: 1; margin-left: 1rem; user-select: none; }
+.nav-brand-icon { width: .75rem; height: .75rem; flex-shrink: 0; color: #000; }
+.nav-brand-label { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #1f2937; white-space: nowrap; }
+.nav-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: .5rem .875rem 1rem; padding-top: .27rem; display: flex; flex-direction: column; gap: 1rem; }
+.nav-group { min-width: 0; flex-shrink: 0; }
+.nav-section-title { padding-inline: .75rem; margin-block: .25rem; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: #9ca3af; white-space: nowrap; }
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  width: 100%;
+  padding: .375rem .75rem;
+  border-radius: .375rem;
+  font-size: .75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  color: #4b5563;
+  overflow: hidden;
+}
+.nav-item:hover { color: #000; background: #f3f4f6; }
+.nav-item.active { color: #000; background: #f3f4f6; }
+.nav-icon { width: .75rem; height: .75rem; display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: #9ca3af; }
+.nav-icon svg { width: .75rem; height: .75rem; }
+.nav-item:hover .nav-icon, .nav-item.active .nav-icon { color: #000; }
+.nav-item-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity 140ms ease-out; }
+.nav-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  height: 2.25rem;
+  flex-shrink: 0;
+  padding: 0 .5rem;
+  border-radius: .375rem;
+  color: #6b7280;
+}
+.nav-collapse-btn:hover { background: #f3f4f6; color: #000; }
+.nav-footer { border-top: 1px solid #f3f4f6; background: rgb(249 250 251 / .5); padding: .5rem .75rem; display: flex; align-items: center; gap: .5rem; flex: none; }
+.nav-footer-badge { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border-radius: 9999px; background: #000; color: #fff; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+.nav-footer-text { min-width: 0; }
+.nav-footer-title { font-size: 11px; font-weight: 600; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-footer-sub { font-size: 10px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 @media (min-width: 1024px) {
-  .app-navigation.nav-collapsed { width: 3.5rem; padding-inline: .5rem; }
-  .app-navigation.nav-collapsed .nav-item { justify-content: center; padding-inline: 0; min-width: 0; }
-  .app-navigation.nav-collapsed .nav-item-label { opacity: 0; width: 0; overflow: hidden; }
-  .app-navigation.nav-collapsed .nav-divider { margin-inline: .25rem; }
+  .app-navigation.nav-collapsed { width: 3.5rem; }
+  .app-navigation.nav-collapsed .nav-brand-row { padding-inline: .5rem; justify-content: center; }
+  .app-navigation.nav-collapsed .nav-spacer { height: 2rem; }
+  .app-navigation.nav-collapsed .nav-brand { display: none; }
+  .app-navigation.nav-collapsed .nav-brand-label,
+  .app-navigation.nav-collapsed .nav-item-label,
+  .app-navigation.nav-collapsed .nav-section-title { display: none; }
+  .app-navigation.nav-collapsed .nav-scroll { padding-inline: .25rem; align-items: center; }
+  .app-navigation.nav-collapsed .nav-group { width: 100%; }
+  .app-navigation.nav-collapsed .nav-item { justify-content: center; padding: .5rem 0; width: 2.25rem; height: 2.25rem; margin-inline: auto; }
+  .app-navigation.nav-collapsed .nav-collapse-btn { justify-content: center; width: 2.25rem; height: 2.25rem; margin-inline: auto; padding: 0; }
+  .app-navigation.nav-collapsed .nav-footer { justify-content: center; padding-inline: 0; }
+  .app-navigation.nav-collapsed .nav-footer-text { display: none; }
+}
+
+@media (max-width: 900px) {
+  .ribbon-breadcrumb, .ribbon-token { display: none; }
+  .ribbon-tabs { position: static; transform: none; margin-inline: auto; }
 }
 
 /* ── Chat panel collapse into the "agent" pill (xl+ only) ──────────────── */
@@ -138,7 +343,7 @@ body {
               (neutral-800) — never washed-out
               placeholder grey; genuine hints stay muted neutral-400.
 
-   `:where()` keeps every rule at zero specificity so daisyUI utilities and any
+   `:where()` keeps every rule at zero specificity so SneakyUI utilities and any
    per-element override classes keep winning, exactly like Tailwind utilities
    win inside the smart components. */
 :where(.input, .textarea, .select):not(:has(> .btn)) {
@@ -174,7 +379,7 @@ body {
   opacity: 0.6;
   cursor: not-allowed;
 }
-/* Neutralize daisyUI's inset "underline" shadow (it would paint over the soft
+/* Neutralize SneakyUI's inset "underline" shadow (it would paint over the soft
    focus ring); the smart boxes only ever carry shadow-sm. */
 :is(.input, .textarea, .select):not(:has(> .btn)) { box-shadow: none; }
 :is(.input, .textarea, .select):not(:has(> .btn)):focus {
@@ -191,8 +396,13 @@ body {
   min-height: 5rem;
 }
 
+/* Normal textareas get a roomy 1rem inset; the compact variants keep theirs. */
+.textarea:not(.textarea-sm):not(.textarea-xs) {
+  padding: 1rem;
+}
+
 /* Non-chat textareas size themselves to their content (progressive
-   enhancement: browsers without `field-sizing` keep daisyUI's fixed min
+   enhancement: browsers without `field-sizing` keep SneakyUI's fixed min
    height). The chat input is excluded — it has its own JS auto-grow. */
 .textarea:not(#ChatMessageInput) { field-sizing: content; }
 
@@ -211,7 +421,7 @@ body {
 .field-label:focus-within, :focus-visible + .field-label { color: var(--color-primary); }
 
 /* Section dividers: extra breathing room above/below the rule. Declared OUT
-  SIDE any cascade layer so it beats daisyUI's layered `.divider` component
+  SIDE any cascade layer so it beats SneakyUI's layered `.divider` component
    (unlayered styles always win over layered ones); per-element utility
    classes like `py-0 h-px my-0` still override these defaults because they
    share the same specificity and appear later in the sheet. */
@@ -387,6 +597,45 @@ body {
   .input, .textarea, .select, .surface-card, .chip-pop { transition: none; animation: none; }
 }
 .badge { font-weight: 500; }
+/* Compact row actions (Lore, Foreshadows): black pills with a white pencil
+   and a lightened coral trash. */
+.row-act-btn { background: #0f1115; border-color: #0f1115; color: #ffffff; }
+.row-act-btn:hover { background: #1c1f26; border-color: #1c1f26; color: #ffffff; }
+.row-act-btn.row-act-delete { color: color-mix(in oklab, var(--color-primary) 60%, #ffffff); }
+.row-act-btn.row-act-delete:hover { color: color-mix(in oklab, var(--color-primary) 80%, #ffffff); }
+/* Ghost chips: base-200 is white here, so the SneakyUI default renders them
+   invisible on cards. Give them a faint ink wash instead. */
+.badge-ghost { background: color-mix(in oklch, var(--color-base-content) 7%, transparent); border-color: transparent; }
+
+/* Feature tints: the dark theme's bright pastel fills with black content.
+   Only used for Writing scene-plan chips, the accepted chip and critic marks —
+   status colours everywhere else stay monochrome. */
+.tint-violet { background-color: #c4b5fd; color: #191919; }
+.tint-blue { background-color: #7dd3fc; color: #191919; }
+.tint-green { background-color: #86efac; color: #191919; }
+.tint-amber { background-color: #f9d342; color: #191919; }
+.tint-coral { background-color: #f9a8d4; color: #191919; }
+.tint-red { background-color: #fca5a5; color: #191919; }
+.tint-teal { background-color: #86efac; color: #191919; }
+
+/* Mark-derived washes: the inline critique-mark hues (#f9d342 …) mixed with
+   white at the same ~35% they render over the page, so critic reports, toasts
+   and the Writing meta row show the tone the reader sees in the chapter. The
+   ink is a darker same-hue tone for legibility on the pale wash. */
+.wash-amber  { background-color: color-mix(in srgb, #f9d342 35%, #fff); color: #5b4700; }
+.wash-blue   { background-color: color-mix(in srgb, #7dd3fc 35%, #fff); color: #0b4a66; }
+.wash-green  { background-color: color-mix(in srgb, #86efac 35%, #fff); color: #14532d; }
+.wash-pink   { background-color: color-mix(in srgb, #f9a8d4 35%, #fff); color: #831843; }
+.wash-violet { background-color: color-mix(in srgb, #c4b5fd 35%, #fff); color: #4c1d95; }
+.wash-red    { background-color: color-mix(in srgb, #fca5a5 35%, #fff); color: #7f1d1d; }
+
+/* Alerts borrow the Writing critic-mark washes (same hues at 35% over white),
+   so a warning reads like a highlight instead of a saturated status block. */
+.alert { border: 0; }
+.alert-info    { background-color: color-mix(in srgb, #7dd3fc 35%, #fff); color: #0b4a66; }
+.alert-success { background-color: color-mix(in srgb, #86efac 35%, #fff); color: #14532d; }
+.alert-warning { background-color: color-mix(in srgb, #f9d342 35%, #fff); color: #5b4700; }
+.alert-error   { background-color: color-mix(in srgb, #fca5a5 35%, #fff); color: #7f1d1d; }
 .alert { border: 1px solid color-mix(in oklch, currentColor 22%, transparent); }
 .chapter-content { max-width: 75ch; margin-inline: auto; }
 
@@ -471,9 +720,8 @@ body {
 }
 
 @media (max-width: 767px) {
-  .app-header { padding-inline: .5rem; gap: .25rem; }
-  .app-brand, .app-header > .badge-ghost, .app-header > a.badge { display: none; }
-  .app-project-title { flex-basis: 100%; order: 10; }
+  .project-bar { padding-inline: .5rem; gap: .25rem; flex-wrap: wrap; }
+  .project-bar-center { order: 10; flex-basis: 100%; }
   .workspace-main { padding: .75rem; }
   .card-body { padding: .875rem; }
   .writing-grid, .proofread-grid, .grid.grid-cols-2 { grid-template-columns: minmax(0, 1fr); }

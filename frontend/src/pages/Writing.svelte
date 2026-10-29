@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { api, apiFetch } from '../lib/api.js';
   import { config, progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, autoConfirm, addToast, confirmModal } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
@@ -11,6 +11,9 @@
   import ScenePlanEditor from '../components/ScenePlanEditor.svelte';
   import BestsellerCritiqueCard from '../components/BestsellerCritiqueCard.svelte';
   import { settings } from '../lib/stores.js';
+  import { setRibbon } from '../lib/ribbon.js';
+  import { writingToolbar } from '../lib/toolbar.js';
+  import ICONS from '../lib/icons.js';
   let showKnowledge = false;
   let knowledgeName = '', knowledgeDescription = '', knowledgeTags = '';
   let selectedSettings = [];
@@ -35,15 +38,21 @@
   let knowledgeExpanded = true;
   let returnRef = null;
 
-  // —— Writing section tabs (below WritingMetaRow) ——————————————————
-  // Three-step horizontal tab bar: Scene matrix / Chapter writing /
-  // Review & accept. Each step owns one pane of the chapter workflow.
+  // —— Writing section steps (rendered by the shell ribbon) ——————————
+  // Three steps: Scene matrix / Chapter writing / Review & accept. Each
+  // step owns one pane of the chapter workflow.
   let writingTab = 1;
   const writingTabDefs = [
-    { num: 1, titleKey: 'writing.tab.sceneMatrix' },
-    { num: 2, titleKey: 'writing.tab.chapterWriting' },
-    { num: 3, titleKey: 'writing.tab.reviewAccept' },
+    { num: 1, id: 'scene', titleKey: 'writing.tab.sceneMatrix' },
+    { num: 2, id: 'writing', titleKey: 'writing.tab.chapterWriting' },
+    { num: 3, id: 'review', titleKey: 'writing.tab.reviewAccept' },
   ];
+  $: setRibbon(
+    'writing',
+    writingTabDefs.map(def => ({ id: def.id, label: $t(def.titleKey) })),
+    writingTabDefs[writingTab - 1]?.id || 'scene',
+    id => setWritingTab(writingTabDefs.find(def => def.id === id)?.num || 1)
+  );
   function setWritingTab(n) {
     if (n < 1 || n > 3) return;
     writingTab = n;
@@ -54,6 +63,8 @@
       if (ch?.num) loadReviewFacts(ch.num);
     }
   }
+  let scenePlanEditor = null;
+  onDestroy(() => writingToolbar.set({ save: null, addScene: null, accept: null }));
   let highlightedBlock = null;
   let selectedBlockId = null;
   $: factsByBlock = new Map(chapterBlocks.map(b => [b.id, facts.filter(f => (f.references || []).some(r => r.chapter === ch?.num && r.block_id === b.id))]));
@@ -277,6 +288,14 @@
   let sheetFocused = false;    // pointer inside the sheet → static Save
   let saveBtnVisible = true;   // reader still in viewport?
   let readerAbove = false;     // user scrolled PAST the top of the reader card
+
+  // Shell toolbar actions (save / new scene / accept). Null disables the
+  // matching button; the shell owns the toolbar markup.
+  $: writingToolbar.set({
+    save: ch && sheetDirty && !sheetSaving && !$taskRunning ? () => saveSheet() : null,
+    addScene: ch && writingTab === 1 && !$taskRunning ? () => scenePlanEditor?.addScene() : null,
+    accept: ch && isCurrent && ch.status === 'review' && !$taskRunning ? () => doConfirm() : null,
+  });
 
   $: if (chapterBlocks !== lastChapterBlocksRef) {
     lastChapterBlocksRef = chapterBlocks;
@@ -1006,6 +1025,7 @@
   // critic suggestion gets its own inline <mark> tint (Grammarly-style) that
   // stays identical across re-renders and resyncs.
   const IV_COLORS = ['#f9d342', '#7dd3fc', '#86efac', '#f9a8d4', '#c4b5fd', '#fca5a5'];
+  const IV_INK = 'oklch(20% 0.001 286.375)';
   function ivColorIdx(key) {
     let h = 0;
     for (let i = 0; i < (key || '').length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
@@ -1013,11 +1033,10 @@
   }
   function ivMarkStyle(key) {
     const c = IV_COLORS[ivColorIdx(key)];
-    // Solid highlighter tint + matching underline, both forced with !important:
-    // the user theme's `mark`/secondary styles (the old lavender look) must
-    // never override the per-suggestion color. The popup and the full-detail
-    // modal read the exact same ivColor() hash → card theme always equals the
-    // inline highlight it belongs to.
+    // Translucent highlighter tint + matching underline, both forced with
+    // !important: the user theme's `mark`/secondary styles must never override
+    // the per-suggestion color. The popup and the full-detail modal read the
+    // exact same ivColor() hash → card theme always equals the highlight.
     return `background:${c}59 !important;color:inherit !important;border-bottom:1.5px solid ${c} !important;`;
   }
   // Fused mark style for a beat carrying MORE THAN ONE suggestion: every
@@ -1039,6 +1058,11 @@
     return IV_COLORS[ivColorIdx(key)] || IV_COLORS[0];
   }
   function ivKdFallback(iv) { return iv ? `${iv.scene_pos}:${iv.trope_index}` : ''; }
+  // Readable text tint of the same hue: the pastel fills are too light to use
+  // as text on white, so headings/links mix them with the ink colour.
+  function ivInk(ivOrKey) {
+    return `color-mix(in oklab, ${ivColor(ivOrKey)} 45%, ${IV_INK})`;
+  }
 
   // The <mark> segments now carry their owning intervention's key (ivKey), so
   // on click we recover the EXACT pending suggestion instead of fuzzy-matching
@@ -1312,6 +1336,12 @@
   // the act steps clears everything below WritingMetaRow (chapter selection
   // included) and shows that act's dedicated report + reconfirm actions.
   let actReviewNo = null;
+  // "Overview & Chapters" starts open on entry; picking a chapter or an act
+  // step folds it so the editor gets the screen (mockup behavior).
+  let overviewOpen = true;
+  function toggleOverview() {
+    overviewOpen = !overviewOpen;
+  }
   function openActReview(no) {
     actReviewNo = no;
     selectedChapter.set(-1);
@@ -1405,11 +1435,13 @@
     navigate('foreshadows');
   }
 
+  // Status chips reuse the inline-mark hues washed with white, so the meta
+  // row reads with the same palette as the chapter highlights.
   $: statusMeta = {
-    pending:  { label: $t('writing.status.pending'),  cls: 'badge-ghost',   dot: 'bg-base-content/20' },
-    writing:  { label: $t('writing.status.writing'),  cls: 'badge-warning', dot: 'bg-warning animate-pulse' },
-    review:   { label: $t('writing.status.review'),   cls: 'badge-info',    dot: 'bg-info' },
-    accepted: { label: $t('writing.status.accepted'), cls: 'badge-success', dot: 'bg-success' },
+    pending:  { label: $t('writing.status.pending'),  cls: 'badge-ghost', dot: 'bg-base-content/20' },
+    writing:  { label: $t('writing.status.writing'),  cls: 'wash-amber',  dot: 'bg-[#f9d342] animate-pulse' },
+    review:   { label: $t('writing.status.review'),   cls: 'wash-blue',   dot: 'bg-[#7dd3fc]' },
+    accepted: { label: $t('writing.status.accepted'), cls: 'wash-green',  dot: 'bg-base-content' },
   };
 
   let reviseFeedback = '';
@@ -1749,28 +1781,117 @@
       <p class="alert alert-info">{$t('ending.completeHint')}</p>
     {/if}
 
-    <!-- Progress -->
-    <div id="CardSection_BookProgress" class="card bg-base-200">
-      <div class="card-body p-4 gap-2">
-        <div class="flex items-center gap-3">
-          <h2 class="card-title text-base flex-1">{$t('writing.progress.title')}</h2>
-          <label class="flex items-center gap-1.5 cursor-pointer" title={$t('writing.progress.autoConfirmTip')}>
-            <input type="checkbox" class="toggle toggle-xs toggle-success" checked={$autoConfirm} on:change={toggleAutoConfirm} />
-            <span class="text-xs text-base-content/60">{$t('writing.progress.autoConfirm')}</span>
-          </label>
-          <span class="text-xs text-base-content/65">{$t('writing.progress.totalWords', { n: totalWords.toLocaleString() })}</span>
-          {#if accepted >= 2}
-            <button class="btn btn-outline btn-xs" on:click={smoothTransitions} disabled={$taskRunning} title={$t('writing.btn.smoothTransitions.tip')}>{$t('writing.btn.smoothTransitions')}</button>
-          {/if}
-          <button class="btn btn-outline btn-xs" on:click={exportBook}>{$t('writing.btn.exportTxt')}</button>
-			{#if p.book_status === 'completed'}
-				<button class="btn btn-warning btn-xs" on:click={() => setBookCompleted(false)} disabled={$taskRunning}>{$t('writing.book.resume')}</button>
-			{:else}
-				<button class="btn btn-success btn-xs" on:click={() => setBookCompleted(true)} disabled={$taskRunning}>{$t('writing.book.complete')}</button>
-			{/if}
+    <!-- Overview & Chapters: the progress card and the chapter/foreshadow meta
+         row merged into one collapsible table of contents (mockup layout). It
+         opens on entry and folds as soon as a chapter or act step is picked. -->
+    <div id="CardSection_BookProgress" class="w-full p-2 text-xs">
+      <button type="button" class="group w-full flex items-center justify-between cursor-pointer select-none border-b border-gray-100 pb-2.5" aria-expanded={overviewOpen} aria-controls="WritingMetaRow" on:click={toggleOverview}>
+        <span class="font-semibold text-gray-900 text-sm">{$t('writing.overview.title')}</span>
+        <span class="flex items-center gap-1.5 px-2 py-1 group-hover:bg-gray-100 rounded-md text-[11px] font-medium text-gray-600 transition-colors">
+          <span>{overviewOpen ? $t('writing.overview.hide') : $t('writing.overview.show')}</span>
+          <svg class="w-2.5 h-2.5 text-gray-500 transition-transform duration-200" class:rotate-180={!overviewOpen} viewBox={ICONS.chevronUp.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.chevronUp.d} /></svg>
+        </span>
+      </button>
+
+      <div id="WritingMetaRow" class="mt-3 grid grid-cols-1 md:grid-cols-12 gap-6" hidden={!overviewOpen}>
+        <!-- LEFT: chapters + act-critique steps -->
+        <div id="ChapterSidebarList" class="md:col-span-7 space-y-1 md:pr-4 md:border-r border-gray-100 min-w-0">
+          {#each sidebarRows as row (row.key)}
+            {#if row.type === 'chapter'}
+              {@const c = row.c}
+              {@const i = row.i}
+              {@const isViewing = i === $selectedChapter}
+              {@const isWorking = i === currentIdx}
+              <button class="w-full flex items-center justify-between gap-2 p-1.5 rounded-md transition-colors text-left {isViewing ? 'bg-[#ffa1ad]/10' : 'hover:bg-gray-100/60'}" on:click={() => { selectChapter(i); overviewOpen = false; }}>
+                <span class="flex items-center gap-2.5 truncate min-w-0">
+                  <svg class="w-3 h-3 shrink-0 {isViewing ? 'text-[#ffa1ad]' : isWorking ? 'text-black' : c.status === 'accepted' ? 'text-[#4b5563]' : 'text-gray-400'}" viewBox={ICONS.bookmark.vb} fill="currentColor" aria-hidden="true">
+                    <path d={isWorking ? ICONS.bookmarkOutline.d : (c.status === 'accepted' || isViewing) ? ICONS.bookmark.d : ICONS.bookmarkOutline.d} />
+                  </svg>
+                  <span class="truncate {isViewing ? 'font-bold text-[#ffa1ad]' : isWorking ? 'font-semibold text-black' : c.status === 'accepted' ? 'font-medium text-[#4b5563]' : 'font-normal text-gray-500'}">{c.num} — {c.title}</span>
+                </span>
+                {#if c.draft_saved_at && c.status !== 'accepted'}
+                  <span class="badge badge-warning badge-outline badge-xs shrink-0" title={$t('writing.chapter.draftBadgeTip')}>{$t('writing.chapter.draftBadge')}</span>
+                {/if}
+              </button>
+            {:else}
+              {@const act = row.act}
+              {@const done = !!p?.act_analyses?.[act.no]}
+              <!-- Act-critique "step": opens the dedicated act-review section
+                   below this card. Rows come from the flat `sidebarRows` list so
+                   they survive an F5. -->
+              <button class="w-full my-1 py-1.5 px-2 rounded-md flex items-center justify-between gap-2 transition-colors text-left {actReviewNo === act.no ? 'bg-gray-100 text-black' : 'hover:bg-gray-100/80 text-gray-700'}"
+                      title={$t('act.analysis.manualBtnTip', { start: act.start_ch, end: act.end_ch })}
+                      on:click={() => { openActReview(act.no); overviewOpen = false; }}>
+                <span class="flex items-center gap-2 min-w-0">
+                  <svg class="w-3 h-3 shrink-0 text-gray-400" viewBox="0 0 24 24" fill={done ? 'currentColor' : 'none'} stroke={done ? 'none' : 'currentColor'} stroke-width="2" aria-hidden="true">
+                    <path d={done ? 'M12 0C12 6.627 17.373 12 24 12C17.373 12 12 17.373 12 24C12 17.373 6.627 12 0 12C6.627 12 12 6.627 12 0Z' : 'M12 2C12 7.523 16.477 12 22 12C16.477 12 12 16.477 12 22C12 16.477 7.523 12 2 12C7.523 12 12 7.523 12 2Z'} />
+                  </svg>
+                  <span class="font-medium text-xs tracking-tight truncate">{$t('act.analysis.manualBtn', { no: act.no, name: act.name || '' })}</span>
+                </span>
+                {#if done}<span class="text-[10px] text-gray-400 shrink-0">✓</span>{/if}
+              </button>
+            {/if}
+          {/each}
         </div>
-        <progress class="progress progress-primary w-full" value={pct} max="100"></progress>
-        <div class="text-sm text-base-content/65">{$t('writing.progress.acceptedSummary', { pct, accepted, total })}</div>
+
+        <!-- RIGHT: writing progress + foreshadow tracker -->
+        <div class="md:col-span-5 flex flex-col justify-start gap-3 min-w-0">
+          <div class="group/progress bg-gray-50 border border-gray-100 p-3.5 rounded-lg space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-bold text-gray-900 text-xs">{$t('writing.progress.title')}</span>
+              <label class="inline-flex items-center gap-2 cursor-pointer" title={$t('writing.progress.autoConfirmTip')}>
+                <span class="text-[10px] text-gray-500 font-medium">{$t('writing.progress.autoConfirm')}</span>
+                <input type="checkbox" class="sr-only" checked={$autoConfirm} on:change={toggleAutoConfirm} />
+                <span class="relative inline-block w-7 h-4 rounded-full transition-colors {$autoConfirm ? 'bg-black' : 'bg-gray-200'}">
+                  <span class="absolute top-[2px] left-[2px] h-3 w-3 rounded-full bg-white transition-transform {$autoConfirm ? 'translate-x-3' : ''}"></span>
+                </span>
+              </label>
+            </div>
+            <div class="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
+              <div class="bg-[#9ca3af] h-full rounded-full transition-all duration-300" style="width: {pct}%"></div>
+            </div>
+            <div class="text-[11px] text-gray-600 font-mono flex items-start justify-between gap-2">
+              <div class="flex flex-col">
+                <span class="font-semibold text-black">{$t('writing.progress.words', { n: totalWords.toLocaleString() })}</span>
+                <span class="text-[10px] text-gray-400 font-normal">{$t('writing.progress.approx')}</span>
+              </div>
+              <div class="flex flex-col items-end">
+                <span class="font-semibold text-black">{pct}%</span>
+                <span class="text-[10px] text-gray-400 font-normal">{$t('writing.progress.acceptedCount', { accepted, total })}</span>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5 opacity-0 pointer-events-none group-hover/progress:opacity-100 group-hover/progress:pointer-events-auto group-focus-within/progress:opacity-100 group-focus-within/progress:pointer-events-auto transition-opacity duration-200">
+              {#if accepted >= 2}
+                <button class="btn btn-outline btn-xs" on:click={smoothTransitions} disabled={$taskRunning} title={$t('writing.btn.smoothTransitions.tip')}>{$t('writing.btn.smoothTransitions')}</button>
+              {/if}
+              <button class="btn btn-outline btn-xs" on:click={exportBook}>{$t('writing.btn.exportTxt')}</button>
+              {#if p.book_status === 'completed'}
+                <button class="btn btn-outline btn-xs" on:click={() => setBookCompleted(false)} disabled={$taskRunning}>{$t('writing.book.resume')}</button>
+              {:else}
+                <button class="btn btn-outline btn-xs" on:click={() => setBookCompleted(true)} disabled={$taskRunning}>{$t('writing.book.complete')}</button>
+              {/if}
+            </div>
+          </div>
+
+          <div id="CardSection_ForeshadowTracker" class="bg-gray-50 border border-gray-100 p-3.5 rounded-lg flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="font-bold text-gray-900 text-xs mb-0.5">{$t('writing.fs.title')}</div>
+              <div class="text-[11px] text-gray-500 font-mono">
+                {$t('writing.fs.total', { n: foreshadows.length })} <span class="text-gray-300">|</span> {$t('writing.fs.active', { n: fsActive.length })}
+                {#if fsOverdue.length > 0}<span class="text-red-500"> · {$t('writing.fs.overdue', { n: fsOverdue.length })}</span>{/if}
+              </div>
+              {#if fsOverdue.length > 0}
+                <p class="text-[10px] text-red-500 mt-0.5 truncate" title={$t('writing.fs.overdueDetail', { names: fsOverdue.map(f => `#${f.id} ${f.name}`).join(', ') })}>{$t('writing.fs.overdueDetail', { names: fsOverdue.map(f => `#${f.id} ${f.name}`).join(', ') })}</p>
+              {:else if fsNearTarget.length > 0}
+                <p class="text-[10px] text-gray-400 mt-0.5 truncate">{$t('writing.fs.nearTarget', { n: fsNearTarget.length })}</p>
+              {/if}
+            </div>
+            <button class="px-2.5 py-1.5 bg-white border border-gray-200 hover:border-black rounded-md text-xs font-semibold text-gray-800 hover:text-black transition-all flex items-center gap-1.5 shrink-0" on:click={() => window.location.hash = '#foreshadows'}>
+              <span>{$t('writing.fs.goto')}</span>
+              <svg class="w-2.5 h-2.5 text-gray-400" viewBox={ICONS.arrowRight.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.arrowRight.d} /></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1844,82 +1965,6 @@
         </div>
       </div>
     {/if}
-
-    <!-- Row: chapter index (left) + foreshadow tracker (right; this is where
-         the old "Scene plan" access card used to sit) -->
-    <div id="WritingMetaRow" class="grid grid-cols-[minmax(0,1fr)_345px] gap-3 items-start">
-      <div id="ChapterSidebarList" class="card bg-base-200 overflow-y-auto max-h-[calc(100vh-280px)] min-w-0">
-        <ul class="menu menu-sm p-0 w-full">
-          {#each sidebarRows as row (row.key)}
-            {#if row.type === 'chapter'}
-              {@const c = row.c}
-              {@const i = row.i}
-              <li>
-                <button class="flex gap-2 items-center {$selectedChapter === i && actReviewNo == null ? 'active' : ''}" on:click={() => selectChapter(i)}>
-                  <span class="w-2 h-2 rounded-full shrink-0 {statusMeta[c.status]?.dot || ''}"></span>
-                  <span class="text-base-content/65 w-6 shrink-0 text-right">{c.num}</span>
-                  <span class="flex-1 text-left truncate text-sm">{c.title}</span>
-                  {#if c.draft_saved_at && c.status !== 'accepted'}
-                    <span class="badge badge-warning badge-outline badge-xs shrink-0" title={$t('writing.chapter.draftBadgeTip')}>{$t('writing.chapter.draftBadge')}</span>
-                  {/if}
-                  {#if i === currentIdx && c.status !== 'accepted'}
-                    <span class="badge badge-primary badge-xs shrink-0">{$t('writing.tag.current')}</span>
-                  {/if}
-                </button>
-              </li>
-            {:else}
-              {@const act = row.act}
-              <!-- Act-critique "step": opens the dedicated act-review SECTION
-                   below WritingMetaRow (surgical beat changes on previous
-                   chapters + outline changes for upcoming ones). Rows come
-                   from the flat `sidebarRows` list so they survive an F5. -->
-              <li>
-                <button class="flex gap-2 items-center border-t border-base-content/10 {actReviewNo === act.no ? 'active' : ''}"
-                        title={$t('act.analysis.manualBtnTip', { start: act.start_ch, end: act.end_ch })}
-                        on:click={() => openActReview(act.no)}>
-                  <span class="shrink-0 text-warning text-xs">✦</span>
-                  <span class="flex-1 text-left text-xs opacity-80">{$t('act.analysis.manualBtn', { no: act.no, name: act.name || '' })}</span>
-                  {#if p?.act_analyses?.[act.no]}
-                    <span class="badge badge-success badge-xs shrink-0">✓</span>
-                  {/if}
-                </button>
-              </li>
-            {/if}
-          {/each}
-        </ul>
-      </div>
-
-      <div id="CardSection_ForeshadowTracker" class="card bg-base-200 min-w-0">
-        {#if foreshadows.length > 0}
-          <div class="card-body p-4 gap-2">
-            <div class="flex items-center justify-between gap-2">
-              <h3 class="font-medium text-sm">{$t('writing.fs.title')}</h3>
-              <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.goto')}</button>
-            </div>
-            <div class="flex flex-wrap gap-2 text-xs">
-              <span class="badge badge-ghost">{$t('writing.fs.total', { n: foreshadows.length })}</span>
-              <span class="badge badge-info badge-outline">{$t('writing.fs.active', { n: fsActive.length })}</span>
-              {#if fsOverdue.length > 0}
-                <span class="badge badge-error">{$t('writing.fs.overdue', { n: fsOverdue.length })}</span>
-              {/if}
-              {#if fsNearTarget.length > 0}
-                <span class="badge badge-warning badge-outline">{$t('writing.fs.nearTarget', { n: fsNearTarget.length })}</span>
-              {/if}
-            </div>
-            {#if fsOverdue.length > 0}
-              <p class="text-xs text-warning">{$t('writing.fs.overdueDetail', { names: fsOverdue.map(f => `#${f.id} ${f.name}`).join(', ') })}</p>
-            {:else if fsNearTarget.length > 0}
-              <p class="text-xs text-base-content/65">{$t('writing.fs.nearDetail', { names: fsNearTarget.map(f => f.name).join(', ') })}</p>
-            {/if}
-          </div>
-        {:else}
-          <div class="card-body p-4 flex items-center justify-between gap-2">
-            <p class="text-sm text-base-content/65">{$t('writing.fs.none')}</p>
-            <button class="btn btn-outline btn-xs" on:click={() => window.location.hash = '#foreshadows'}>{$t('writing.fs.setup')}</button>
-          </div>
-        {/if}
-      </div>
-    </div><!-- /WritingMetaRow -->
 
     <!-- CHAPTER TITLE: big heading above the stepper tabs so the user always
          knows which chapter (or act review) the section below refers to. -->
@@ -1995,52 +2040,6 @@
         </div>
       </div>
     {:else if ch}
-    <!-- STEP TABS: three horizontal step tabs below WritingMetaRow. The
-         active one gets a white card + dark numbered badge; earlier steps
-         show a check and fade slightly; future steps are dimmed until
-         hover. A progress bar attached at the bottom reflects the current
-         step (1/3 → 3/3). Panes: 1 = Scene plan (+ scene-plan critic),
-         2 = WritingWorkspace (+ chapter critic), 3 = consistency facts +
-         accept-chapter button. Only rendered when a chapter is selected:
-         with nothing picked the page shows just "Pick a chapter to view". -->
-    <div id="WritingStepTabs" class="pt-1">
-      <div class="grid grid-cols-3 gap-2 py-1">
-        {#each writingTabDefs as def (def.num)}
-          {@const isCurrent = writingTab === def.num}
-          {@const isPast = writingTab > def.num}
-          {@const stepDoneIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'}
-          <button
-            type="button"
-            id={'step-tab-' + def.num}
-            on:click={() => setWritingTab(def.num)}
-            class="flex flex-col p-2.5 rounded-lg text-left group focus:outline-none step-transition relative z-10
-              {isCurrent ? 'bg-white border border-neutral-200 shadow-subtle' : isPast ? 'bg-white/40 border border-transparent opacity-70 hover:opacity-100' : 'bg-transparent border border-transparent opacity-40 hover:opacity-100'}"
-          >
-            <div class="flex items-center justify-between mb-1.5">
-              <span
-                id={'step-icon-' + def.num}
-                class="w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold step-transition
-                  {isCurrent || isPast ? 'bg-neutral-900 text-white' : 'bg-neutral-200 text-neutral-500'}"
-              >{#if isPast}{@html stepDoneIcon}{:else}{def.num}{/if}</span>
-              <span id={'step-sub-' + def.num} class="text-[9px] font-mono text-neutral-400">0{def.num}</span>
-            </div>
-            <span
-              id={'step-title-' + def.num}
-              class="text-xs truncate {isCurrent ? 'font-semibold text-neutral-900' : isPast ? 'font-medium text-neutral-600' : 'font-medium text-neutral-500'}"
-            >{$t(def.titleKey)}</span>
-          </button>
-        {/each}
-      </div>
-      <!-- PROGRESS BAR ATTACHED AT THE BOTTOM -->
-      <div class="relative w-full h-1 bg-neutral-100 rounded-full overflow-hidden mt-1">
-        <div
-          id="writing-step-progress-bar"
-          class="absolute top-0 left-0 h-full bg-neutral-900 step-transition"
-          style="width: {writingTab * 33.33}%;"
-        ></div>
-      </div>
-    </div><!-- /WritingStepTabs -->
-
     <!-- ═════════ TAB 1 · SCENE MATRIX ═════════
          The scene-plan beat-sheet editor INLINE (it used to live in a modal
          opened from an access card) + the bestseller critic over the PENDING
@@ -2049,6 +2048,7 @@
       <div class="mt-3 min-w-0">
         {#key scenePlanEditorNum}
           <ScenePlanEditor chapterNum={scenePlanEditorNum}
+            bind:this={scenePlanEditor}
             onGenerated={() => setWritingTab(2)} />
         {/key}
       </div>
@@ -2083,17 +2083,19 @@
       <!-- Content area -->
       <div id="ChapterContentArea" class="min-w-0 w-full">
         {#if ch}
-          <div id="CardSection_ChapterReader" class="card bg-base-200" use:setReaderCard>
-            <div class="card-body p-4 gap-2">
-              <div class="chapter-head-row flex items-center gap-2 flex-wrap">
-                <h2 class="card-title text-base flex-1 min-w-0">{$t('writing.chapter.title', { num: ch.num, title: ch.title })}</h2>
-                <span class="badge badge-sm {statusMeta[ch.status]?.cls || 'badge-ghost'}">{statusMeta[ch.status]?.label || ch.status}</span>
-                {#if showTaskTokens}
-                  <TaskTokenBadge className="text-xs text-base-content/65 font-mono" />
-                {:else if chapterWordCount > 0}
-                  <span class="text-xs text-base-content/65">{$t('writing.chapter.words', { n: chapterWordCount.toLocaleString() })}</span>
-                {/if}
-              </div>
+          <div id="CardSection_ChapterReader" class="card bg-base-200 p-10" use:setReaderCard>
+            <div class="card-body p-0 gap-2">
+              {#if showTaskTokens || chapterWordCount > 0}
+                <!-- Chapter title/status moved out of the reader card; only the
+                     word count stays, pinned to the top-right corner. -->
+                <div class="chapter-head-row flex items-center justify-end gap-2 flex-wrap">
+                  {#if showTaskTokens}
+                    <TaskTokenBadge className="text-xs text-base-content/65 font-mono" />
+                  {:else}
+                    <span class="text-xs text-base-content/65">{$t('writing.chapter.words', { n: chapterWordCount.toLocaleString() })}</span>
+                  {/if}
+                </div>
+              {/if}
 
               {#if ch.outline}
                 <details class="chapter-outline-fold bg-base-100">
@@ -2112,7 +2114,7 @@
                   </div>
                 {/if}
                 <!-- svelte-ignore a11y-no-static-element-interactions -->
-                <div id="ChapterProseViewer" bind:this={contentEl} class="rounded-lg p-4 text-[15px] chapter-content min-h-[200px]"
+                <div id="ChapterProseViewer" bind:this={contentEl} class="rounded-lg p-0 text-[15px] chapter-content min-h-[200px]"
                      on:mouseup={checkContentSelection}
                      on:scroll={hideQuotePopover}>
                   {#if isStreamingThis}
@@ -2169,24 +2171,24 @@
                                scene chip on top, the subscene chip below it. -->
                           {#each ms as m, mi (m.kind + ':' + m.pos + ':' + (m.idx ?? 0))}
                             <div class="sheet-chip-row group/chiprow relative flex flex-wrap items-center justify-center gap-1.5 py-0.5" data-bid={mi === 0 ? (-bi - 1) : (-bi - 100000 - mi)}>
-                              <!-- SCENE chips are ALWAYS fully visible (they own
-                                   the description tooltip). Subscene chips stay
-                                   subtle until hovered. Only SCENE chips carry the
-                                   "i" tooltip; subscene chips never do. -->
-                              <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope {m.kind === 'scene' ? 'chip-always-on' : ''} bg-base-content/5 border border-base-content/15 {m.kind === 'scene' ? 'cursor-help' : 'cursor-default'} select-none" contenteditable="false">
-                                <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-base-content/50 select-none">
-                                  {#if m.kind === 'scene'}{$t('writing.blockSceneMarker', [m.pos])}{:else}{$t('writing.tropeMarkerChip', [m.label || ('#' + m.idx), m.idx, m.count])}{/if}
-                                </span>
-                              </span>
-                              {#if m.kind === 'scene' && (m.title || m.desc)}
-                                <!-- Scene-only affordance: an "i" icon OUTSIDE the
-                                     chip that opens the same black popover used by
-                                     the SmartSelect tips, with the scene's title
-                                     and description. Subscene chips have NO
-                                     tooltip at all. -->
-                                <InfoTip text={(m.title ? m.title + '\n\n' : '') + (m.desc || $t('writing.sceneDescEmpty'))} label={$t('writing.sceneDescTipLabel')}>
-                                  <span slot="trigger" class="scene-desc-icon" role="presentation">i</span>
+                              <!-- SCENE chips are themselves the trigger for the
+                                   black SmartSelect-style popover with the
+                                   scene's title and description. They fade like
+                                   subscene chips at rest and go opaque on hover. -->
+                              {#if m.kind === 'scene'}
+                                <InfoTip dark width={300} text={(m.title ? m.title + '\n\n' : '') + (m.desc || $t('writing.sceneDescEmpty'))} label={$t('writing.sceneDescTipLabel')}>
+                                  <span slot="trigger" class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope bg-[#4b5563] cursor-help select-none" contenteditable="false">
+                                    <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-white select-none">
+                                      {$t('writing.blockSceneMarker', [m.pos])}
+                                    </span>
+                                  </span>
                                 </InfoTip>
+                              {:else}
+                                <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope bg-base-content/5 cursor-default select-none" contenteditable="false">
+                                  <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-base-content/50 select-none">
+                                    {$t('writing.tropeMarkerChip', [m.label || ('#' + m.idx), m.idx, m.count])}
+                                  </span>
+                                </span>
                               {/if}
                               {#if m.kind === 'trope'}
                                 <!-- Hover action lives OUTSIDE the chip AND outside
@@ -2232,7 +2234,7 @@
                             {#if (() => { const ivs = ivSegmentsFor(b.text, b.id); const fms = factMarkSegments(b.text, b.id); return ivs || fms; })()}
                               {@const ivSegs = ivSegmentsFor(b.text, b.id)}
                               {@const fmSegs = factMarkSegments(b.text, b.id)}
-                              <span class="whitespace-pre-wrap">{#each (fmSegs && !ivSegs ? fmSegs : (ivSegs || [{ t: b.text }])) as seg, si (si)}{#if seg.iv}{@const segIvs = findIvsForKeys(seg.ivKeys || [seg.ivKey], seg.t)}<mark class="iv-mark" style={ivMarkStyleMulti(segIvs.map(x => x.key))} role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation|preventDefault={(e) => openIVPopup(e, segIvs)} on:mousedown|stopPropagation={(e) => e.preventDefault()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, segIvs); } }}>{seg.t}</mark>{#if segIvs.length > 1}<sup class="iv-count" style={'color:' + ivColor(segIvs[0].key)}>×{segIvs.length}</sup>{/if}{:else if seg.fact}<mark class="fact-mark">{seg.t}</mark>{:else}{seg.t}{/if}{/each}</span>
+                              <span class="whitespace-pre-wrap">{#each (fmSegs && !ivSegs ? fmSegs : (ivSegs || [{ t: b.text }])) as seg, si (si)}{#if seg.iv}{@const segIvs = findIvsForKeys(seg.ivKeys || [seg.ivKey], seg.t)}<mark class="iv-mark" style={ivMarkStyleMulti(segIvs.map(x => x.key))} role="button" tabindex="-1" title={$t('writing.iv.popupTitle')} on:click|stopPropagation|preventDefault={(e) => openIVPopup(e, segIvs)} on:mousedown|stopPropagation={(e) => e.preventDefault()} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIVPopup(e, segIvs); } }}>{seg.t}</mark>{#if segIvs.length > 1}<sup class="iv-count" style={'color:' + ivInk(segIvs[0].key)}>×{segIvs.length}</sup>{/if}{:else if seg.fact}<mark class="fact-mark">{seg.t}</mark>{:else}{seg.t}{/if}{/each}</span>
                             {:else}
                               <span class="whitespace-pre-wrap">{b.text}</span>
                             {/if}
@@ -2280,7 +2282,7 @@
                       {#if chapterBlocks.length > 0}
                         {@const lastBid = chapterBlocks[chapterBlocks.length - 1].id}
                         <div class="sheet-chip-row group/chiprow relative flex flex-wrap items-center justify-center gap-1.5 py-0.5" data-bid={-999998}>
-                          <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope bg-base-content/5 border border-base-content/15 cursor-default select-none" contenteditable="false">
+                          <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 chip-scene-or-trope bg-base-content/5 cursor-default select-none" contenteditable="false">
                             <span class="sheet-chip-text text-[9px] font-semibold tracking-wider uppercase text-base-content/50 select-none" title={$t('writing.block.endOfChapterTip')}>⬛ {$t('writing.block.endOfChapter')}</span>
                           </span>
                           <!-- Action pill lives OUTSIDE the chip AND outside the
@@ -2333,7 +2335,7 @@
                        use:popupMeasure
                        style={popupPos(ivPopup) + 'border:1px solid ' + ivC + ';box-shadow:0 8px 24px rgba(0,0,0,.28), inset 0 3px 0 0 ' + ivC +';background:#ffffff;color:#1f2937'}
                        role="dialog" aria-label={$t('writing.iv.popupTitle')}>
-                    <div class="text-xs font-semibold flex items-center gap-1.5 mb-1" style={'color:' + ivC}>
+                    <div class="text-xs font-semibold flex items-center gap-1.5 mb-1" style={'color:' + ivInk(ivActive.key || ivActive)}>
                       <span class="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={'background:' + ivC}></span>
                       {$t('writing.iv.popupTitle')}
                     </div>
@@ -2345,10 +2347,10 @@
                         {#each ivList as tIv, ti}
                           <button class="btn btn-xs py-0 px-2 h-6 rounded-full border text-[10px] leading-none"
                                   style={ti === ivPopup.active
-                                    ? ('background:' + ivColor(tIv.key) + ';color:#fff;border-color:' + ivColor(tIv.key))
-                                    : ('border-color:' + ivColor(tIv.key) + ';color:' + ivColor(tIv.key) + ';background:transparent')}
+                                    ? ('background:' + ivColor(tIv.key) + ';color:' + IV_INK + ';border-color:' + ivColor(tIv.key))
+                                    : ('border-color:' + ivColor(tIv.key) + ';color:' + ivInk(tIv.key) + ';background:transparent')}
                                   on:click|stopPropagation={() => { ivPopup = { ...ivPopup, active: ti, iv: ivList[ti] }; }}>
-                            <span class="inline-block w-1.5 h-1.5 rounded-full mr-1" style={'background:' + (ti === ivPopup.active ? '#fff' : ivColor(tIv.key))}></span>
+                            <span class="inline-block w-1.5 h-1.5 rounded-full mr-1" style={'background:' + (ti === ivPopup.active ? IV_INK : ivColor(tIv.key))}></span>
                             #{ti + 1} · {String(tIv.title || tIv.action || $t('writing.iv.popupTitle')).slice(0, 24)}
                           </button>
                         {/each}
@@ -2364,10 +2366,10 @@
                       <div class="text-xs leading-snug whitespace-pre-wrap overflow-hidden mt-1" style="max-height:80px">{ivActive.feedback}</div>
                     {/if}
                     <div class="flex gap-2 justify-between items-center mt-2">
-                      <button class="btn btn-link btn-xs p-0 h-auto underline decoration-dotted" style={'color:' + ivC} on:click|stopPropagation={openIVDetail}>{$t('writing.iv.viewFull')}</button>
+                      <button class="btn btn-link btn-xs p-0 h-auto underline decoration-dotted" style={'color:' + ivInk(ivActive.key || ivActive)} on:click|stopPropagation={openIVDetail}>{$t('writing.iv.viewFull')}</button>
                       <div class="flex gap-2">
                         <button class="btn btn-ghost btn-xs" on:click={dismissPendingIV} disabled={$taskRunning}>{$t('writing.iv.dismiss')}</button>
-                        <button class="btn btn-xs text-base-100 border-0" style={'background:' + ivC} on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
+                        <button class="btn btn-xs text-base-content border-0" style={'background:' + ivC} on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
                       </div>
                     </div>
                   </div>
@@ -2379,7 +2381,7 @@
                          role="dialog" aria-modal="true" aria-label={$t('writing.iv.popupTitle')}
                          on:click|stopPropagation on:keydown|stopPropagation>
                       <div class="card-body p-5 overflow-hidden">
-                        <h3 class="card-title text-sm items-center gap-2" style={'color:' + ivDetail.color}>
+                        <h3 class="card-title text-sm items-center gap-2" style={'color:' + ivInk(ivDetail.iv)}>
                           <span class="inline-block w-3 h-3 rounded-full" style={'background:' + ivDetail.color}></span>
                           {$t('writing.iv.popupTitle')}
                           <button class="btn btn-circle btn-ghost btn-xs ml-auto" on:click={hideIVPopup} aria-label="close">✕</button>
@@ -2416,7 +2418,7 @@
                         </div>
                         <div class="card-actions justify-end mt-2">
                           <button class="btn btn-ghost btn-sm" on:click={dismissPendingIV} disabled={$taskRunning}>{$t('writing.iv.dismiss')}</button>
-                          <button class="btn btn-sm text-base-100 border-0" style={'background:' + ivDetail.color} on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
+                          <button class="btn btn-sm text-base-content border-0" style={'background:' + ivDetail.color} on:click={() => applyPendingIV()} disabled={$taskRunning || applyingIV}>{$t('writing.iv.apply')}</button>
                         </div>
                       </div>
                     </div>
@@ -2470,27 +2472,6 @@
                 </div>
               </div>
 
-              <!-- Bestseller critic over THIS drafted chapter: same card as the
-                   outline analysis, but the editor knows it is reviewing one
-                   chapter and its suggestions carry trope-unit interventions. -->
-              {#if hasContent && ch.status !== 'writing'}
-                <!-- Keyed by chapter number: switching 6→5 remounts a clean
-                     card (internal accordion/proposal state is discarded) so
-                     you always see THIS chapter's report, never the previous
-                     chapter's. -->
-                {#key ch.num}
-                  <div id="CardSection_ChapterAnalysis_{ch.num}" class="pt-1">
-                    <BestsellerCritiqueCard
-                      kind="chapter"
-                      report={chapterAnalysis}
-                      chapterNum={ch.num}
-                      disabled={$taskRunning}
-                      hasTargets={true}
-                      scrollId={"CardSection_ChapterAnalysis_" + ch.num} />
-                  </div>
-                {/key}
-              {/if}
-
               {#if showRevise}
                 <div id="CardSection_ChapterRevise" class="bg-base-100 rounded-lg p-3 space-y-2">
                     {#if showKnowledge}
@@ -2539,6 +2520,24 @@
             </div>
           </div>
 
+          <!-- Bestseller critic over THIS drafted chapter: its own card, outside
+               the reader, so the prose and the editorial report never share one
+               surface. Keyed by chapter number: switching 6→5 remounts a clean
+               card (internal accordion/proposal state is discarded). -->
+          {#if hasContent && ch.status !== 'writing'}
+            {#key ch.num}
+              <div id="CardSection_ChapterAnalysis_{ch.num}" class="mt-3">
+                <BestsellerCritiqueCard
+                  kind="chapter"
+                  report={chapterAnalysis}
+                  chapterNum={ch.num}
+                  disabled={$taskRunning}
+                  hasTargets={true}
+                  scrollId={"CardSection_ChapterAnalysis_" + ch.num} />
+              </div>
+            {/key}
+          {/if}
+
           <!-- Sticky sheet Save button — rendered OUTSIDE CardSection_ChapterReader.
                Behavior: while the reader is in view it sits at the bottom of the
                card flow (normal position via sticky offset); when the user scrolls
@@ -2569,23 +2568,19 @@
          facts binding — reviewFacts — so the prose chips of tab 2 never
          see it) plus the button that accepts the chapter. -->
     {#if writingTab === 3}
-      <div id="CardSection_ReviewAccept" class="rounded-xl bg-white shadow-subtle mt-3 min-w-0 p-8">
-        <!-- HEADER: big clear title + status pill (mirrors the Scene matrix
-             inline card of tab 1 — same Notion/Revolut document style). -->
-        <div class="flex items-center gap-3 flex-wrap px-0 pt-0 pb-4 border-b border-neutral-100">
-          <h3 class="text-lg font-semibold text-neutral-900 flex-1 leading-tight">
-            {$t('writing.chapter.title', { num: ch?.num ?? '-', title: ch?.title ?? '' })}
-          </h3>
-          {#if ch}
+      <div id="CardSection_ReviewAccept" class="rounded-xl bg-white shadow-subtle mt-3 min-w-0 p-10">
+        <!-- HEADER: status pill only, pinned to the card's top-right corner. -->
+        {#if ch}
+          <div class="flex items-center justify-end gap-3 flex-wrap px-0 pt-0 pb-4 border-b border-neutral-100">
             {#if ch.status === 'accepted'}
-              <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">✓ {$t('writing.tab.accepted')}</span>
+              <span class="inline-flex items-center gap-1 rounded-full tint-green px-2.5 py-0.5 text-[11px] font-medium">✓ {$t('writing.tab.accepted')}</span>
             {:else if ch.status === 'review'}
-              <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-[11px] font-medium text-amber-700">• {$t('writing.tab.reviewBadge')}</span>
+              <span class="inline-flex items-center gap-1 rounded-full tint-amber px-2.5 py-0.5 text-[11px] font-medium">{$t('writing.tab.reviewBadge')}</span>
             {:else}
               <span class="inline-flex items-center rounded-full bg-neutral-100 border border-neutral-200 px-2.5 py-0.5 text-[11px] font-medium text-neutral-600">{statusMeta[ch.status]?.label || ch.status}</span>
             {/if}
-          {/if}
-        </div>
+          </div>
+        {/if}
 
         {#if ch}
           <!-- CHAPTER SUMMARY: its own Notion-style section with a muted
@@ -2593,7 +2588,7 @@
           {#if ch.summary}
             <div class="px-0 pt-5">
               <div class="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 mb-1.5">{$t('writing.chapter.summary')}</div>
-              <p class="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap bg-neutral-50 border border-neutral-100 rounded-lg px-3.5 py-3">{ch.summary}</p>
+              <p class="text-sm leading-[1.5] text-neutral-700 whitespace-pre-wrap bg-neutral-50 border border-neutral-100 rounded-lg p-6">{ch.summary}</p>
             </div>
           {/if}
 
@@ -2698,37 +2693,14 @@
   :global(.group\/chiprow:hover) .chip-add-before,
   .chip-add-before:focus-visible { opacity: 1; }
   :global(.group\/chiprow:hover) .chip-add-before--ghost { pointer-events: auto; visibility: visible; }
-  /* SCENE chips are real structural markers — unlike the subtle subscene
-     chips they must ALWAYS be fully visible (never dimmed at idle). */
-  .chip-always-on { opacity: 1 !important; }
-  /* Small "i" trigger that lives OUTSIDE a scene chip and opens the black
-     SmartSelect-style popover with the scene title + description. Only scene
-     chips get one; subscene chips have no tooltip of any kind. */
-  .scene-desc-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 9999px;
-    border: 1px solid color-mix(in oklab, currentColor 30%, transparent);
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1;
-    color: var(--fallback-bc, oklch(var(--bc)));
-    opacity: 0.55;
-    cursor: help;
-    user-select: none;
-    -webkit-user-select: none;
-    transition: opacity 0.12s ease, border-color 0.12s ease;
-  }
-  .scene-desc-icon:hover { opacity: 1; border-color: color-mix(in oklab, currentColor 60%, transparent); }
-  /* Chapter-head row (title + status badge) inside the reader card: roomy
-     Notion-like margins so the header breathes. */
-  .chapter-head-row { margin: 1.5rem; }
+  /* SCENE chips share the subscene chips' idle/hover fade (they are no longer
+     forced always-on): dimmed at rest, fully opaque while hovered. */
+  /* Word-count row inside the reader card: roomy Notion-like margins so the
+     header breathes. */
+  .chapter-head-row { margin: 0 0 1rem; }
   /* Collapsible outline/<details> in the chapter-writing area: same breathing
      margin as the head row + soft rounded corners. */
-  .chapter-outline-fold { margin: 1.5rem; border-radius: 0.5rem; }
+  .chapter-outline-fold { margin: 0 0 1rem; padding: 1rem; border-radius: 0.5rem; }
   .sheet-chip-text {
     user-select: none;
     -webkit-user-select: none;
@@ -2792,14 +2764,8 @@
     box-shadow: none !important;
   }
 
-  /* —— Writing step tabs (Scene matrix / Chapter writing / Review & accept) —
-     Ultra-minimalist Notion x Revolut stepper: cubic-bezier transitions on
-     the tab cards + progress bar, and a hairline shadow for the active card
-     (the project uses Tailwind v4 without a config file, so the sample's
-     `shadow-subtle` utility is defined here instead). */
-  .step-transition {
-    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  }
+  /* —— Hairline card shadow (Tailwind v4 has no config file here, so the
+     sample's `shadow-subtle` utility is defined locally). */
   .shadow-subtle {
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
   }

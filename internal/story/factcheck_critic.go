@@ -36,12 +36,12 @@ const maxCriticSceneRepairs = 4
 
 // CriticIssue is one finding of the evolved fact-check critic.
 type CriticIssue struct {
-	Type    string `json:"type"`    // continuity | premature_event | re_enactment | identity | timeline | other
-	Scope   string `json:"scope"`   // "scene" | "chapter"
+	Type    string `json:"type"`     // continuity | premature_event | re_enactment | identity | timeline | other
+	Scope   string `json:"scope"`    // "scene" | "chapter"
 	SceneID int    `json:"scene_id"` // planned scene ID (0 when unknown / chapter-scope)
-	Quote   string `json:"quote"`   // short EXACT excerpt from the prose carrying the problem
-	Issue   string `json:"issue"`   // what contradicts what, concretely
-	Fix     string `json:"fix"`     // concrete guidance for the repair pass
+	Quote   string `json:"quote"`    // short EXACT excerpt from the prose carrying the problem
+	Issue   string `json:"issue"`    // what contradicts what, concretely
+	Fix     string `json:"fix"`      // concrete guidance for the repair pass
 }
 
 // FactLoc is where one OPEN fact-check issue lives inside the drafted prose:

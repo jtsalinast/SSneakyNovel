@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import logo from '../../../docs/show-me-the-story.webp';
+  import logo from '../../../docs/sssnovelstudio.webp';
   import { api, apiFetch } from '../lib/api.js';
   import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';

@@ -12,7 +12,7 @@ Novelists who spend long sessions planning, drafting, revising, and maintaining 
 
 ## Product Purpose
 
-Show Me The Story is a local AI-assisted novel-writing workspace. It keeps planning, prose, facts, settings, foreshadows, proofreading, and assistant conversations connected while the author remains in control of every durable change.
+SSSNovelStudio is a local AI-assisted novel-writing workspace. It keeps planning, prose, facts, settings, foreshadows, proofreading, and assistant conversations connected while the author remains in control of every durable change.
 
 ## Positioning
 
@@ -24,7 +24,7 @@ Authors create or restore a project, configure the story, plan outline batches, 
 
 ## Capabilities and Constraints
 
-- Web UI embedded in a single Go binary; Svelte 4, Tailwind CSS 4, DaisyUI 5, and `@xianii/design-system` are the established frontend stack.
+- Web UI embedded in a single Go binary; Svelte 4, Tailwind CSS 4, SneakyUI 5, and `@xianii/design-system` are the established frontend stack.
 - Project content is bilingual (`zh` or `en`) while UI language is independently switchable.
 - Existing API routes, SSE behavior, hash navigation, storage safety, version checks, and direct page actions are product contracts.
 - No commercial claims, customer evidence, telemetry, or cloud collaboration should be invented.

@@ -58,6 +58,9 @@ func main() {
 		os.Exit(1)
 	}
 	llm.EnsureContextBudget(apiCfg)
+	if apiCfg.Brainstorm != nil {
+		llm.EnsureContextBudget(apiCfg.Brainstorm)
+	}
 
 	if apiCfg.BaseURL == "" || apiCfg.Model == "" {
 		fmt.Println(" [is] toemptywhiteAPIplace, alreadymovelife api.json")

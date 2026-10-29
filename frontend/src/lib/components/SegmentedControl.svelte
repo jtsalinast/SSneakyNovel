@@ -1,6 +1,6 @@
 <script>
   // SegmentedControl — Revolut-style pill selector adapted from the standalone
-  // HTML/Alpine prototype to this Svelte + daisyUI/Tailwind app. A track of
+  // HTML/Alpine prototype to this Svelte + SneakyUI/Tailwind app. A track of
   // equal segments with a sliding dark "pill" behind the active one, plus an
   // optional external "Auto" button (lightning icon) that decouples the
   // selection: turning Auto ON keeps the last segment visible but faded;
@@ -480,7 +480,7 @@
     width: 1px;
     margin-left: -0.5px;
     /* Theme-aware hairline: subtle base-content mix on BOTH themes —
-       ~12% white on the default dark theme, ~12% black on xianii-light.
+       ~12% white on the default dark theme, ~12% black on the light theme.
        A hardcoded light color was invisible against the dark surface
        (the "separator never shows" bug). */
     background-color: color-mix(in oklch, var(--color-base-content) 12%, transparent);

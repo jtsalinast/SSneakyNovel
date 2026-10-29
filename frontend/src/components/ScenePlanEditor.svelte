@@ -8,8 +8,8 @@
   //
   // Aesthetics: Notion / Revolut-style inline document — borderless rows that
   // reveal a soft hover surface, big clear titles, muted helper texts, pill
-  // badges and a dark neutral palette (mirrors the WritingStepTabs stepper),
-  // instead of the old DaisyUI table-in-a-card.
+  // badges and a dark neutral palette (mirrors the shell ribbon steps),
+  // instead of the old SneakyUI table-in-a-card.
   import { api } from '../lib/api.js';
   import { progress, taskRunning, addToast } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
@@ -57,7 +57,7 @@
   // covers in-place num changes.
   $: if (chapterNum) load();
 
-  function addScene() {
+  export function addScene() {
     if (!plan) plan = { scenes: [], target_words: 0, approved: false };
     if (!plan.scenes) plan.scenes = [];
     const n = plan.scenes.length;
@@ -95,7 +95,7 @@
   // so the UI can render the delta as a green/red chip (Revolut-style).
   function splitVariation(v) {
     const raw = (v || '').trim();
-    const m = raw.match(/^([+-−]\s?[\w]+(?:\s?(?:hrs?|h|pts?|%))?)\b\s*(.*)$/i);
+    const m = raw.match(/^([+\-−]\s?[\w]+(?:\s?(?:hrs?|h|pts?|%))?)\b\s*(.*)$/i);
     if (!m) return { delta: '', rest: raw, sign: 0 };
     const delta = m[1].replace(/\s+/g, '');
     const sign = /^[+]/.test(delta) ? 1 : -1;
@@ -179,17 +179,17 @@
   }
 </script>
 
-<div id="CardSection_ScenePlanInline" class="rounded-xl bg-white shadow-subtle p-8">
-  <!-- HEADER: big clear title + status pill + automation switch -->
-  <div class="flex items-center gap-3 flex-wrap px-5 pt-5 pb-3 border-b border-neutral-100">
+<div id="CardSection_ScenePlanInline" class="rounded-xl bg-white shadow-subtle p-10">
+  <!-- HEADER: title + status pill + automation switch -->
+  <div class="flex items-center gap-3 flex-wrap px-0 pt-0 pb-3">
     <h3 class="text-lg font-semibold text-neutral-900 flex-1 leading-tight">
-      {$t('writing.scenePlan.title', { num: chapterNum })}
+      {$t('writing.scenePlan.title')}
     </h3>
     {#if plan && (plan.scenes || []).length}
       {#if plan.approved}
-        <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">✓ {$t('writing.scenePlan.approvedBadge')}</span>
+        <span class="inline-flex items-center gap-1 rounded-full tint-green px-2.5 py-0.5 text-[11px] font-medium">✓ {$t('writing.scenePlan.approvedBadge')}</span>
       {:else}
-        <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-[11px] font-medium text-amber-700">• {$t('writing.scenePlan.needsApprovalBadge')}</span>
+        <span class="inline-flex items-center gap-1 rounded-full tint-amber px-2.5 py-0.5 text-[11px] font-medium">{$t('writing.scenePlan.needsApprovalBadge')}</span>
       {/if}
     {/if}
     <label class="flex items-center gap-2 cursor-pointer select-none" title={$t('writing.scenePlan.autoTip')}>
@@ -199,10 +199,10 @@
   </div>
 
   {#if loading}
-    <div class="px-5 py-8 flex justify-center"><span class="loading loading-dots loading-md text-neutral-400"></span></div>
+    <div class="px-0 py-8 flex justify-center"><span class="loading loading-dots loading-md text-neutral-400"></span></div>
   {:else if !plan || !(plan.scenes || []).length}
     <!-- EMPTY STATE: generate the first beat sheet -->
-    <div class="px-5 py-6">
+    <div class="px-0 py-6">
       <p class="text-sm text-neutral-600 mb-4">{$t('writing.scenePlan.empty')}</p>
       <div class="flex gap-2 items-end">
         <input class="input input-sm w-full rounded-lg border-neutral-200 bg-neutral-50 focus:bg-white" bind:value={feedback} placeholder={$t('writing.scenePlan.regenPlaceholder')} disabled={$taskRunning || saving} />
@@ -211,16 +211,16 @@
     </div>
   {:else}
     <!-- BUDGET STRIP: target vs sum, delta pill -->
-    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 pt-3 text-xs text-neutral-500">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-0 pt-3 mb-8 text-xs text-neutral-500">
       <span>{$t('writing.scenePlan.target', { n: plan.target_words })}</span>
       <span>{$t('writing.scenePlan.budgetTotal', { n: totalBudget })}</span>
       {#if budgetDelta !== 0}
-        <span class="rounded-full px-2 py-0.5 font-mono text-[11px] {budgetDelta > 0 ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}">{budgetDelta > 0 ? '+' : ''}{budgetDelta}</span>
+        <span class="rounded-full px-2 py-0.5 font-mono text-[11px] {budgetDelta > 0 ? 'tint-amber' : 'tint-blue'}">{budgetDelta > 0 ? '+' : ''}{budgetDelta}</span>
       {/if}
     </div>
 
     <!-- SCENE ROWS: Notion-style borderless rows revealed on hover -->
-    <div class="px-2 py-2 space-y-5">
+    <div class="px-0 py-2 space-y-5">
       {#each plan.scenes as s, i (i)}
         {@const role = plan.scenes.length === 1 ? 'both' : (i === 0 ? 'hook' : (i === plan.scenes.length - 1 ? 'cliff' : 'mid'))}
         <div class="spe-row group rounded-lg px-3 py-2.5 transition-colors">
@@ -232,9 +232,9 @@
               bind:value={s.title} on:input={markDirty} disabled={$taskRunning}
               placeholder={$t('writing.scenePlan.colTitle')} />
             {#if role === 'hook' || role === 'both'}
-              <span class="hidden sm:inline-flex shrink-0 items-center rounded-full bg-violet-50 border border-violet-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">Hook</span>
+              <span class="hidden sm:inline-flex shrink-0 items-center rounded-full tint-violet px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">Hook</span>
             {:else if role === 'cliff'}
-              <span class="hidden sm:inline-flex shrink-0 items-center rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">Cliffhanger</span>
+              <span class="hidden sm:inline-flex shrink-0 items-center rounded-full tint-coral px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">Cliffhanger</span>
             {/if}
             <input
               class="hidden sm:block spe-field w-28 shrink-0 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-700 focus:outline-none focus:border-neutral-400 focus:bg-white"
@@ -254,7 +254,7 @@
           </div>
 
           <!-- line 2: description (what happens) — always visible, grows.
-               Uses the daisyUI .textarea class so it inherits the global
+               Uses the SneakyUI .textarea class so it inherits the global
                `field-sizing: content` auto-grow rule (same as novel
                parameters). Width is computed with calc() so ml-8 + px-2
                never overflow the padded parent container. -->
@@ -267,7 +267,7 @@
           <div class="mt-1 ml-8 mr-2 flex flex-wrap items-center gap-1.5">
             <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 shrink-0">{$t('writing.scenePlan.colVariation')}</span>
             {#if splitVariation(s.variation).delta}
-              <span class="rounded-full px-2 py-0.5 font-mono text-[11px] font-semibold {splitVariation(s.variation).sign >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}">{splitVariation(s.variation).delta}</span>
+              <span class="rounded-full px-2 py-0.5 font-mono text-[11px] font-semibold {splitVariation(s.variation).sign >= 0 ? 'tint-green' : 'tint-red'}">{splitVariation(s.variation).delta}</span>
             {/if}
             <input
               class="spe-field flex-1 min-w-32 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-700 placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 focus:bg-white"
@@ -286,7 +286,7 @@
     </div>
 
     <!-- FOOTER: regeneration guidance + save / approve actions -->
-    <div class="px-5 py-4 border-t border-neutral-100 flex gap-2 flex-wrap items-center">
+    <div class="px-0 py-4 border-t border-neutral-100 flex gap-2 flex-wrap items-center">
       <input class="input input-sm rounded-lg border-neutral-200 bg-neutral-50 focus:bg-white flex-1 min-w-40" bind:value={feedback} placeholder={$t('writing.scenePlan.regenPlaceholder')} disabled={$taskRunning || saving} />
       <button class="btn btn-outline btn-sm rounded-lg normal-case" on:click={regenerate} disabled={$taskRunning || saving} title={$t('writing.scenePlan.regenTip')}>{$t('writing.scenePlan.regen')}</button>
       <div class="divider divider-horizontal mx-0"></div>

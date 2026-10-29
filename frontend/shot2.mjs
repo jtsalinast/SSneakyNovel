@@ -12,7 +12,7 @@ const srv = createServer((req,res)=>{
 });
 await new Promise(r=>srv.listen(4179,r));
 const browser = await chromium.launch();
-for (const theme of ['xianii-light','xianii']) {
+for (const theme of ['sneakystyle-light','sneakystyle']) {
   const page = await browser.newPage({ viewport: { width: 1500, height: 1200 } });
   await page.route('**/api/**', async (route) => {
     const url = route.request().url();

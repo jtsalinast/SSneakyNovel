@@ -59,10 +59,14 @@ func (r *OutlineAnalysisReport) Pillars() []PillarAssessment { return r.PillarSc
 func (r *OutlineAnalysisReport) OpenSuggestions() int        { return countOpenSuggestions(r.Suggestions) }
 
 func (r *ScenePlanAnalysisReport) Pillars() []PillarAssessment { return r.PillarScores }
-func (r *ScenePlanAnalysisReport) OpenSuggestions() int        { return countOpenSceneSuggestions(r.Suggestions) }
+func (r *ScenePlanAnalysisReport) OpenSuggestions() int {
+	return countOpenSceneSuggestions(r.Suggestions)
+}
 
 func (r *ChapterAnalysisReport) Pillars() []PillarAssessment { return r.PillarScores }
-func (r *ChapterAnalysisReport) OpenSuggestions() int        { return countOpenDraftedSuggestions(r.Suggestions) }
+func (r *ChapterAnalysisReport) OpenSuggestions() int {
+	return countOpenDraftedSuggestions(r.Suggestions)
+}
 
 func (r *ActAnalysisReport) Pillars() []PillarAssessment { return r.PillarScores }
 func (r *ActAnalysisReport) OpenSuggestions() int        { return countOpenDraftedSuggestions(r.Suggestions) }

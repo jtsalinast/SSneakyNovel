@@ -113,8 +113,8 @@
   // the input itself (`text-neutral-800`) — do NOT add
   // a scoped `.ss-value`/`.ss-input { color: ... }` rule: scoped styles win
   // over utilities and hardcoding `var(--color-base-content)` made the text
-  // near-white under the app's former dark theme (xianii). The app now ships
-  // the light theme (`xianii-light`).
+  // near-white under the app's former dark theme. The app now ships
+  // the light theme (`sneakystyle-light`).
   $: showValueAsText = !searchQuery.trim();
 
   // —— Value <-> display plumbing (single choice) ————————————————
@@ -451,7 +451,7 @@
   /* The selected value must read exactly like SmartCombobox's chips: the
      chip text uses `text-neutral-800` (see the option
      rows too). The hardcoded fallback below was wrong — a light-mode fallback
-     of #171717 combined with the old DARK default theme (`data-theme="xianii"`,
+     of #171717 combined with the old DARK default theme (`data-theme="sneakystyle"`,
      --color-base-content near-WHITE oklch(96%)) made the input inherit that
      white token and the selection looked white instead of black.
      No color override here: let the Tailwind classes on `.ss-input` decide,

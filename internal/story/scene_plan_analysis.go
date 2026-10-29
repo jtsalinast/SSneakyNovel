@@ -37,26 +37,29 @@ import (
 // recommendation carrying the merged content). The author can retarget the
 // survivor from the UI before applying.
 type ScenePlanRecommendation struct {
-	ChapterNum      int    `json:"chapter_num"`
-	SceneID         int    `json:"scene_id"`
-	Present         bool   `json:"present"`
-	NewTitle        string `json:"new_title,omitempty"`
-	NewDescription  string `json:"new_description,omitempty"`
-	NewPoV          string `json:"new_pov,omitempty"`
-	NewWordsBudget  int    `json:"new_words_budget,omitempty"`
-	Proposed        bool   `json:"proposed,omitempty"`
-	MergeIntoSceneID int   `json:"merge_into_scene_id,omitempty"`
+	ChapterNum       int    `json:"chapter_num"`
+	SceneID          int    `json:"scene_id"`
+	Present          bool   `json:"present"`
+	NewTitle         string `json:"new_title,omitempty"`
+	NewDescription   string `json:"new_description,omitempty"`
+	NewPoV           string `json:"new_pov,omitempty"`
+	NewWordsBudget   int    `json:"new_words_budget,omitempty"`
+	Proposed         bool   `json:"proposed,omitempty"`
+	MergeIntoSceneID int    `json:"merge_into_scene_id,omitempty"`
 }
 
 // SceneSuggestion is one point of the editor's feedback on the scene plans:
 // what works / what must change and, once proposed, exactly which scenes to
 // replace. Categories mirror the craft axes a beat sheet can be judged on.
 type SceneSuggestion struct {
-	ID                string                    `json:"id"`
-	Category          string                    `json:"category"` // hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other
-	Title             string                    `json:"title"`
-	Detail            string                    `json:"detail"`
-	Action            string                    `json:"action"`
+	ID       string `json:"id"`
+	Category string `json:"category"` // hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Action   string `json:"action"`
+	// Evidence is the exact planned beat / scene line that proves this point,
+	// required by the multi-call editorial pass.
+	Evidence          string                    `json:"evidence,omitempty"`
 	Status            string                    `json:"status"` // pending | applied
 	AppliedAt         string                    `json:"applied_at,omitempty"`
 	AppliesToChapters []int                     `json:"applies_to_chapters,omitempty"`
@@ -274,6 +277,13 @@ Rules:
 		pillarContractPromptBlockEN(structureName), structureName, lang, lang, scopeNote)
 }
 
+// buildScenePlanEditorPromptForPillar returns the scene-plan prompt scoped for
+// one call of the editorial sequence: pillarKey == "" is the first-impression
+// call, any pillar key is that pillar's single-pillar pass.
+func buildScenePlanEditorPromptForPillar(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string, onlyCh int, pillarKey string) string {
+	return buildScenePlanEditorPromptFor(cfg, state, settings, lang, onlyCh) + editorialScopeOverride(lang, pillarKey)
+}
+
 // scenePlanScopeNote is appended to the prompt rules when the pass is
 // restricted to a single chapter: it forbids naming other chapters and keeps
 // every point attributable to the one under review.
@@ -376,28 +386,22 @@ func analyzeScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 			settingsForPrompt = selected
 		}
 	}
-	prompt := buildScenePlanEditorPromptFor(cfg, state, settingsForPrompt, lang, onlyCh)
+	prompt := buildScenePlanEditorPromptForPillar(cfg, state, settingsForPrompt, lang, onlyCh, "")
 	system := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing SCENE PLANS (per-chapter beat sheets with word budgets), NOT drafted prose — never critique sentences, dialogue or writing style. Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.sceneplan_analyze_running")
 	var result ScenePlanAnalysisReport
-	for attempt := 0; attempt < 2; attempt++ {
-		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, prompt, logger)
-		if raw == "" {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("API call failed or was canceled")
+	raw, err := editorialSequence(ctx, apiCfg, logger, system, lang, func(pillarKey string) string {
+		if pillarKey == "" {
+			return prompt
 		}
-		j := llm.ExtractJSON(raw)
-		result = ScenePlanAnalysisReport{}
-		if j != "" && json.Unmarshal([]byte(j), &result) == nil && (result.Summary != "" || len(result.Suggestions) > 0) {
-			break
-		}
-		if attempt == 1 {
-			return fmt.Errorf("model response is not valid scene-plan-analysis JSON")
-		}
-		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
+		return buildScenePlanEditorPromptForPillar(cfg, state, settingsForPrompt, lang, onlyCh, pillarKey)
+	})
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal([]byte(raw), &result) != nil || (result.Summary == "" && len(result.Suggestions) == 0) {
+		return fmt.Errorf("model response is not valid scene-plan-analysis JSON")
 	}
 
 	// Sanitize: the initial pass is advice-only; bundled recommendations are
@@ -415,6 +419,7 @@ func analyzeScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 	for i, s := range result.Suggestions {
 		s.Title = strings.TrimSpace(s.Title)
 		s.Detail = strings.TrimSpace(s.Detail)
+		s.Evidence = strings.TrimSpace(s.Evidence)
 		s.Action = strings.TrimSpace(s.Action)
 		if !validCategory[s.Category] {
 			s.Category = "other"

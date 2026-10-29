@@ -217,6 +217,16 @@ export function connectSSE() {
     return translate(`task.${task}`) || task;
   }
 
+  function clockTime() {
+    try { return new Date().toLocaleTimeString('en-GB', { hour12: false }); } catch (_) { return ''; }
+  }
+
+  function toolLogLabel(name) {
+    const key = 'chat.toolNames.' + name;
+    const label = translate(key);
+    return label === key ? name : label;
+  }
+
   eventSource.addEventListener('task_start', e => {
     const d = JSON.parse(e.data);
     taskEventVersion++;
@@ -229,7 +239,9 @@ export function connectSSE() {
     clearChatBuf();
     taskTokenUsage.set(null);
     currentTaskName.set(taskLabel(d.task));
-    logEntries.set([]);
+    // Keep agent tool lines so the Log panel also shows what the agent did
+    // before handing work to the background task.
+    logEntries.update(entries => (entries || []).filter(entry => entry.source === 'agent'));
     lastFailedTask.set(null);
     // A new task started while a sendMessageToChat() caller (Generate button)
     // is waiting: the chat turn itself is over — the agent invoked its tool and
@@ -383,6 +395,7 @@ export function connectSSE() {
       const toolCalls = [...(s.pending_tool_calls || []), { name: d.tool_name, status: 'running', args: d.args }];
       return { ...s, pending_tool_calls: toolCalls };
     });
+    addLog({ level: 'info', msg: translate('log.tool.call', { tool: toolLogLabel(d.tool_name) }), time: clockTime(), source: 'agent' });
   });
 
   eventSource.addEventListener('tool_call_end', e => {
@@ -397,6 +410,7 @@ export function connectSSE() {
       );
       return { ...s, pending_tool_calls: toolCalls };
     });
+    addLog({ level: 'success', msg: translate('log.tool.done', { tool: toolLogLabel(d.tool_name) }), time: clockTime(), source: 'agent' });
     api('GET', '/api/config').then(c => config.set(c)).catch(() => {});
     api('GET', '/api/settings').then(s => settings.set(s)).catch(() => {});
     api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});

@@ -50,7 +50,7 @@ func calcSceneLengthRange(budget int) (minLen, maxLen int) {
 	if minLen < 1 {
 		minLen = 1
 	}
-	maxLen = (budget*(100+sceneBudgetTolerancePercent)) / 100
+	maxLen = (budget * (100 + sceneBudgetTolerancePercent)) / 100
 	if maxLen < minLen {
 		maxLen = minLen
 	}

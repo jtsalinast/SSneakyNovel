@@ -18,7 +18,7 @@
   function statusClass(s){return s==='passed'?'badge-success':s==='failed'?'badge-error':s==='needs_optimization'?'badge-warning':s==='validating'?'badge-info':'badge-ghost'}
 </script>
 
-<div class="space-y-4">
+<div class="space-y-4 page-width">
  <div class="card bg-base-200"><div class="card-body p-4">
   <h2 class="card-title text-base">{$t('skills.install.title')}</h2><div class="tabs tabs-box w-fit">{#each ['paste','markdown','zip','folder'] as item}<button class:tab-active={mode===item} class="tab" on:click={()=>mode=item}>{$t(`skills.install.${item}`)}</button>{/each}</div>
   {#if mode==='paste'}<textarea class="textarea textarea-bordered w-full font-mono text-xs" bind:value={markdown} disabled={$taskRunning} placeholder="---&#10;id: my-skill&#10;name: My Skill&#10;category: writing&#10;applies_to: [chapter.generate]&#10;---"></textarea>

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	section := r.PathValue("section")
 	switch section {
-	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "pre_planning":
+	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "enhance", "pre_planning":
 	default:
 		// Per-category worldview sections (wv_geography, wv_faction, ...) are
 		// also valid — see agent.WorldviewCategoryBySection.
@@ -64,6 +65,9 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		// EnhanceText switches the differentiating-idea generator from CREATE to
 		// ENHANCE mode (rewrite this draft instead of inventing a new idea).
 		EnhanceText string `json:"enhance_text"`
+		// EnhanceField is the StoryConfig key rewritten by the "enhance" section
+		// (the wand button on every Novel parameters field).
+		EnhanceField string `json:"enhance_field"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.endTask()
@@ -84,6 +88,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 		WorldviewCategory: body.WorldviewCategory,
 		CreativityLevel:   body.Creativity,
 		EnhanceText:       body.EnhanceText,
+		EnhanceField:      body.EnhanceField,
 		Ctx:               h.taskCtx, // snapshot: the caller holds the task lock
 	}
 	if err := h.validateSectionGen(req); err != nil {
@@ -171,7 +176,7 @@ func (h *Handlers) normalizeSectionGen(req SectionGenRequest) (config.StoryConfi
 	// that *produce* a story idea must never require one: they are seeded from
 	// the other novel parameters already entered. Everything else needs the
 	// story idea as its generation seed.
-	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "reader_expectation" && req.Section != "differentiating_idea" && req.Section != "pre_planning" {
+	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "reader_expectation" && req.Section != "differentiating_idea" && req.Section != "enhance" && req.Section != "pre_planning" {
 		return storyCfg, errors.New("story_idea_required")
 	}
 	return storyCfg, nil
@@ -340,6 +345,8 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 			err = h.generateReaderExpectation(ctx, &storyCfg)
 		case "differentiating_idea":
 			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
+		case "enhance":
+			err = h.enhanceStoryField(ctx, &storyCfg, req.EnhanceField, req.EnhanceText)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -413,6 +420,8 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 			err = h.generateReaderExpectation(ctx, &storyCfg)
 		case "differentiating_idea":
 			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
+		case "enhance":
+			err = h.enhanceStoryField(ctx, &storyCfg, req.EnhanceField, req.EnhanceText)
 		default:
 			err = fmt.Errorf("unknown_section: %s", section)
 		}
@@ -488,6 +497,9 @@ func sectionLabel(section, lang string) string {
 	case "differentiating_idea":
 
 		return "differentiating idea"
+	case "enhance":
+
+		return "enhanced field"
 	case "pre_planning":
 
 		return "pre-planning (book plan)"
@@ -521,7 +533,22 @@ func forcedSectionEnhance(call *agent.ToolCall) string {
 	if call != nil {
 		_ = json.Unmarshal(call.Arguments, &params)
 	}
+	if decoded, err := url.QueryUnescape(params.Enhance); err == nil {
+		return decoded
+	}
 	return params.Enhance
+}
+
+// forcedSectionEnhanceField extracts the target StoryConfig key carried by an
+// enhance fast-path tag ([generate-section:enhance;field=theme]).
+func forcedSectionEnhanceField(call *agent.ToolCall) string {
+	var params struct {
+		Field string `json:"field"`
+	}
+	if call != nil {
+		_ = json.Unmarshal(call.Arguments, &params)
+	}
+	return params.Field
 }
 
 // storyParamsContext assembles the full novel parameters (including the story
@@ -659,7 +686,7 @@ func (h *Handlers) generateMotif(ctx context.Context, sc *config.StoryConfig) er
 func (h *Handlers) generateStoryIdeaFromParams(ctx context.Context, sc *config.StoryConfig) error {
 	var b strings.Builder
 	b.WriteString("You are a novel planning assistant. From the work parameters below, write a coherent story idea of 120-220 words in English (cover the world, the protagonist's situation, the central conflict and the story's direction), plus the narrative forces in tension, an elevator pitch and a lighthouse sentence; rely only on these parameters and never contradict them. Skip any parameter that is empty.\n\n")
-		b.WriteString("- \"forces_in_tension\": the driving forces FOR the work's thesis (allies, momentum, values propelling it) and the opposing forces AGAINST it (antagonists, systemic resistance, inner contradictions), stated as 2 short paired groups separated by \" || \";\n")
+	b.WriteString("- \"forces_in_tension\": the driving forces FOR the work's thesis (allies, momentum, values propelling it) and the opposing forces AGAINST it (antagonists, systemic resistance, inner contradictions), stated as 2 short paired groups separated by \" || \";\n")
 	b.WriteString("- \"elevator_pitch\": a 2-4 sentence high-concept hook that sells this book to a stranger;\n")
 	b.WriteString("- \"lighthouse_sentence\": ONE immutable guiding sentence — the story's fixed point / core question every chapter must navigate by;\n\n")
 
@@ -874,22 +901,67 @@ func buildDifferentiatingPrompt(sc *config.StoryConfig, lang string, level int) 
 	}
 	label := agent.CreativityLevelLabel(level)
 	prompt := storyParamsContext(sc, lang)
-	prompt += fmt.Sprintf("\nBased on the novel parameters above, write ONE \"differentiating idea\" for this book: the unique selling angle that sets it apart from every other title in its genre/subgenre for its target audience. Creativity level: %d (%s). ", level, label)
-	switch level {
-	case 1:
-		prompt += "Pragmatic: stay inside proven market formulas; differentiate only through a solid, familiar execution twist readers already trust.\n"
-	case 2:
-		prompt += "Conservative: a well-known trope deliberately inverted or recombined with one adjacent-genre element; still instantly legible on the shelf.\n"
-	case 4:
-		prompt += "Bold: a high-concept mashup or unexpected POV/structure choice that challenges genre norms while keeping the core promise intact.\n"
-	case 5:
-		prompt += "Disruptive: break the genre's rules on purpose — a form, premise or narrative contract that could not exist in a conventional book of this shelf, yet still delivers the genre's emotional payoff.\n"
-	default:
-		prompt += "Balanced: one clear, marketable twist on the genre conventions that feels fresh but never alienates the target reader.\n"
-	}
-	prompt += "Write 2-4 punchy sentences stating what makes THIS book the only one of its kind; name the conventions it honors and the one it breaks. Do not summarize the plot."
+	prompt += fmt.Sprintf("\nBased on the novel parameters above, write ONE \"differentiating idea\" for this book: the unique selling angle that sets it apart from every other title in its genre/subgenre for its target audience. Creativity level: %d (%s) — 1 stays on the safest shelf formula, 5 deliberately breaks the genre's rules.\n", level, label)
+	prompt += creativityIdeaPlaybook(level)
+	prompt += "The neighbouring levels must not answer with the same angle reworded: a level 1 and a level 5 answer for this book have to be obviously different ideas, not one idea with stronger adjectives.\n"
+	prompt += "Answer with ONE single sentence (maximum 35 words) that states the differentiator itself. No plot summary, no explanation, no second sentence, no quotes."
 	prompt += jsonRule(lang, `{"differentiating_idea": "..."}`)
 	return prompt
+}
+
+// creativityIdeaPlaybook is the per-level instruction block for CREATING a
+// differentiating idea. Temperatures alone (agent.CreativityTemperature) were
+// too weak a lever: every level needs its own moves, its own forbidden moves
+// and its own shelf test so the slider changes the kind of answer, not its
+// adjectives. Unknown levels fall back to Balanced.
+func creativityIdeaPlaybook(level int) string {
+	// Shared guard: a generic answer usually means the model reached for the
+	// shelf's default premise. From Balanced upwards it must name and ban
+	// those defaults first; from Bold upwards it must also reject anything
+	// that could headline a "books like X" listicle. Low levels keep the
+	// familiar premise on purpose.
+	guard := "Build the idea around one concrete MECHANISM (a job, rule, transaction, ritual or constraint), never around an adjective.\n"
+	if level >= 3 {
+		guard = "Novelty procedure (do this before writing, silently): name the three most predictable premises of this genre/subgenre and treat all three as FORBIDDEN. " + guard
+	}
+	if level >= 4 {
+		guard += "If your first idea could headline a \"books like X\" listicle unchanged, discard it and start over before answering.\n"
+	}
+	block := ""
+	switch level {
+	case 1:
+		block = "Level 1 — Pragmatic playbook (safest end of the slider):\n" +
+			"- Change ONLY the execution: voice, one sharper world detail, or a structural choice inside the genre's proven shape.\n" +
+			"- Keep every obligatory convention, the target reader's expectations and the genre's emotional promise. Name the shelf it competes on.\n" +
+			"- Forbidden: inverting a trope, mixing genres, \"never seen before\" premises.\n" +
+			"- Shelf test: it could sit on the back cover of a current bestseller of this shelf without anyone blinking.\n"
+	case 2:
+		block = "Level 2 — Conservative playbook:\n" +
+			"- Recombine two well-known tropes of the shelf, or invert exactly ONE convention.\n" +
+			"- Keep every other element familiar, so the premise still fits one familiar sentence.\n" +
+			"- Forbidden: changing two conventions at once, experimental structure or narration.\n" +
+			"- Shelf test: a reader of the genre instantly knows what they are buying.\n"
+	case 4:
+		block = "Level 4 — Bold playbook:\n" +
+			"- Take the structural engine of ANOTHER genre (heist, courtroom, sports underdog, workplace comedy, survival, political campaign) or of a field outside fiction (freight logistics, insurance, municipal permits, deep-sea salvage), and make it the engine of this premise. Name the borrowed engine in the sentence.\n" +
+			"- Collide that engine with this shelf's emotional promise, and reframe POV/structure only if the collision demands it.\n" +
+			"- Forbidden: a decorative mashup (two genres glued, not fused), a borrowed engine you could swap out without the plot changing, or losing the target reader.\n" +
+			"- Shelf test: one surprising sentence sells it, and that sentence is true.\n"
+	case 5:
+		block = "Level 5 — Disruptive playbook:\n" +
+			"- Transplant the mechanism of a field nobody in this genre has used (actuarial risk, water-rights allocation, competitive baking, customs inspection, forensic accounting, liturgical calendar) and let it generate the conflict; the premise must collapse without it.\n" +
+			"- Break ONE named rule of this shelf on purpose (form, narrative contract, protagonist type or premise) and state which rule it breaks.\n" +
+			"- Keep the genre's emotional payoff: the break must cost the reader nothing they came for.\n" +
+			"- Forbidden: gratuitous weirdness, obscurity as a substitute for an idea, breaking the promise itself, or any transplant that reads as set dressing.\n" +
+			"- Shelf test: it could not exist as-is in a conventional title of this genre, yet it still sells on emotion.\n"
+	default:
+		block = "Level 3 — Balanced playbook:\n" +
+			"- Apply one clear twist to the genre's central convention, borrowed from a neighbouring domain rather than from inside the genre.\n" +
+			"- Add ONE concrete unexpected detail (profession, setting, relationship or stake) that stops it reading generic.\n" +
+			"- Forbidden: stacking twists, vague \"everything is different\" premises.\n" +
+			"- Shelf test: fresh enough to pick up, familiar enough to trust.\n"
+	}
+	return guard + block
 }
 
 // parseDifferentiatingIdea extracts the idea text out of a raw LLM answer
@@ -964,7 +1036,7 @@ func buildEnhancePrompt(sc *config.StoryConfig, lang string, text string) string
 	prompt := storyParamsContext(sc, lang)
 	prompt += "\nThe author drafted this \"differentiating idea\" (the book's unique selling angle):\n---\n"
 	prompt += text
-	prompt += "\n---\nRewrite it so it is sharper, more concrete and more compelling on the genre shelf, while keeping every idea the author already expressed (do NOT invent new plot elements, do not summarize the story, do not change language). Keep 2-4 punchy sentences."
+	prompt += "\n---\nRewrite it so it is sharper, more concrete and more compelling on the genre shelf, while keeping every idea the author already expressed (do NOT invent new plot elements, do not summarize the story, do not change language). Keep it ONE single sentence of at most 35 words."
 	prompt += jsonRule(lang, `{"differentiating_idea": "..."}`)
 	return prompt
 }
@@ -1010,6 +1082,242 @@ func (h *Handlers) PostDifferentiatingIdeaEnhance(w http.ResponseWriter, r *http
 	json.NewEncoder(w).Encode(map[string]any{
 		"differentiating_idea": enhanced,
 	})
+}
+
+// —— generic "Enhance" for free-text fields outside Novel parameters ——
+
+// buildTextEnhancePrompt rewrites one draft from any form (the Lore modals):
+// same language, same format, every idea kept. hint names the field so the
+// model knows what it is polishing.
+func buildTextEnhancePrompt(lang, hint, text string) string {
+	prompt := "Rewrite the following "
+	if hint != "" {
+		prompt += hint + " "
+	}
+	prompt += "draft so it is sharper, more concrete and more compelling, keeping every idea the author already expressed (do NOT invent new plot elements, do not change language or format, keep roughly the same length).\n---\n"
+	prompt += text
+	prompt += "\n---\n"
+	prompt += jsonRule(lang, `{"text": "..."}`)
+	return prompt
+}
+
+// parseEnhancedText extracts the rewrite (JSON object preferred, plain text
+// fallback, same as the other generators).
+func parseEnhancedText(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if extracted := llm.ExtractJSON(content); extracted != "" {
+		var out struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(extracted), &out); err == nil && strings.TrimSpace(out.Text) != "" {
+			return strings.TrimSpace(out.Text)
+		}
+	}
+	return content
+}
+
+// PostEnhanceText is the wand target for free-text fields that live outside
+// StoryConfig (Lore modals): it returns the rewrite and persists nothing, so
+// the caller keeps it in its own unsaved form state.
+func (h *Handlers) PostEnhanceText(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+		Hint string `json:"hint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "empty_text", "")
+		return
+	}
+	hint := strings.TrimSpace(body.Hint)
+	if runes := []rune(hint); len(runes) > 60 {
+		hint = string(runes[:60])
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	content := llm.CallAPIWithRetryLog(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), buildTextEnhancePrompt(h.cfg.Language, hint, text), h.logger)
+	out := parseEnhancedText(content)
+	if out == "" {
+		h.writeErrorReq(w, r, http.StatusBadGateway, "empty_generation", "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"text": out})
+}
+
+// —— generic "Enhance" for every Novel parameters field ——
+
+// storyEnhanceFields is the whitelist of StoryConfig keys the wand button may
+// rewrite, mapped to the human-readable name used in the prompt. Keeping the
+// whitelist explicit prevents the chat tag from writing arbitrary fields.
+var storyEnhanceFields = map[string]string{
+	"theme":                 "theme",
+	"motif":                 "literary motif",
+	"philosophical_dilemma": "philosophical/operational dilemma",
+	"tone":                  "tone",
+	"specific_settings":     "specific settings (one per line)",
+	"inspirational_pieces":  "inspirational pieces",
+	"audience_profile":      "ideal reader profile",
+	"reader_expectation":    "target reader's expectation",
+	"differentiating_idea":  "differentiating idea",
+	"story_idea":            "story idea",
+	"forces_in_tension":     "narrative forces in tension",
+	"elevator_pitch":        "elevator pitch",
+	"lighthouse_sentence":   "lighthouse sentence",
+	"writing_style":         "writing style",
+	"writing_pov":           "narrative point of view",
+}
+
+func getStoryField(sc *config.StoryConfig, field string) string {
+	switch field {
+	case "theme":
+		return sc.Theme
+	case "motif":
+		return sc.Motif
+	case "philosophical_dilemma":
+		return sc.PhilosophicalDilemma
+	case "tone":
+		return sc.Tone
+	case "specific_settings":
+		return sc.SpecificSettings
+	case "inspirational_pieces":
+		return sc.InspirationalPieces
+	case "audience_profile":
+		return sc.AudienceProfile
+	case "reader_expectation":
+		return sc.ReaderExpectation
+	case "differentiating_idea":
+		return sc.DifferentiatingIdea
+	case "story_idea":
+		return sc.StoryIdea
+	case "forces_in_tension":
+		return sc.ForcesInTension
+	case "elevator_pitch":
+		return sc.ElevatorPitch
+	case "lighthouse_sentence":
+		return sc.LighthouseSentence
+	case "writing_style":
+		return sc.WritingStyle
+	case "writing_pov":
+		return sc.WritingPOV
+	}
+	return ""
+}
+
+func setStoryField(sc *config.StoryConfig, field, value string) bool {
+	switch field {
+	case "theme":
+		sc.Theme = value
+	case "motif":
+		sc.Motif = value
+	case "philosophical_dilemma":
+		sc.PhilosophicalDilemma = value
+	case "tone":
+		sc.Tone = value
+	case "specific_settings":
+		sc.SpecificSettings = value
+	case "inspirational_pieces":
+		sc.InspirationalPieces = value
+	case "audience_profile":
+		sc.AudienceProfile = value
+	case "reader_expectation":
+		sc.ReaderExpectation = value
+	case "differentiating_idea":
+		sc.DifferentiatingIdea = value
+	case "story_idea":
+		sc.StoryIdea = value
+	case "forces_in_tension":
+		sc.ForcesInTension = value
+	case "elevator_pitch":
+		sc.ElevatorPitch = value
+	case "lighthouse_sentence":
+		sc.LighthouseSentence = value
+	case "writing_style":
+		sc.WritingStyle = value
+	case "writing_pov":
+		sc.WritingPOV = value
+	default:
+		return false
+	}
+	return true
+}
+
+func buildFieldEnhancePrompt(sc *config.StoryConfig, lang, field, text string) string {
+	prompt := storyParamsContext(sc, lang)
+	prompt += "\nThe author drafted this " + storyEnhanceFields[field] + ":\n---\n"
+	prompt += text
+	prompt += "\n---\nRewrite it so it is sharper, more concrete and more compelling, while keeping every idea the author already expressed (do NOT invent new plot elements, do not change language or format, keep roughly the same length)."
+	prompt += jsonRule(lang, fmt.Sprintf(`{"%s": "..."}`, field))
+	return prompt
+}
+
+// parseStoryFieldText extracts the rewritten field out of a raw LLM answer
+// (JSON object preferred, plain text fallback).
+func parseStoryFieldText(content, field string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if extracted := llm.ExtractJSON(content); extracted != "" {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(extracted), &raw); err == nil {
+			var out string
+			if v, ok := raw[field]; ok && json.Unmarshal(v, &out) == nil && strings.TrimSpace(out) != "" {
+				return strings.TrimSpace(out)
+			}
+		}
+	}
+	// Fallback: the model ignored the JSON rule — keep the plain text.
+	return content
+}
+
+// enhanceStoryField rewrites ONE novel-parameter field in place: it reads the
+// author's draft (the saved config value unless the chat tag carried one),
+// asks the LLM to sharpen it and persists only that field.
+func (h *Handlers) enhanceStoryField(ctx context.Context, sc *config.StoryConfig, field, text string) error {
+	field = strings.TrimSpace(field)
+	if _, ok := storyEnhanceFields[field]; !ok {
+		return fmt.Errorf("unknown_enhance_field: %s", field)
+	}
+	if strings.TrimSpace(text) == "" {
+		text = getStoryField(sc, field)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.New("empty_text")
+	}
+	content := llm.CallAPIWithRetryLog(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), buildFieldEnhancePrompt(sc, h.cfg.Language, field, text), h.logger)
+	enhanced := parseStoryFieldText(content, field)
+	if enhanced == "" {
+		return errEmptyGeneration
+	}
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	if !setStoryField(&newCfg.Story, field, enhanced) {
+		return fmt.Errorf("unknown_enhance_field: %s", field)
+	}
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
 }
 
 // generateDifferentiatingIdea writes the "differentiating idea": the single
@@ -1295,6 +1603,9 @@ func (h *Handlers) generateCharacters(ctx context.Context, sc *config.StoryConfi
 		}
 	}
 	prompt += "\nDesign 4-7 core characters (protagonist, antagonist, key supporting roles). For each provide name, age, appearance, personality, background, motivation, abilities, notes (may be empty)."
+	if sc.CharacterArcsEnabled {
+		prompt += " Also give each of them a want (what they consciously chase in the outer world), a need (the inner truth they must accept to grow), a wound/lie (the trauma or false belief that conditions their choices) and an agency/edge (the trait, intellect or skill that makes them uniquely capable)."
+	}
 
 	arcsOn := sc.CharacterArcsEnabled
 	genreKey := config.MatchGenreKey(sc.Type + " " + sc.Subgenre) // composite keys (e.g. scifi:steampunk) supported by presets
@@ -1334,7 +1645,7 @@ func (h *Handlers) generateCharacters(ctx context.Context, sc *config.StoryConfi
 	jsonShape := `{"characters":[{"name":"...","age":"...","appearance":"...","personality":"...","background":"...","motivation":"...","abilities":"...","notes":"..."}]}`
 	tail := `"notes":"..."`
 	if arcsOn {
-		tail += `,"goals":"...","flaws":"...","strengths":"...","arc":"..."`
+		tail += `,"goals":"...","flaws":"...","strengths":"...","arc":"...","want":"...","need":"...","wound":"...","agency":"..."`
 	}
 	for _, k := range extraKeys {
 		tail += `,"` + k + `":"..."`
@@ -1410,6 +1721,18 @@ func mergeCharacters(existing, generated []story.Character) []story.Character {
 			}
 			if c.Arc == "" {
 				c.Arc = g.Arc
+			}
+			if c.Want == "" {
+				c.Want = g.Want
+			}
+			if c.Need == "" {
+				c.Need = g.Need
+			}
+			if c.Wound == "" {
+				c.Wound = g.Wound
+			}
+			if c.Agency == "" {
+				c.Agency = g.Agency
 			}
 			if len(g.Extra) > 0 {
 				if c.Extra == nil {
@@ -1601,14 +1924,23 @@ func (h *Handlers) generateCharacterEntry(ctx context.Context, sc *config.StoryC
 	addField("motivation", "movemachine", target.Motivation)
 	addField("abilities", "canforce", target.Abilities)
 	addField("notes", "equipment", target.Notes)
+	addField("want", "want", target.Want)
+	addField("need", "need", target.Need)
+	addField("wound", "wound", target.Wound)
+	addField("agency", "agency", target.Agency)
 	prompt += fmt.Sprintf("\nComplete the character \"%s\". The author already filled these fields — keep them verbatim, never rewrite them:\n%s\n", target.Name, strings.Join(fieldLines, "\n"))
 	prompt += "Generate content ONLY for the empty fields (age/appearance/personality/background/motivation/abilities/notes, plus goals/flaws/strengths/arc when enabled), consistent with the story idea; return name unchanged."
 
 	if sc.CharacterArcsEnabled {
-		prompt += " Also fill goals, flaws, strengths and arc."
+		prompt += " Also fill goals, flaws, strengths and arc, plus the protagonist arc quartet: want (outer goal), need (inner truth), wound (trauma/false belief) and agency (what makes them capable)."
 
 	}
-	prompt += jsonRule(h.cfg.Language, `{"character":{"name":"...","age":"...","appearance":"...","personality":"...","background":"...","motivation":"...","abilities":"...","notes":"..."}}`)
+	shape := `{"character":{"name":"...","age":"...","appearance":"...","personality":"...","background":"...","motivation":"...","abilities":"...","notes":"..."`
+	if sc.CharacterArcsEnabled {
+		shape += `,"goals":"...","flaws":"...","strengths":"...","arc":"...","want":"...","need":"...","wound":"...","agency":"..."`
+	}
+	shape += "}}"
+	prompt += jsonRule(h.cfg.Language, shape)
 
 	var out struct {
 		Character story.Character `json:"character"`
@@ -1644,6 +1976,10 @@ func (h *Handlers) generateCharacterEntry(ctx context.Context, sc *config.StoryC
 			fillIfEmpty(&c.Flaws, g.Flaws)
 			fillIfEmpty(&c.Strengths, g.Strengths)
 			fillIfEmpty(&c.Arc, g.Arc)
+			fillIfEmpty(&c.Want, g.Want)
+			fillIfEmpty(&c.Need, g.Need)
+			fillIfEmpty(&c.Wound, g.Wound)
+			fillIfEmpty(&c.Agency, g.Agency)
 		}
 		next.Characters[i] = c
 		break

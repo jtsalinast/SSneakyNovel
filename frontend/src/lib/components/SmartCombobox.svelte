@@ -1,7 +1,7 @@
 <script>
   // SmartCombobox — advanced multi-select combobox (Revolut & Notion style),
   // adapted from the standalone HTML/Alpine prototype the user provided and
-  // reimplemented for this Svelte 4 + Tailwind 4 + DaisyUI 5 app.
+  // reimplemented for this Svelte 4 + Tailwind 4 + SneakyUI 5 app.
   //
   // Features kept from the prototype:
   //  - Chip-style multi-select with removable pills inside the control box.

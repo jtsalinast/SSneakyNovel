@@ -19,6 +19,14 @@ type Character struct {
 	Motivation  string `json:"motivation,omitempty"`
 	Abilities   string `json:"abilities,omitempty"`
 	Notes       string `json:"notes,omitempty"`
+	// Protagonist arc quartet (classic want / need / wound / agency model).
+	// Optional, author-editable; the generator fills them when character arcs
+	// are enabled. Kept separate from goals/flaws/strengths/arc because those
+	// are free-form, while these four have fixed dramatic roles.
+	Want   string `json:"want,omitempty"`   // conscious want: what they chase in the outer world
+	Need   string `json:"need,omitempty"`   // unconscious need: the inner truth they must accept to grow
+	Wound  string `json:"wound,omitempty"`  // primary wound / lie: trauma or false belief conditioning their choices
+	Agency string `json:"agency,omitempty"` // edge: physical trait, intellect or skill that makes them capable
 	// Character-arc fields (borrowed from NovelWriter's lore character sheet:
 	// goals/motivations/flaws/strengths/arc). Optional; filled by the AI
 	// generator when the story config enables character arcs.

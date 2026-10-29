@@ -19,6 +19,9 @@
   import GenreCascadeFields from '../lib/components/GenreCascadeFields.svelte';
   import SegmentedControl from '../lib/components/SegmentedControl.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
+  import EnhanceButton from '../lib/components/EnhanceButton.svelte';
+  import EnhanceField from '../lib/components/EnhanceField.svelte';
+  import Modal from '../lib/components/Modal.svelte';
   import { GENRES, SUBGENRE_DATA, SUBGENRE_PARENT, parentGenreForSubgenre, genreBucketKeys, canonicalSubgenreLabel } from '../lib/novelwriterGenres.js';
   // Round 19: the cascade now flows EXCLUSIVELY through these two modules.
   import { buildSubgenreIndex, subgenresForKeys, resolveParent, norm as normSub2, ownersOfTokens } from '../lib/subgenreTaxonomy.js';
@@ -48,6 +51,8 @@
   let showWvForm = false;
 
   let charName = '', charAge = '', charAppearance = '', charPersonality = '', charBackground = '', charMotivation = '', charAbilities = '', charNotes = '';
+  // Protagonist arc quartet (want / need / wound / agency).
+  let charWant = '', charNeed = '', charWound = '', charAgency = '';
   let wvName = '', wvCategory = 'other', wvDescription = '', wvTags = '';
 
   // Organization management
@@ -66,7 +71,7 @@
   $: cfgKey = $apiConfig?.api_key || '';
   $: cfgTimeout = $apiConfig?.http_timeout_seconds || 600;
 
-  let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, task_duration_minutes: 0, max_tokens: 32768, context_budget_tokens: 900000 };
+  let localApiCfg = { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, task_duration_minutes: 0, max_tokens: 32768, context_budget_tokens: 900000, brainstorm: { base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 120, max_tokens: 8192, context_budget_tokens: 300000 } };
   // —— Cross-tab state (module level): both workspace tabs ("Config" and "Novel
   // parameters") render this same component, but Svelte destroys and recreates it
   // when switching. Keep unsaved form edits, per-section busy flags and undo
@@ -74,7 +79,7 @@
   // what the user typed).
   let sharedStoryDraft = null;   // last localStoryCfg value
 
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', philosophical_dilemma: '', reader_expectation: '', forces_in_tension: '', elevator_pitch: '', lighthouse_sentence: '', differentiating_idea: '', creativity_level: 0 };
+  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', philosophical_dilemma: '', reader_expectation: '', forces_in_tension: '', elevator_pitch: '', lighthouse_sentence: '', differentiating_idea: '', creativity_level: 0, work_type: '', fanfic_source: '' };
   // Preserve unsaved edits across workspace-tab switches (this component is
   // recreated on every tab change; without this the Genre field and friends
   // would silently reset to whatever was last saved on the server).
@@ -787,7 +792,7 @@ let customSettingsText = '';
 function refreshCheckedSettings() {
   const all = (localStoryCfg.specific_settings || '').split('\n').map((x) => x.trim()).filter(Boolean);
   checkedSettings = new Set(all);
-  customSettingsText = all.filter((x) => !settingSuggestions.includes(x)).join('\n');
+  customSettingsText = all.filter((x) => !(settingSuggestions || []).includes(x)).join('\n');
 }
 refreshCheckedSettings();
 function rebuildSpecificSettings() {
@@ -968,6 +973,7 @@ function randomizeStoryParams() {
       const st = cfg?.story || {};
       const owned = new Set();
       for (const sec of finishedSections) {
+        if (sec.startsWith('enhance:')) { owned.add(sec.slice('enhance:'.length)); continue; }
         // Theme & Motif card now generates theme/motif/tone/dilemma only —
         // reader_expectation moved to the "Ideal reader profile" card.
         if (sec === 'motif') { owned.add('theme'); owned.add('motif'); owned.add('tone'); owned.add('philosophical_dilemma'); }
@@ -980,7 +986,7 @@ function randomizeStoryParams() {
         else if (sec === 'style') { owned.add('writing_style'); owned.add('writing_pov'); }
       }
       const merged = {};
-      for (const k of ['theme', 'motif', 'tone', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov', 'philosophical_dilemma', 'reader_expectation', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence', 'differentiating_idea']) {
+      for (const k of ['theme', 'motif', 'tone', 'specific_settings', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov', 'philosophical_dilemma', 'reader_expectation', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence', 'differentiating_idea']) {
         const sv = (st[k] || '').trim();
         if (!sv) continue;
         if (owned.has(k) || !(localStoryCfg[k] || '').trim()) merged[k] = st[k];
@@ -1205,7 +1211,7 @@ function randomizeStoryParams() {
   // "Theme & Motif" and "Ideal reader profile" — even if they never pressed
   // Save. (The backend also receives the live payload, but saving first keeps
   // the project state and the generation seed identical.)
-  async function persistStoryBeforeGenerate() {
+  async function persistStoryBeforeGenerate(strict = false) {
     const story = storyPayload();
     try {
       const saved = await api('PUT', '/api/config', { ...($config || {}), story });
@@ -1215,7 +1221,9 @@ function randomizeStoryParams() {
     } catch (e) {
       // A task running server-side rejects PUT /api/config (409). Don't let
       // that abort the flow: the generate POST carries the live payload and
-      // will report the real conflict itself.
+      // will report the real conflict itself. Enhance passes strict=true
+      // because its fast path reads the draft from the saved config.
+      if (strict) throw e;
       return false;
     }
   }
@@ -1359,56 +1367,66 @@ function randomizeStoryParams() {
   // in-flight state (spinner inside the bulb, width lock, disabled).
   $: appealSuggesting = !!genBusy['differentiating_idea'];
 
-  // —— Wand "Enhance" button (user request) ——
-  // Appears at the TOP-RIGHT INSIDE the Story appeal textarea while it has
-  // focus. It takes the CURRENT textarea text and sends it to the LLM through
-  // the chat pipeline: the deterministic fast path ([generate-section:...;
-  // enhance=<draft>], internal/httpapi forcedSectionEnhance + EnhanceText)
-  // rewrites the draft with buildEnhancePrompt and updates only the
-  // differentiating_idea field. A pre-generation undo snapshot is captured so
-  // the normal Generate-undo machinery can restore the author's original text.
+  // —— Wand "Enhance" button (all Novel parameters fields) ——
+  // Every textarea plus the Tone input gets its own button, visible only while
+  // that field has focus (or its rewrite is in flight). The action goes through
+  // the chat pipeline: the deterministic fast path handles the
+  // [generate-section:enhance;field=X] tag, reads the draft the form just saved
+  // and rewrites only that field. Busy state is keyed per field so one
+  // button never reflects another field's state.
+  const ENHANCE_LABEL_KEYS = {
+    theme: 'config.story.theme',
+    motif: 'config.motif.title',
+    philosophical_dilemma: 'config.dilemma.title',
+    tone: 'config.story.tone',
+    specific_settings: 'config.story.specificSettings',
+    inspirational_pieces: 'config.inspiration.subtitle',
+    audience_profile: 'config.audience.profileSubtitle',
+    reader_expectation: 'config.readerExp.title',
+    differentiating_idea: 'config.appeal.ideaTitle',
+    story_idea: 'config.story_idea.subtitle',
+    forces_in_tension: 'config.forces.title',
+    elevator_pitch: 'config.elevator.title',
+    lighthouse_sentence: 'config.lighthouse.title',
+    writing_style: 'config.style.label',
+    writing_pov: 'config.pov.label',
+  };
   let appealFocused = false;
-  let appealEnhancing = false;
+  let appealTextarea;
+  // Keep the wand mounted while focus moves from the textarea to the button
+  // (clicking it must not unmount the button before its click handler runs).
+  function appealFocusOut(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) appealFocused = false;
+  }
 
-  async function enhanceDifferentiatingIdea() {
-    if (appealEnhancing || appealSuggesting) return;
-    const current = (localStoryCfg.differentiating_idea || '').trim();
+  async function enhanceField(field, value) {
+    const key = 'enhance:' + field;
+    if (genBusy[key] || sharedGenBusy[key]) return;
+    const current = String(value ?? '').trim();
     if (!current) {
       addToast($t('config.appeal.enhanceEmpty'), 'info');
       return;
     }
-    // Keep the wand visible while its own generation runs: clicking it moves
-    // focus out of the textarea (focusout fires), but the in-flight state must
-    // still show the spinner instead of making the button vanish mid-request.
-    appealEnhancing = true;
-    genBusy = { ...genBusy, differentiating_idea: true };
-    sharedGenBusy.differentiating_idea = true;
-    captureStoryFields('differentiating_idea', ['differentiating_idea']);
+    genBusy = { ...genBusy, [key]: true };
+    sharedGenBusy[key] = true;
+    captureStoryFields(key, [field]);
     try {
-      await sendToChat(`${$t('config.generate.chat.differentiating_idea')} [enhance=${current}]`);
+      // Persist the live form first: the fast path reads the draft from the
+      // saved config, so generation uses exactly what the author sees.
+      await persistStoryBeforeGenerate(true);
+      const label = ENHANCE_LABEL_KEYS[field] ? $t(ENHANCE_LABEL_KEYS[field]) : field;
+      // The wand only polishes the author's draft: the creativity slider belongs
+      // to Suggest, so no [creativity=N] travels here.
+      await sendToChat(`${$t('config.enhance.chat', { field: label })} [generate-section:enhance;field=${field}]`);
       startGenPolling();
       addToast($t('config.appeal.enhanced'), 'success');
     } catch (e) {
       console.log('[enhance] dispatch failed', e?.message || String(e));
-      delete sharedGenBusy.differentiating_idea;
-      genBusy = { ...genBusy, differentiating_idea: false };
+      delete sharedGenBusy[key];
+      genBusy = { ...genBusy, [key]: false };
       if (!Object.values(sharedGenBusy).some(Boolean)) taskRunning.set(false);
       addToast(e?.message || String(e), 'error');
-    } finally {
-      appealEnhancing = false;
     }
-  }
-
-  // Click-flash state for the wand button (the magic border glow from the
-  // design preview) and the click handler that refocuses the textarea so the
-  // author can keep editing right after the enhanced text lands in the box.
-  let enhanceFlash = false;
-  function onEnhanceClick() {
-    enhanceDifferentiatingIdea();
-    enhanceFlash = true;
-    setTimeout(() => { enhanceFlash = false; }, 700);
-    const ta = document.querySelector('.appeal-box .appeal-textarea');
-    if (ta) ta.focus();
   }
 
   const genClick = (section) => () => { generateSection(section); };
@@ -1425,6 +1443,11 @@ function randomizeStoryParams() {
         base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 600, task_duration_minutes: 0, max_tokens: 32768, context_budget_tokens: 900000,
         ...$apiConfig,
         url_strict: !!$apiConfig.url_strict,
+        brainstorm: {
+          base_url: '', url_strict: false, model: '', api_key: '', http_timeout_seconds: 120, max_tokens: 8192, context_budget_tokens: 300000,
+          ...($apiConfig.brainstorm || {}),
+          url_strict: !!($apiConfig.brainstorm?.url_strict),
+        },
       };
       apiCfgSnapshot = snap;
     }
@@ -1511,11 +1534,6 @@ function randomizeStoryParams() {
     return m;
   })();
 
-  function openWvFormIn(cat) {
-    wvCategory = cat;
-    requestNewWv();
-  }
-
   onMount(async () => {
     try { apiConfig.set(await api('GET', '/api/config/api')); } catch (e) {}
     try { config.set(await api('GET', '/api/config')); } catch (e) {}
@@ -1590,6 +1608,23 @@ function randomizeStoryParams() {
     }
   }
 
+  // Second model: tested with the same endpoint but its own config body.
+  let testingBrainstorm = false;
+  let brainstormTest = null;
+  async function testBrainstormConfig() {
+    testingBrainstorm = true;
+    try {
+      const res = await api('POST', '/api/config/api/test', localApiCfg.brainstorm);
+      brainstormTest = { ok: true, model: res.model };
+      addToast($t('config.api.testOk', { model: res.model }), 'success');
+    } catch (e) {
+      brainstormTest = { ok: false, error: e.message };
+      addToast(e.message, 'error');
+    } finally {
+      testingBrainstorm = false;
+    }
+  }
+
   // Save story config directly (no AI); when confirmed chapters exist and key settings changed, prompt to reconcile
   async function saveStoryConfig() {
     const prev = $config?.story || {};
@@ -1623,6 +1658,7 @@ function randomizeStoryParams() {
     return JSON.stringify({
       name: charName, age: charAge, appearance: charAppearance, personality: charPersonality,
       background: charBackground, motivation: charMotivation, abilities: charAbilities, notes: charNotes,
+      want: charWant, need: charNeed, wound: charWound, agency: charAgency,
     });
   }
   function isCharFormDirty() {
@@ -1641,9 +1677,14 @@ function randomizeStoryParams() {
       charMotivation = char.motivation || '';
       charAbilities = char.abilities || '';
       charNotes = char.notes || '';
+      charWant = char.want || '';
+      charNeed = char.need || '';
+      charWound = char.wound || '';
+      charAgency = char.agency || '';
     } else {
       $editingCharID = null;
       charName = charAge = charAppearance = charPersonality = charBackground = charMotivation = charAbilities = charNotes = '';
+      charWant = charNeed = charWound = charAgency = '';
     }
     charFormSnapshot = charFormSnapshotNow();
   }
@@ -1663,7 +1704,7 @@ function randomizeStoryParams() {
 
   async function saveCharacter() {
     if (!charName.trim()) { addToast($t('config.char.nameRequired'), 'error'); return; }
-    const data = { name: charName.trim(), age: charAge, appearance: charAppearance, personality: charPersonality, background: charBackground, motivation: charMotivation, abilities: charAbilities, notes: charNotes };
+    const data = { name: charName.trim(), age: charAge, appearance: charAppearance, personality: charPersonality, background: charBackground, motivation: charMotivation, abilities: charAbilities, notes: charNotes, want: charWant, need: charNeed, wound: charWound, agency: charAgency };
     try {
       let savedId = $editingCharID;
       if (savedId) {
@@ -1708,7 +1749,7 @@ function randomizeStoryParams() {
     return showWvForm && wvFormSnapshotNow() !== wvFormSnapshot;
   }
 
-  function openWvForm(item) {
+  function openWvForm(item, cat) {
     showWvForm = true;
     if (item) {
       $editingWvID = item.id;
@@ -1718,17 +1759,18 @@ function randomizeStoryParams() {
       wvTags = item.tags || '';
     } else {
       $editingWvID = null;
-      wvName = ''; wvCategory = 'other'; wvDescription = ''; wvTags = '';
+      // New entries opened from a category section start in that category.
+      wvName = ''; wvCategory = cat || 'other'; wvDescription = ''; wvTags = '';
     }
     wvFormSnapshot = wvFormSnapshotNow();
   }
 
-  function requestNewWv() {
+  function requestNewWv(cat) {
     if (isWvFormDirty()) {
-      showConfirm($t('config.form.unsavedNew'), () => openWvForm(null));
+      showConfirm($t('config.form.unsavedNew'), () => openWvForm(null, cat));
       return;
     }
-    openWvForm(null);
+    openWvForm(null, cat);
   }
 
   function closeWvForm() {
@@ -1775,6 +1817,52 @@ function randomizeStoryParams() {
   function wvGenBusy() { return !!genBusy['worldview']; }
   function orgGenBusy() { return !!genBusy['organizations']; }
   function relGenBusy() { return !!genBusy['relations']; }
+
+  // —— Lore modal "Enhance" wands ——
+  // They rewrite one draft through POST /api/enhance/text and hand the result
+  // back to <EnhanceField>, which writes it into the modal's unsaved form
+  // state (nothing is persisted until Save).
+  let loreEnhanceBusy = {};
+  const LORE_ENHANCE_HINTS = {
+    'char:name': 'config.char.name',
+    'char:age': 'config.char.age',
+    'char:appearance': 'config.char.appearance',
+    'char:personality': 'config.char.personality',
+    'char:background': 'config.char.background',
+    'char:motivation': 'config.char.motivation',
+    'char:abilities': 'config.char.abilities',
+    'char:notes': 'config.char.notes',
+    'char:want': 'config.char.want',
+    'char:need': 'config.char.need',
+    'char:wound': 'config.char.wound',
+    'char:agency': 'config.char.agency',
+    'wv:name': 'config.wv.name',
+    'wv:description': 'config.wv.description',
+    'wv:tags': 'config.wv.tags',
+    'org:name': 'config.org.name',
+    'org:type': 'config.org.type',
+    'org:description': 'config.org.description',
+    'rel:label': 'config.rel.label',
+  };
+  async function enhanceLoreText(field, value) {
+    const current = String(value ?? '').trim();
+    if (!current) { addToast($t('config.appeal.enhanceEmpty'), 'info'); return ''; }
+    const key = 'lore:' + field;
+    loreEnhanceBusy = { ...loreEnhanceBusy, [key]: true };
+    try {
+      const res = await api('POST', '/api/enhance/text', {
+        text: current,
+        hint: LORE_ENHANCE_HINTS[field] ? $t(LORE_ENHANCE_HINTS[field]) : '',
+      });
+      return res?.text || '';
+    } catch (e) {
+      addToast(e.message, 'error');
+      return '';
+    } finally {
+      loreEnhanceBusy = { ...loreEnhanceBusy, [key]: false };
+    }
+  }
+  function loreBusy(field) { return !!loreEnhanceBusy['lore:' + field]; }
 
   async function deleteWorldview(id) {
     showConfirm($t('config.wv.deleteConfirm'), async () => {
@@ -1974,7 +2062,7 @@ function randomizeStoryParams() {
   }
 </script>
 
-<div class="space-y-3">
+<div class={tab === 'lore' ? 'space-y-5 page-width' : 'space-y-3'}>
   <ConfigChangePanel />
   <!-- Config tab: API config only. Novel parameters tab: Story config at full width, Theme & Motif below it. -->
     {#if tab === 'api'}
@@ -2038,6 +2126,54 @@ function randomizeStoryParams() {
         </div>
       </div>
     </div>
+
+    <div class="card bg-base-200">
+      <div class="card-body p-4 gap-2">
+        <h3 class="card-title text-base">{$t('config.api.brainstormTitle')}</h3>
+        <p class="text-xs text-base-content/55">{$t('config.api.brainstormHint')}</p>
+        <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.api.baseUrl')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localApiCfg.brainstorm.base_url} placeholder="https://api.openai.com/v1" disabled={$taskRunning || testingBrainstorm} />
+            <label class="label cursor-pointer justify-start gap-2 py-1 px-0 min-h-0">
+              <input type="checkbox" class="toggle toggle-xs" bind:checked={localApiCfg.brainstorm.url_strict} disabled={$taskRunning || testingBrainstorm} />
+              <span class="text-xs text-base-content/60">{$t('config.api.urlStrict')}</span>
+            </label>
+          </div>
+          <div>
+            <span class="field-label">{$t('config.api.model')}</span>
+            <input type="text" class="input input-sm w-full" bind:value={localApiCfg.brainstorm.model} placeholder="gpt-4o-mini" disabled={$taskRunning || testingBrainstorm} />
+          </div>
+          <div>
+            <span class="field-label">{$t('config.api.timeout')}</span>
+            <input type="number" class="input input-sm w-full" bind:value={localApiCfg.brainstorm.http_timeout_seconds} disabled={$taskRunning || testingBrainstorm} />
+          </div>
+          <div class="col-span-2">
+            <span class="field-label">{$t('config.api.key')}</span>
+            <input type="password" class="input input-sm w-full" bind:value={localApiCfg.brainstorm.api_key} placeholder="sk-..." disabled={$taskRunning || testingBrainstorm} />
+          </div>
+        </div>
+        {#if brainstormTest}
+          <div class="text-xs rounded-md border px-2.5 py-1.5 {brainstormTest.ok ? 'border-success/40 bg-success/10 text-success' : 'border-error/40 bg-error/10 text-error'}">
+            {#if brainstormTest.ok}
+              {$t('config.api.testResultOk', { model: brainstormTest.model })}
+            {:else}
+              {$t('config.api.testResultFail', { error: brainstormTest.error })}
+            {/if}
+          </div>
+        {/if}
+        <div class="flex justify-end gap-2">
+          <button class="btn btn-xs {$brainstormTest ? ($brainstormTest.ok ? 'btn-success btn-outline' : 'btn-error btn-outline') : 'btn-outline border-base-content/35 hover:border-primary hover:bg-primary hover:text-primary-content'}" on:click={testBrainstormConfig} disabled={$taskRunning || testingBrainstorm}>
+            {#if testingBrainstorm}
+              <span class="loading loading-spinner loading-xs"></span>{$t('config.api.testing')}
+            {:else}
+              {$t('config.api.test')}
+            {/if}
+          </button>
+          <button class="btn btn-primary btn-xs" on:click={saveAPIConfig} disabled={$taskRunning || testingBrainstorm}>{$t('common.save')}</button>
+        </div>
+      </div>
+    </div>
     {/if}
 
     {#if tab === 'novelParams'}
@@ -2096,6 +2232,8 @@ function randomizeStoryParams() {
               bump={cascadeBump}
               bind:cfg={localStoryCfg}
               disabled={$taskRunning}
+              onEnhance={enhanceField}
+              enhanceBusy={!!genBusy['enhance:specific_settings']}
               otherLabel={$t('config.story.other')}
               placeholderGenre={$t('config.story.type.placeholder')}
               placeholderSub={$t('config.story.subgenre.placeholder')}
@@ -2122,6 +2260,7 @@ function randomizeStoryParams() {
                 protagonist: $t('config.story.protagonist'),
                 settings: $t('config.story.specificSettings'),
                 settingsPlaceholder: $t('config.story.specificSettings.placeholder'),
+                enhance: $t('config.appeal.enhance'),
                 // Former ⓘ tooltip text now lives in the textarea placeholder
                 // (user request): passed via labels so the component can join
                 // it with the "one per line" instruction.
@@ -2356,6 +2495,29 @@ function randomizeStoryParams() {
             <span class="field-label">{$t('config.story.author')}</span>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.author} placeholder={$t('config.story.author.placeholder')} disabled={$taskRunning} />
           </div>
+          <div>
+            <span class="field-label">{$t('config.story.workType')}</span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={[
+                { value: 'original', label: $t('config.story.workType.original') },
+                { value: 'fanfic', label: $t('config.story.workType.fanfic') },
+              ]}
+              allowCustom={false}
+              emptyLabel={$t('config.story.workType.original')}
+              disabled={$taskRunning}
+              title={$t('config.story.workType.tip')}
+              ariaLabel={$t('config.story.workType')}
+              bind:value={localStoryCfg.work_type}
+            />
+          </div>
+          {#if localStoryCfg.work_type === 'fanfic'}
+            <div class="col-span-2">
+              <span class="field-label">{$t('config.story.fanficSource')}</span>
+              <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.fanfic_source} placeholder={$t('config.story.fanficSource.placeholder')} disabled={$taskRunning} />
+              <p class="text-xs text-base-content/55 mt-1">{$t('config.story.fanficHint')}</p>
+            </div>
+          {/if}
           <!-- LEGACY TONE FIELD (round 23 — replaced by the tone input + chips
                inside GenreCascadeFields):
           <div>
@@ -2491,6 +2653,29 @@ function randomizeStoryParams() {
   <div class="card bg-base-200 group/card">
     <div class="card-body p-4 gap-2">
       <div class="group/hover-section">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <h3 class="card-title text-base">{$t('config.audience.profileTitle')}</h3>
+          <AiGenerateButton hoverReveal={true} busy={!!genBusy['audience_profile']} title={genLastError || $t('common.generate')}
+            on:click={() => generateSection('audience_profile')} />
+        </div>
+        <div>
+          <span class="field-label">{$t('config.audience.profileSubtitle')}</span>
+          <EnhanceField field="audience_profile" controlClass="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.audience_profile}
+            placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}
+            busy={!!genBusy['enhance:audience_profile']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
+        </div>
+        <div>
+          <!-- Target reader's expectation: filled TOGETHER with the audience
+               profile by THIS card's Generate button (audience_section returns
+               both fields). -->
+          <span class="field-label">{$t('config.readerExp.title')}</span>
+          <EnhanceField field="reader_expectation" rows="3" controlClass="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.reader_expectation}
+            placeholder={$t('config.readerExp.placeholder')} disabled={$taskRunning}
+            busy={!!genBusy['enhance:reader_expectation']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
+        </div>
+      </div>
+      <div class="group/hover-section">
+        <div class="divider my-0 py-6 h-px"></div>
         <div class="flex justify-between items-center">
           <h3 class="card-title text-base">{$t('config.theme.title')}</h3>
           <div class="flex items-center gap-1.5">
@@ -2503,11 +2688,13 @@ function randomizeStoryParams() {
                  card (user request): that card's Generate button now writes it
                  together with the audience profile. -->
             <span class="field-label">{$t('config.story.theme')}</span>
-            <textarea class="textarea textarea-sm w-full text-sm" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning}></textarea>
+            <EnhanceField field="theme" bind:value={localStoryCfg.theme} placeholder={$t('config.story.theme.placeholder')} disabled={$taskRunning}
+              busy={!!genBusy['enhance:theme']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
           </div>
           <div>
             <span class="field-label">{$t('config.motif.title')}</span>
-            <textarea class="textarea textarea-sm w-full text-sm" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}></textarea>
+            <EnhanceField field="motif" bind:value={localStoryCfg.motif} placeholder={$t('config.motif.placeholder')} disabled={$taskRunning}
+              busy={!!genBusy['enhance:motif']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
           </div>
           <div>
             <!-- Philosophical / operational dilemma: filled together with
@@ -2515,11 +2702,13 @@ function randomizeStoryParams() {
                  now returns five fields). No ⓘ tooltip (user request): the
                  explanation lives in the placeholder. -->
             <span class="field-label">{$t('config.dilemma.title')}</span>
-            <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.philosophical_dilemma} placeholder={$t('config.dilemma.placeholder')} disabled={$taskRunning}></textarea>
+            <EnhanceField field="philosophical_dilemma" rows="2" bind:value={localStoryCfg.philosophical_dilemma} placeholder={$t('config.dilemma.placeholder')} disabled={$taskRunning}
+              busy={!!genBusy['enhance:philosophical_dilemma']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
           </div>
           <div>
             <span class="field-label">{$t('config.story.tone')}</span>
-            <input type="text" class="input input-sm w-full mb-1" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning} />
+            <EnhanceField type="input" field="tone" controlClass="input input-sm w-full mb-1" bind:value={localStoryCfg.tone} placeholder={$t('config.story.tone.placeholder')} disabled={$taskRunning}
+              busy={!!genBusy['enhance:tone']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
             {#if toneOpts.length}
               <div class="flex flex-wrap gap-x-3 gap-y-1">
                 {#each toneOpts as tname}
@@ -2542,35 +2731,12 @@ function randomizeStoryParams() {
           </div>
           <div>
             <span class="field-label">{$t('config.inspiration.subtitle')}</span>
-            <textarea class="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.inspirational_pieces}
-              placeholder={$t('config.inspiration.placeholder')} disabled={$taskRunning} title={$t('config.tip.inspiration')}></textarea>
+            <EnhanceField field="inspirational_pieces" controlClass="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.inspirational_pieces}
+              placeholder={$t('config.inspiration.placeholder')} disabled={$taskRunning} title={$t('config.tip.inspiration')}
+              busy={!!genBusy['enhance:inspirational_pieces']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
           </div>
         </div>
         <div class="group/hover-section">
-          <div class="divider my-0 py-6 h-px"></div>
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h3 class="card-title text-base">{$t('config.audience.profileTitle')}</h3>
-            <AiGenerateButton hoverReveal={true} busy={!!genBusy['audience_profile']} title={genLastError || $t('common.generate')}
-              on:click={() => generateSection('audience_profile')} />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.audience.profileSubtitle')}</span>
-            <textarea class="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.audience_profile}
-              placeholder={$t('config.audience.profilePlaceholder')} disabled={$taskRunning} title={$t('config.tip.audienceProfile')}></textarea>
-          </div>
-          <div>
-            <!-- Target reader's expectation: moved here from the Theme & Motif
-                 card (user request). No own Generate button anymore — it is
-                 filled TOGETHER with the audience profile by THIS card's
-                 Generate button (audience_section returns both fields). The
-                 "Genre conventions & obligatory motifs" subtitle was removed;
-                 its guidance now lives in the placeholder. -->
-            <span class="field-label">{$t('config.readerExp.title')}</span>
-            <textarea class="textarea textarea-sm w-full text-xs" rows="3" bind:value={localStoryCfg.reader_expectation}
-              placeholder={$t('config.readerExp.placeholder')} disabled={$taskRunning}></textarea>
-          </div>
-      </div>
-      <div class="group/hover-section">
         <!-- Story appeal: the differentiating idea. Divider separates it from
              "Ideal reader profile". Its Suggest/Generate flow is completely
              independent (own synchronous endpoint + own background section):
@@ -2589,53 +2755,21 @@ function randomizeStoryParams() {
              the textarea must not show any focus outline/ring. Both are handled
              here: Tailwind utility removal + `.appeal-box` scoped rules in the
              style block below (they also neutralize the global app.css
-             `:focus-visible` outline and daisyUI textarea focus styles). -->
-        <div class="appeal-box relative bg-[#FAFAFA] rounded-2xl border border-[#E5E5E5] transition-all duration-200 shadow-sm dark:bg-base-100 dark:border-base-300"
-             on:focusin={() => appealFocused = true} on:focusout={() => appealFocused = false}>
+             `:focus-visible` outline and SneakyUI textarea focus styles). -->
+        <div class="appeal-box relative bg-[#FAFAFA] border border-[#E5E5E5] transition-all duration-200 shadow-sm dark:bg-base-100 dark:border-base-300"
+             on:focusin={() => appealFocused = true} on:focusout={appealFocusOut}>
           <textarea class="appeal-textarea w-full bg-transparent p-4 pr-12 text-sm leading-relaxed focus:outline-none resize-none placeholder-opacity-60 min-h-[96px]" rows="4"
+            bind:this={appealTextarea}
             bind:value={localStoryCfg.differentiating_idea} placeholder={$t('config.appeal.placeholder')}></textarea>
           <!-- Wand "Enhance" (user request): appears TOP-RIGHT INSIDE the box
                while the textarea has focus (or its own generation is in
                flight). Expands left-to-right on hover exactly like the design
-               preview; sends the current draft to the LLM through the chat
-               fast path. `overflow` must stay visible on the wrapper for the
-               expanding width animation, so the button lives here as an
-               absolutely-positioned sibling of the textarea. -->
-          {#if appealFocused || appealEnhancing}
-            <button type="button" class="appeal-enhance-btn" class:clicked={enhanceFlash} class:busy={appealEnhancing}
-              disabled={appealEnhancing} aria-label={$t('config.appeal.enhance')} title={$t('config.appeal.enhance')}
-              on:click={onEnhanceClick}>
-              <span class="magic-border-glow"></span>
-              <span class="btn-content">
-                <span class="icon-container">
-                  {#if appealEnhancing}
-                    <span class="loading loading-spinner loading-xs"></span>
-                  {:else}
-                    <svg class="wand-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <defs>
-                        <linearGradient id="wandAuroraCfg" x1="0%" y1="0%" x2="100%" y2="100%">
-                          <stop offset="0%" class="aurora-stop1" />
-                          <stop offset="50%" class="aurora-stop2" />
-                          <stop offset="100%" class="aurora-stop3" />
-                        </linearGradient>
-                      </defs>
-                      <g class="wand-body">
-                        <path d="M4.5 19.5L12.5 11.5" stroke="url(#wandAuroraCfg)" stroke-width="2.2" stroke-linecap="round"/>
-                        <path d="M12.5 11.5L15 9" stroke="url(#wandAuroraCfg)" stroke-width="2.2" stroke-linecap="round"/>
-                        <path d="M12 12L13 11" stroke="url(#wandAuroraCfg)" stroke-width="1.6" stroke-linecap="round"/>
-                        <path class="star-tip-linear" d="M17 1.5L18.4 4.8L21.8 5.2L19.2 7.5L20 10.8L17 9.1L14 10.8L14.8 7.5L12.2 5.2L15.6 4.8L17 1.5Z" stroke="url(#wandAuroraCfg)" stroke-width="1.5" stroke-linejoin="round" fill="#FAFAFA"/>
-                        <path class="particle-filled-1" d="M5 4.5L5.5 5.8L6.8 6.2L5.8 7.1L6.1 8.3L5 7.6L3.9 8.3L4.2 7.1L3.2 6.2L4.5 5.8L5 4.5Z" fill="url(#wandAuroraCfg)"/>
-                        <path class="particle-filled-2" d="M20 13.5L20.4 14.5L21.5 14.8L20.7 15.5L20.9 16.5L20 16L19.1 16.5L19.3 15.5L18.5 14.8L19.6 14.5L20 13.5Z" fill="url(#wandAuroraCfg)"/>
-                        <circle cx="10" cy="4" r="1" fill="url(#wandAuroraCfg)" />
-                      </g>
-                    </svg>
-                  {/if}
-                </span>
-                <span class="enhance-label">{$t('config.appeal.enhance')}</span>
-              </span>
-            </button>
+               preview; rewrites this draft through the chat fast path. -->
+          {#if appealFocused || genBusy['enhance:differentiating_idea']}
+            <EnhanceButton busy={!!genBusy['enhance:differentiating_idea']} label={$t('config.appeal.enhance')}
+              on:click={() => { enhanceField('differentiating_idea', localStoryCfg.differentiating_idea); appealTextarea?.focus(); }} />
           {/if}
-          <div class="border-t border-[#EFEFEF] bg-white p-3 flex flex-col gap-1 dark:bg-base-100 dark:border-base-300">
+          <div class="appeal-footer border-t border-[#EFEFEF] bg-white p-3 flex flex-col gap-1 dark:bg-base-100 dark:border-base-300">
             <!-- Collapsible creativity bar (grid 0fr->1fr + fade, per design) -->
             <div class="appeal-collapsible" class:appeal-open={appealPanelOpen}>
               <div class="appeal-collapsible-inner grid grid-cols-[auto_1fr_auto] items-center gap-3">
@@ -2726,19 +2860,23 @@ function randomizeStoryParams() {
       </div>
       <div>
         <span class="field-label">{$t('config.story_idea.subtitle')}</span>
-        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}></textarea>
+        <EnhanceField field="story_idea" controlClass="textarea w-full text-base" bind:value={localStoryCfg.story_idea} placeholder={$t('config.story_idea.placeholder')} disabled={$taskRunning}
+          busy={!!genBusy['enhance:story_idea']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
       </div>
       <div>
         <span class="field-label">{$t('config.forces.title')}</span>
-        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.forces_in_tension} placeholder={$t('config.forces.placeholder')} disabled={$taskRunning}></textarea>
+        <EnhanceField field="forces_in_tension" rows="2" bind:value={localStoryCfg.forces_in_tension} placeholder={$t('config.forces.placeholder')} disabled={$taskRunning}
+          busy={!!genBusy['enhance:forces_in_tension']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
       </div>
       <div>
         <span class="field-label">{$t('config.elevator.title')}</span>
-        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.elevator_pitch} placeholder={$t('config.elevator.placeholder')} disabled={$taskRunning}></textarea>
+        <EnhanceField field="elevator_pitch" rows="2" bind:value={localStoryCfg.elevator_pitch} placeholder={$t('config.elevator.placeholder')} disabled={$taskRunning}
+          busy={!!genBusy['enhance:elevator_pitch']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
       </div>
       <div>
         <span class="field-label">{$t('config.lighthouse.title')}</span>
-        <textarea class="textarea textarea-sm w-full text-sm" rows="2" bind:value={localStoryCfg.lighthouse_sentence} placeholder={$t('config.lighthouse.placeholder')} disabled={$taskRunning}></textarea>
+        <EnhanceField field="lighthouse_sentence" rows="2" bind:value={localStoryCfg.lighthouse_sentence} placeholder={$t('config.lighthouse.placeholder')} disabled={$taskRunning}
+          busy={!!genBusy['enhance:lighthouse_sentence']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
       </div>
       <div class="flex justify-end gap-1.5">
         <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
@@ -2755,11 +2893,13 @@ function randomizeStoryParams() {
       </div>
       <div>
         <span class="field-label">{$t('config.style.label')}</span>
-        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.writing_style} placeholder={$t('config.style.placeholder')} disabled={$taskRunning}></textarea>
+        <EnhanceField field="writing_style" controlClass="textarea w-full text-base" bind:value={localStoryCfg.writing_style} placeholder={$t('config.style.placeholder')} disabled={$taskRunning}
+          busy={!!genBusy['enhance:writing_style']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
       </div>
       <div>
         <span class="field-label">{$t('config.pov.label')}</span>
-        <textarea class="textarea w-full text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}></textarea>
+        <EnhanceField field="writing_pov" controlClass="textarea w-full text-base" bind:value={localStoryCfg.writing_pov} placeholder={$t('config.pov.placeholder')} disabled={$taskRunning}
+          busy={!!genBusy['enhance:writing_pov']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
       </div>
       <div class="flex justify-end gap-1.5">
         <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
@@ -2772,7 +2912,7 @@ function randomizeStoryParams() {
     {#if tab === 'lore'}
   <!-- Characters -->
   <div class="card bg-base-200 group/card">
-    <div class="card-body p-4 gap-2">
+    <div class="card-body p-12 gap-5">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
@@ -2780,76 +2920,116 @@ function randomizeStoryParams() {
         <AiGenerateButton hoverReveal={true} busy={!!genBusy['characters']} title={genLastError || $t('common.generate')} on:click={genClick('characters')} />
       </div>
       
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
           {#if chars.length === 0}
-            <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.char.empty')}</p>
+            <p class="text-xs text-base-content/65 col-span-full py-4">{$t('config.char.empty')}</p>
           {:else}
             {#each chars as c}
-              <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
-                <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold shrink-0">{stripNameMarks(c.name)[0]}</div>
+              <div class="relative flex items-start gap-3 bg-base-300/25 rounded-lg p-3.5 group">
+                <div class="w-8 h-8 rounded-full bg-base-300/60 text-base-content/80 flex items-center justify-center text-xs font-bold shrink-0">{stripNameMarks(c.name)[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{stripNameMarks(c.name)}</div>
                   <div class="text-xs text-base-content/65 line-clamp-1">{c.personality || c.background || c.age || ''}</div>
                 </div>
-                <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                  <button class="btn btn-outline btn-xs px-1" on:click={() => openCharForm(c)} disabled={$taskRunning}>{$t('common.edit')}</button>
-                  <button class="btn btn-error btn-outline btn-xs px-1" on:click={() => deleteCharacter(c.id)} disabled={$taskRunning}>{$t('common.delete')}</button>
+                <div class="absolute right-1.5 top-1.5 flex gap-1 rounded-lg p-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
+                  <button class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} on:click={() => openCharForm(c)} disabled={$taskRunning}>
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                  </button>
+                  <button class="btn row-act-btn row-act-delete btn-xs btn-square" title={$t('common.delete')} aria-label={$t('common.delete')} on:click={() => deleteCharacter(c.id)} disabled={$taskRunning}>
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
+                  </button>
                 </div>
               </div>
             {/each}
           {/if}
         </div>
 
-        {#if showCharForm}
-          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
-            <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
-              <div>
-                <span class="field-label">{$t('config.char.name')}</span>
-                <input type="text" class="input input-sm w-full" bind:value={charName} disabled={$taskRunning} />
-              </div>
-              <div>
-                <span class="field-label">{$t('config.char.age')}</span>
-                <input type="text" class="input input-sm w-full" bind:value={charAge} disabled={$taskRunning} />
-              </div>
+        <Modal open={showCharForm} wide title={$editingCharID ? $t('config.char.editTitle') : $t('config.char.create')} on:close={closeCharForm}>
+          <svelte:fragment slot="actions">
+            <AiGenerateButton busy={charGenBusy()} labelKey="common.generate" title={genLastError || $t('common.generate')} on:click={() => generateCharacterEntry()} />
+          </svelte:fragment>
+          <div class="grid grid-cols-2 gap-x-3 gap-y-2">
+            <div>
+              <span class="field-label">{$t('config.char.name')}</span>
+              <EnhanceField type="input" field="char:name" controlClass="input input-sm w-full" bind:value={charName} disabled={$taskRunning}
+                busy={loreBusy('char:name')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
-            <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
-              <div>
-                <span class="field-label">{$t('config.char.appearance')}</span>
-                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charAppearance} disabled={$taskRunning}></textarea>
-              </div>
-              <div>
-                <span class="field-label">{$t('config.char.personality')}</span>
-                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charPersonality} disabled={$taskRunning}></textarea>
-              </div>
-              <div>
-                <span class="field-label">{$t('config.char.background')}</span>
-                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charBackground} disabled={$taskRunning}></textarea>
-              </div>
-              <div>
-                <span class="field-label">{$t('config.char.motivation')}</span>
-                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charMotivation} disabled={$taskRunning}></textarea>
-              </div>
-              <div>
-                <span class="field-label">{$t('config.char.abilities')}</span>
-                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charAbilities} disabled={$taskRunning}></textarea>
-              </div>
-              <div>
-                <span class="field-label">{$t('config.char.notes')}</span>
-                <textarea class="textarea textarea-sm w-full text-sm" bind:value={charNotes} disabled={$taskRunning}></textarea>
-              </div>
+            <div>
+              <span class="field-label">{$t('config.char.age')}</span>
+              <EnhanceField type="input" field="char:age" controlClass="input input-sm w-full" bind:value={charAge} disabled={$taskRunning}
+                busy={loreBusy('char:age')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
-            <div class="flex gap-1.5">
-              <button class="btn btn-success btn-xs" on:click={saveCharacter} disabled={$taskRunning}>{$t('config.char.save')}</button>
-              <AiGenerateButton busy={charGenBusy()} labelKey="common.generate" on:click={() => generateCharacterEntry()} />
-              <button class="btn btn-ghost btn-xs" on:click={closeCharForm}>{$t('common.cancel')}</button>
+            <div>
+              <span class="field-label">{$t('config.char.appearance')}</span>
+              <EnhanceField field="char:appearance" bind:value={charAppearance} disabled={$taskRunning}
+                busy={loreBusy('char:appearance')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.personality')}</span>
+              <EnhanceField field="char:personality" bind:value={charPersonality} disabled={$taskRunning}
+                busy={loreBusy('char:personality')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.background')}</span>
+              <EnhanceField field="char:background" bind:value={charBackground} disabled={$taskRunning}
+                busy={loreBusy('char:background')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.motivation')}</span>
+              <EnhanceField field="char:motivation" bind:value={charMotivation} disabled={$taskRunning}
+                busy={loreBusy('char:motivation')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.abilities')}</span>
+              <EnhanceField field="char:abilities" bind:value={charAbilities} disabled={$taskRunning}
+                busy={loreBusy('char:abilities')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.notes')}</span>
+              <EnhanceField field="char:notes" bind:value={charNotes} disabled={$taskRunning}
+                busy={loreBusy('char:notes')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
           </div>
-        {/if}
 
-        <div class="flex gap-1.5">
-          <button class="btn btn-primary btn-xs" on:click={requestNewChar} disabled={$taskRunning}>{$t('config.char.create')}</button>
+          <!-- Protagonist arc quartet: want / need / wound / agency. -->
+          <div class="divider my-2 h-px"></div>
+          <div class="text-xs font-semibold text-base-content/70 mb-1">{$t('config.char.arc.title')}</div>
+          <div class="grid grid-cols-2 gap-x-3 gap-y-2">
+            <div>
+              <span class="field-label">{$t('config.char.want')}</span>
+              <EnhanceField field="char:want" rows="2" bind:value={charWant} disabled={$taskRunning}
+                placeholder={$t('config.char.want.placeholder')}
+                busy={loreBusy('char:want')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.need')}</span>
+              <EnhanceField field="char:need" rows="2" bind:value={charNeed} disabled={$taskRunning}
+                placeholder={$t('config.char.need.placeholder')}
+                busy={loreBusy('char:need')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.wound')}</span>
+              <EnhanceField field="char:wound" rows="2" bind:value={charWound} disabled={$taskRunning}
+                placeholder={$t('config.char.wound.placeholder')}
+                busy={loreBusy('char:wound')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.agency')}</span>
+              <EnhanceField field="char:agency" rows="2" bind:value={charAgency} disabled={$taskRunning}
+                placeholder={$t('config.char.agency.placeholder')}
+                busy={loreBusy('char:agency')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+          </div>
+          <svelte:fragment slot="footer">
+            <button class="btn btn-ghost btn-sm" on:click={closeCharForm}>{$t('common.cancel')}</button>
+            <button class="btn btn-primary btn-sm" on:click={saveCharacter} disabled={$taskRunning}>{$t('config.char.save')}</button>
+          </svelte:fragment>
+        </Modal>
+
+        <div class="flex items-center justify-between gap-2 min-h-[42px]">
+          <button class="btn btn-primary btn-sm hover-target" on:click={requestNewChar} disabled={$taskRunning}>{$t('config.char.create')}</button>
           {#if chars.length > 0}
-            <button class="btn btn-accent btn-xs" on:click={submitCharacters} disabled={$taskRunning}>{$t('config.char.submit')}</button>
+            <AiGenerateButton hoverReveal plane expandedWidth={214} disabled={$taskRunning} text={$t('config.char.submit')} title={$t('config.char.submit')} on:click={submitCharacters} />
           {/if}
         </div>
     </div>
@@ -2857,36 +3037,40 @@ function randomizeStoryParams() {
 
   <!-- Worldview -->
   <div class="card bg-base-200 group/card">
-    <div class="card-body p-4 gap-2">
+    <div class="card-body p-12 gap-5">
       <h3 class="card-title text-base">{$t('config.wv.title')} <span class="text-xs font-normal text-base-content/65">({allWvs.length})</span></h3>
 
         {#each wvSections as sec (sec.cat)}
           {@const list = wvsByCat[sec.cat] || []}
           <!-- Each category is its own hover-section: its Generate button only
                appears when the pointer is over that specific section. -->
-          <div class="group/hover-section border-t border-base-300 pt-2">
+          <div class="group/hover-section border-t border-base-300 pt-5">
             <div class="flex justify-between items-center">
               <span class="field-label">{$t('config.wv.cat.' + sec.cat)} <span class="text-base-content/50">({list.length})</span></span>
               <div class="flex gap-1.5 items-center">
-                <button class="btn btn-ghost btn-xs hover-target" on:click={() => openWvFormIn(sec.cat)}>+ {$t('config.wv.create')}</button>
+                <button class="btn btn-ghost btn-xs hover-target" on:click={() => requestNewWv(sec.cat)}>+ {$t('config.wv.create')}</button>
                 <AiGenerateButton hoverReveal={true} busy={!!genBusy[sec.section]} title={genLastError || $t('common.generate')} on:click={genClick(sec.section)} />
               </div>
             </div>
 
             {#if list.length === 0}
-              <p class="text-xs text-base-content/65 py-1">{$t('config.wv.empty')}</p>
+              <p class="text-xs text-base-content/65 py-3">{$t('config.wv.empty')}</p>
             {:else}
-              <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 mt-1">
+              <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3 mt-2">
                 {#each list as w (w.id)}
-                  <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
-                    <div class="w-8 h-8 rounded-lg bg-accent/20 text-accent flex items-center justify-center text-xs font-bold shrink-0">{w.name[0]}</div>
+                  <div class="relative flex items-start gap-3 bg-base-300/25 rounded-lg p-3.5 group">
+                    <div class="w-8 h-8 rounded-lg bg-base-300/60 text-base-content/80 flex items-center justify-center text-xs font-bold shrink-0">{w.name[0]}</div>
                     <div class="flex-1 min-w-0">
                       <div class="text-sm font-medium truncate">{w.name}</div>
                       <div class="text-xs text-base-content/65 line-clamp-1">{w.description}</div>
                     </div>
-                    <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <button class="btn btn-outline btn-xs px-1" on:click={() => openWvForm(w)} disabled={$taskRunning}>{$t('common.edit')}</button>
-                      <button class="btn btn-error btn-outline btn-xs px-1" on:click={() => deleteWorldview(w.id)} disabled={$taskRunning}>{$t('common.delete')}</button>
+                    <div class="absolute right-1.5 top-1.5 flex gap-1 rounded-lg p-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
+                      <button class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} on:click={() => openWvForm(w)} disabled={$taskRunning}>
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                      </button>
+                      <button class="btn row-act-btn row-act-delete btn-xs btn-square" title={$t('common.delete')} aria-label={$t('common.delete')} on:click={() => deleteWorldview(w.id)} disabled={$taskRunning}>
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
+                      </button>
                     </div>
                   </div>
                 {/each}
@@ -2895,46 +3079,48 @@ function randomizeStoryParams() {
           </div>
         {/each}
 
-        {#if showWvForm}
-          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
-            <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
-              <div>
-                <span class="field-label">{$t('config.wv.name')}</span>
-                <input type="text" class="input input-sm w-full" bind:value={wvName} disabled={$taskRunning} />
-              </div>
-              <div>
-                <span class="field-label">{$t('config.wv.category')}</span>
-                <!-- svelte-ignore a11y-no-redundant-roles -->
-                <SmartSelect
-                  options={['geography', 'location', 'faction', 'rule', 'knowledge', 'history', 'other'].map((c) => ({ value: c, label: $t('config.wv.cat.' + c) }))}
-                  allowCustom={false}
-                  allowClear={false}
-                  disabled={$taskRunning}
-                  ariaLabel={$t('config.wv.category')}
-                  bind:value={wvCategory}
-                />
-              </div>
+        <Modal open={showWvForm} title={$editingWvID ? $t('config.wv.editTitle') : $t('config.wv.create')} on:close={closeWvForm}>
+          <svelte:fragment slot="actions">
+            <AiGenerateButton busy={wvGenBusy()} labelKey="config.generate.worldview" title={genLastError || $t('common.generate')} on:click={() => generateWorldviewEntry()} />
+          </svelte:fragment>
+          <div class="grid grid-cols-2 gap-x-3 gap-y-2">
+            <div>
+              <span class="field-label">{$t('config.wv.name')}</span>
+              <EnhanceField type="input" field="wv:name" controlClass="input input-sm w-full" bind:value={wvName} disabled={$taskRunning}
+                busy={loreBusy('wv:name')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
             <div>
+              <span class="field-label">{$t('config.wv.category')}</span>
+              <!-- svelte-ignore a11y-no-redundant-roles -->
+              <SmartSelect
+                options={['geography', 'location', 'faction', 'rule', 'knowledge', 'history', 'other'].map((c) => ({ value: c, label: $t('config.wv.cat.' + c) }))}
+                allowCustom={false}
+                allowClear={false}
+                disabled={$taskRunning}
+                ariaLabel={$t('config.wv.category')}
+                bind:value={wvCategory}
+              />
+            </div>
+            <div class="col-span-2">
               <span class="field-label">{$t('config.wv.description')}</span>
-              <textarea class="textarea textarea-sm w-full text-sm" bind:value={wvDescription} disabled={$taskRunning}></textarea>
+              <EnhanceField field="wv:description" rows="4" bind:value={wvDescription} disabled={$taskRunning}
+                busy={loreBusy('wv:description')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
-            <div>
+            <div class="col-span-2">
               <span class="field-label">{$t('config.wv.tags')}</span>
-              <input type="text" class="input input-sm w-full" bind:value={wvTags} placeholder={$t('config.wv.tags.placeholder')} disabled={$taskRunning} />
-            </div>
-            <div class="flex gap-1.5">
-              <button class="btn btn-success btn-xs" on:click={saveWorldview} disabled={$taskRunning}>{$t('common.save')}</button>
-              <AiGenerateButton busy={wvGenBusy()} labelKey="config.generate.worldview" on:click={() => generateWorldviewEntry()} />
-              <button class="btn btn-ghost btn-xs" on:click={closeWvForm}>{$t('common.cancel')}</button>
+              <EnhanceField type="input" field="wv:tags" controlClass="input input-sm w-full" bind:value={wvTags} placeholder={$t('config.wv.tags.placeholder')} disabled={$taskRunning}
+                busy={loreBusy('wv:tags')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
           </div>
-        {/if}
+          <svelte:fragment slot="footer">
+            <button class="btn btn-ghost btn-sm" on:click={closeWvForm}>{$t('common.cancel')}</button>
+            <button class="btn btn-primary btn-sm" on:click={saveWorldview} disabled={$taskRunning}>{$t('common.save')}</button>
+          </svelte:fragment>
+        </Modal>
 
-        <div class="flex gap-1.5">
-          <button class="btn btn-primary btn-xs" on:click={requestNewWv} disabled={$taskRunning}>{$t('config.wv.create')}</button>
+        <div class="flex items-center justify-end gap-2 min-h-[42px]">
           {#if allWvs.length > 0}
-            <button class="btn btn-accent btn-xs" on:click={submitWorldview} disabled={$taskRunning}>{$t('config.wv.submit')}</button>
+            <AiGenerateButton hoverReveal plane expandedWidth={214} disabled={$taskRunning} text={$t('config.wv.submit')} title={$t('config.wv.submit')} on:click={submitWorldview} />
           {/if}
         </div>
     </div>
@@ -2942,7 +3128,7 @@ function randomizeStoryParams() {
 
   <!-- Organizations -->
   <div class="card bg-base-200 group/card">
-    <div class="card-body p-4 gap-2">
+    <div class="card-body p-12 gap-5">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
@@ -2950,13 +3136,13 @@ function randomizeStoryParams() {
         <AiGenerateButton hoverReveal={true} busy={!!genBusy['organizations']} title={genLastError || $t('common.generate')} on:click={genClick('organizations')} />
       </div>
       
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
           {#if orgs.length === 0}
-            <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.org.empty')}</p>
+            <p class="text-xs text-base-content/65 col-span-full py-4">{$t('config.org.empty')}</p>
           {:else}
             {#each orgs as o}
-              <div class="flex items-start gap-2.5 bg-base-100 rounded-lg p-2.5 group">
-                <div class="w-8 h-8 rounded-lg bg-warning/20 text-warning flex items-center justify-center text-xs font-bold shrink-0">{o.name[0]}</div>
+              <div class="relative flex items-start gap-3 bg-base-300/25 rounded-lg p-3.5 group">
+                <div class="w-8 h-8 rounded-lg bg-base-300/60 text-base-content/80 flex items-center justify-center text-xs font-bold shrink-0">{o.name[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{o.name} {#if o.type}<span class="text-xs font-normal text-base-content/30">[{o.type}]</span>{/if}</div>
                   <div class="text-xs text-base-content/65 line-clamp-1">{o.description || ''}</div>
@@ -2964,33 +3150,41 @@ function randomizeStoryParams() {
                     <div class="text-xs text-base-content/65 line-clamp-1 mt-0.5">{$t('config.org.membersList', { names: (o.members || []).map(id => nameById[id] || id).join(', ') })}</div>
                   {/if}
                 </div>
-                <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                  <button class="btn btn-outline btn-xs px-1" on:click={() => openOrgForm(o)} disabled={$taskRunning}>{$t('common.edit')}</button>
-                  <button class="btn btn-error btn-outline btn-xs px-1" on:click={() => deleteOrganization(o.id)} disabled={$taskRunning}>{$t('common.delete')}</button>
+                <div class="absolute right-1.5 top-1.5 flex gap-1 rounded-lg p-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
+                  <button class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} on:click={() => openOrgForm(o)} disabled={$taskRunning}>
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                  </button>
+                  <button class="btn row-act-btn row-act-delete btn-xs btn-square" title={$t('common.delete')} aria-label={$t('common.delete')} on:click={() => deleteOrganization(o.id)} disabled={$taskRunning}>
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
+                  </button>
                 </div>
               </div>
             {/each}
           {/if}
         </div>
 
-        {#if showOrgForm}
-          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
-            <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
-              <div>
-                <span class="field-label">{$t('config.org.name')}</span>
-                <input type="text" class="input input-sm w-full" bind:value={orgName} disabled={$taskRunning} />
-              </div>
-              <div>
-                <span class="field-label">{$t('config.org.type')}</span>
-                <input type="text" class="input input-sm w-full" bind:value={orgType} placeholder={$t('config.org.type.placeholder')} disabled={$taskRunning} />
-              </div>
+        <Modal open={showOrgForm} wide title={editingOrgID ? $t('config.org.editTitle') : $t('config.org.create')} on:close={closeOrgForm}>
+          <svelte:fragment slot="actions">
+            <AiGenerateButton busy={orgGenBusy()} labelKey="common.generate" title={genLastError || $t('common.generate')} on:click={() => generateOrganizationEntry()} />
+          </svelte:fragment>
+          <div class="grid grid-cols-2 gap-x-3 gap-y-2">
+            <div>
+              <span class="field-label">{$t('config.org.name')}</span>
+              <EnhanceField type="input" field="org:name" controlClass="input input-sm w-full" bind:value={orgName} disabled={$taskRunning}
+                busy={loreBusy('org:name')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
             <div>
+              <span class="field-label">{$t('config.org.type')}</span>
+              <EnhanceField type="input" field="org:type" controlClass="input input-sm w-full" bind:value={orgType} placeholder={$t('config.org.type.placeholder')} disabled={$taskRunning}
+                busy={loreBusy('org:type')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div class="col-span-2">
               <span class="field-label">{$t('config.org.description')}</span>
-              <textarea class="textarea textarea-sm w-full text-sm" bind:value={orgDescription} disabled={$taskRunning}></textarea>
+              <EnhanceField field="org:description" rows="4" bind:value={orgDescription} disabled={$taskRunning}
+                busy={loreBusy('org:description')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
             {#if chars.length > 0}
-              <div>
+              <div class="col-span-2">
                 <span class="field-label">{$t('config.org.members')}</span>
                 <div class="flex flex-wrap gap-x-3 gap-y-1">
                   {#each chars as c}
@@ -3002,23 +3196,22 @@ function randomizeStoryParams() {
                 </div>
               </div>
             {/if}
-            <div class="flex gap-1.5">
-              <button class="btn btn-success btn-xs" on:click={saveOrganization} disabled={$taskRunning}>{$t('config.org.save')}</button>
-              <AiGenerateButton busy={orgGenBusy()} labelKey="common.generate" on:click={() => generateOrganizationEntry()} />
-              <button class="btn btn-ghost btn-xs" on:click={closeOrgForm}>{$t('common.cancel')}</button>
-            </div>
           </div>
-        {/if}
+          <svelte:fragment slot="footer">
+            <button class="btn btn-ghost btn-sm" on:click={closeOrgForm}>{$t('common.cancel')}</button>
+            <button class="btn btn-primary btn-sm" on:click={saveOrganization} disabled={$taskRunning}>{$t('config.org.save')}</button>
+          </svelte:fragment>
+        </Modal>
 
-        <div class="flex gap-1.5">
-          <button class="btn btn-primary btn-xs" on:click={requestNewOrg} disabled={$taskRunning}>{$t('config.org.create')}</button>
+        <div class="flex items-center justify-start gap-2 min-h-[42px]">
+          <button class="btn btn-primary btn-sm hover-target" on:click={requestNewOrg} disabled={$taskRunning}>{$t('config.org.create')}</button>
         </div>
     </div>
   </div>
 
   <!-- Relations -->
   <div class="card bg-base-200 group/card">
-    <div class="card-body p-4 gap-2">
+    <div class="card-body p-12 gap-5">
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center">
@@ -3026,76 +3219,81 @@ function randomizeStoryParams() {
         <AiGenerateButton hoverReveal={true} busy={!!genBusy['relations']} title={genLastError || $t('common.generate')} on:click={genClick('relations')} />
       </div>
       
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2">
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
           {#if rels.length === 0}
-            <p class="text-xs text-base-content/65 col-span-full py-2">{$t('config.rel.empty')}</p>
+            <p class="text-xs text-base-content/65 col-span-full py-4">{$t('config.rel.empty')}</p>
           {:else}
             {#each rels as r}
-              <div class="flex items-center gap-2 bg-base-100 rounded-lg p-2.5 group">
+              <div class="relative flex items-center gap-3 bg-base-300/25 rounded-lg p-3.5 group">
                 <div class="flex-1 min-w-0 text-sm">
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="font-medium">{entityIcons[r.source_type] || ''} {nameById[r.source_id] || r.source_id}</span>
                     <span class="text-base-content/65">→</span>
                     <span class="font-medium">{entityIcons[r.target_type] || ''} {nameById[r.target_id] || r.target_id}</span>
                   </div>
-                  <p class="mt-1 text-xs leading-relaxed text-secondary break-words">{r.label}</p>
+                  <p class="mt-1 text-xs leading-relaxed text-base-content/65 break-words">{r.label}</p>
                 </div>
-                <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                  <button class="btn btn-outline btn-xs px-1" on:click={() => openRelForm(r)} disabled={$taskRunning}>{$t('common.edit')}</button>
-                  <button class="btn btn-error btn-outline btn-xs px-1" on:click={() => deleteRelation(r.id)} disabled={$taskRunning}>{$t('common.delete')}</button>
+                <div class="absolute right-1.5 top-1.5 flex gap-1 rounded-lg p-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
+                  <button class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} on:click={() => openRelForm(r)} disabled={$taskRunning}>
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                  </button>
+                  <button class="btn row-act-btn row-act-delete btn-xs btn-square" title={$t('common.delete')} aria-label={$t('common.delete')} on:click={() => deleteRelation(r.id)} disabled={$taskRunning}>
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg>
+                  </button>
                 </div>
               </div>
             {/each}
           {/if}
         </div>
 
-        {#if showRelForm}
-          <div class="bg-base-100 rounded-lg p-3 space-y-2 mt-1">
-            <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
-              <div>
-                <span class="field-label">{$t('config.rel.source')}</span>
-                <!-- svelte-ignore a11y-no-redundant-roles -->
-                <SmartSelect
-                  options={entityOptions.map((opt) => ({ value: opt.key, label: opt.label }))}
-                  allowCustom={false}
-                  allowClear={false}
-                  placeholder={$t('config.rel.entityHint')}
-                  emptyLabel={$t('config.rel.entityHint')}
-                  disabled={$taskRunning}
-                  ariaLabel={$t('config.rel.source')}
-                  bind:value={relSource}
-                />
-              </div>
-              <span class="text-base-content/65 pb-1.5">→</span>
-              <div>
-                <span class="field-label">{$t('config.rel.target')}</span>
-                <!-- svelte-ignore a11y-no-redundant-roles -->
-                <SmartSelect
-                  options={entityOptions.map((opt) => ({ value: opt.key, label: opt.label }))}
-                  allowCustom={false}
-                  allowClear={false}
-                  placeholder={$t('config.rel.entityHint')}
-                  emptyLabel={$t('config.rel.entityHint')}
-                  disabled={$taskRunning}
-                  ariaLabel={$t('config.rel.target')}
-                  bind:value={relTarget}
-                />
-              </div>
-            </div>
+        <Modal open={showRelForm} title={editingRelID ? $t('config.rel.editTitle') : $t('config.rel.create')} on:close={closeRelForm}>
+          <svelte:fragment slot="actions">
+            <AiGenerateButton busy={relGenBusy()} labelKey="common.generate" title={genLastError || $t('common.generate')} on:click={() => generateRelationEntry()} />
+          </svelte:fragment>
+          <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
             <div>
-              <span class="field-label">{$t('config.rel.label')}</span>
-              <input type="text" class="input input-sm w-full" bind:value={relLabel} placeholder={$t('config.rel.label.placeholder')} disabled={$taskRunning} />
+              <span class="field-label">{$t('config.rel.source')}</span>
+              <!-- svelte-ignore a11y-no-redundant-roles -->
+              <SmartSelect
+                options={entityOptions.map((opt) => ({ value: opt.key, label: opt.label }))}
+                allowCustom={false}
+                allowClear={false}
+                placeholder={$t('config.rel.entityHint')}
+                emptyLabel={$t('config.rel.entityHint')}
+                disabled={$taskRunning}
+                ariaLabel={$t('config.rel.source')}
+                bind:value={relSource}
+              />
             </div>
-            <div class="flex gap-1.5">
-              <button class="btn btn-success btn-xs" on:click={saveRelation} disabled={$taskRunning}>{$t('config.rel.save')}</button>
-              <AiGenerateButton busy={relGenBusy()} labelKey="common.generate" on:click={() => generateRelationEntry()} />
-              <button class="btn btn-ghost btn-xs" on:click={closeRelForm}>{$t('common.cancel')}</button>
+            <span class="text-base-content/65 pb-1.5">→</span>
+            <div>
+              <span class="field-label">{$t('config.rel.target')}</span>
+              <!-- svelte-ignore a11y-no-redundant-roles -->
+              <SmartSelect
+                options={entityOptions.map((opt) => ({ value: opt.key, label: opt.label }))}
+                allowCustom={false}
+                allowClear={false}
+                placeholder={$t('config.rel.entityHint')}
+                emptyLabel={$t('config.rel.entityHint')}
+                disabled={$taskRunning}
+                ariaLabel={$t('config.rel.target')}
+                bind:value={relTarget}
+              />
             </div>
           </div>
-        {/if}
+          <div class="mt-2">
+            <span class="field-label">{$t('config.rel.label')}</span>
+            <EnhanceField type="input" field="rel:label" controlClass="input input-sm w-full" bind:value={relLabel} placeholder={$t('config.rel.label.placeholder')} disabled={$taskRunning}
+              busy={loreBusy('rel:label')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+          </div>
+          <svelte:fragment slot="footer">
+            <button class="btn btn-ghost btn-sm" on:click={closeRelForm}>{$t('common.cancel')}</button>
+            <button class="btn btn-primary btn-sm" on:click={saveRelation} disabled={$taskRunning}>{$t('config.rel.save')}</button>
+          </svelte:fragment>
+        </Modal>
 
-        <div class="flex gap-1.5">
-          <button class="btn btn-primary btn-xs" on:click={requestNewRel} disabled={$taskRunning || entityOptions.length < 2}>{$t('config.rel.create')}</button>
+        <div class="flex items-center justify-between gap-2 min-h-[42px]">
+          <button class="btn btn-primary btn-sm hover-target" on:click={requestNewRel} disabled={$taskRunning || entityOptions.length < 2}>{$t('config.rel.create')}</button>
           {#if entityOptions.length < 2}
             <span class="text-xs text-base-content/65 self-center">{$t('config.rel.needTwo')}</span>
           {/if}
@@ -3151,9 +3349,20 @@ function randomizeStoryParams() {
        the border while its contents are focused (border stays #E5E5E5).
      - The textarea must not show ANY focus outline/ring. `focus:outline-none`
        only covers Tailwind's own utility; the browser default outline, the
-       global app.css `:focus-visible { outline: ... }` rule and daisyUI's
+       global app.css `:focus-visible { outline: ... }` rule and SneakyUI's
        `.textarea` focus treatment are all neutralized here. Declared outside
        any layer with explicit selectors so it wins over those rules. */
+  /* Flat 0.5rem radius (user request). The white footer is a square rectangle
+     at the bottom, so its bottom corners are rounded too: otherwise they poked
+     out of the rounded wrapper and read as blurred white dots above each
+     corner. */
+  .appeal-box {
+    border-radius: 0.5rem;
+  }
+  .appeal-footer {
+    border-bottom-left-radius: calc(0.5rem - 1px);
+    border-bottom-right-radius: calc(0.5rem - 1px);
+  }
   .appeal-box:focus-within {
     border-color: #E5E5E5;
     outline: none;
@@ -3287,6 +3496,14 @@ function randomizeStoryParams() {
   }
   .appeal-suggest-btn:active:not(:disabled) { transform: scale(0.96); }
   .appeal-suggest-btn:disabled { opacity: 0.8; cursor: wait; }
+  /* The label fades to white on the same 8s timeline as the bulb icon. The
+     gradient colours live in registered custom properties so they can be
+     animated in place: an overlay `::after` with the same text painted the
+     white copy on top of the gradient copy and read as a duplicated, shifted
+     label. Browsers without @property keep the static gradient. */
+  @property --appeal-l1 { syntax: '<color>'; inherits: false; initial-value: #fef08a; }
+  @property --appeal-l2 { syntax: '<color>'; inherits: false; initial-value: #f472b6; }
+  @property --appeal-l3 { syntax: '<color>'; inherits: false; initial-value: #a78bfa; }
   .appeal-label {
     position: absolute;
     left: 36px;
@@ -3297,17 +3514,19 @@ function randomizeStoryParams() {
     opacity: 0;
     transition: opacity 0.2s ease 0.06s, transform 0.3s ease 0.06s;
     pointer-events: none;
-    /* Text (user request): same animated aurora as the bulb icon — the label
-       is painted with the #fef08a -> #f472b6 -> #a78bfa gradient clipped to
-       the glyphs, sliding back and forth forever. `color` stays as a fallback
-       for browsers without background-clip:text. */
     color: #ffffff;
-    background: linear-gradient(135deg, #fef08a 0%, #f472b6 50%, #a78bfa 100%);
+    background: linear-gradient(135deg, var(--appeal-l1) 0%, var(--appeal-l2) 50%, var(--appeal-l3) 100%);
     background-size: 200% 200%;
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
-    animation: appealLabelAuroraShift 8s ease-in-out infinite alternate;
+    animation: appealLabelAuroraShift 8s ease-in-out infinite alternate,
+               appealLabelWhite 8s ease-in-out infinite;
+  }
+  @keyframes appealLabelWhite {
+    0%, 20% { --appeal-l1: #fef08a; --appeal-l2: #f472b6; --appeal-l3: #a78bfa; }
+    45%, 70% { --appeal-l1: #ffffff; --appeal-l2: #ffffff; --appeal-l3: #ffffff; }
+    95%, 100% { --appeal-l1: #fef08a; --appeal-l2: #f472b6; --appeal-l3: #a78bfa; }
   }
   @keyframes appealLabelAuroraShift {
     0%   { background-position: 0% 50%; }
@@ -3348,214 +3567,4 @@ function randomizeStoryParams() {
     95%, 100% { stop-color: #a78bfa; }
   }
 
-  /* —— Wand "Enhance" button (user request) — ported from the HTML design
-     preview to this Svelte 4 component. Lives absolutely positioned at the
-     TOP-RIGHT INSIDE the .appeal-box textarea area, rendered only while the
-     box has focus (or its own generation is in flight). Collapsed 32px pill
-     that expands to the left-to-right "Enhance" label on hover, with the
-     neon pink / fuchsia / electric indigo / cyan aurora gradient shared by
-     icon and text, floating particles, a continuously-spinning tip star on
-     hover, and the magic border flash on click (.clicked). */
-  .appeal-enhance-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    z-index: 5;
-    display: inline-flex;
-    align-items: center;
-    justify-content: flex-start;
-    height: 32px;
-    width: 32px;
-    padding: 0;
-    background: #ffffff;
-    border: 1px solid rgba(0, 0, 0, 0.12);
-    border-radius: 16px;
-    color: #111827;
-    cursor: pointer;
-    outline: none;
-    overflow: visible;
-    transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 0.25s ease,
-                box-shadow 0.35s ease,
-                transform 0.1s cubic-bezier(0.16, 1, 0.3, 1);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06),
-                0 8px 16px -4px rgba(0, 0, 0, 0.08);
-    animation: enhancePopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-  @keyframes enhancePopIn {
-    from { opacity: 0; transform: scale(0.8); }
-    to   { opacity: 1; transform: scale(1); }
-  }
-  .appeal-enhance-btn:hover:not(:disabled) {
-    width: 108px;
-    border-color: rgba(0, 0, 0, 0.2);
-    background: #ffffff;
-    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12),
-                0 2px 8px rgba(0, 0, 0, 0.04);
-  }
-  .appeal-enhance-btn:active:not(:disabled) { transform: scale(0.96); }
-  .appeal-enhance-btn:disabled { opacity: 0.85; cursor: wait; }
-  .appeal-enhance-btn .btn-content {
-    position: relative;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    width: 100%;
-    height: 100%;
-    padding-left: 8px;
-  }
-  .enhance-label {
-    position: absolute;
-    left: 31px;
-    font-weight: 600;
-    font-size: 11.5px;
-    letter-spacing: -0.1px;
-    white-space: nowrap;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateX(-8px);
-    /* Hidden immediately when hover ends; revealed with a soft delay on hover
-       (mirrors the design preview's asymmetric transitions). */
-    transition: opacity 0.12s ease 0s, transform 0.15s ease 0s, visibility 0s linear 0.15s;
-    user-select: none;
-    /* Vibrant palette: Neon Pink / Fuchsia / Electric Indigo / Cyan, animated
-       exactly like the wand icon so text and icon share one living gradient. */
-    color: #8b5cf6;
-    background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 50%, #06b6d4 100%);
-    background-size: 200% 200%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: vibrantAuroraShift 4s ease infinite alternate;
-  }
-  .appeal-enhance-btn:hover:not(:disabled) .enhance-label {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(0);
-    transition: opacity 0.25s ease 0.12s,
-                transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) 0.12s,
-                visibility 0s linear 0s;
-  }
-  .appeal-enhance-btn .icon-container {
-    width: 16px;
-    height: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-  .appeal-enhance-btn .wand-svg {
-    width: 16px;
-    height: 16px;
-    overflow: visible;
-  }
-  /* Gradient stops always bright & colorfully animated (SVG stop-color). */
-  .aurora-stop1 { stop-color: #ec4899; animation: vibrantStop1 4s ease-in-out infinite alternate; }
-  .aurora-stop2 { stop-color: #8b5cf6; animation: vibrantStop2 4s ease-in-out infinite alternate; }
-  .aurora-stop3 { stop-color: #06b6d4; animation: vibrantStop3 4s ease-in-out infinite alternate; }
-  @keyframes vibrantAuroraShift {
-    0%   { background-position: 0% 50%; }
-    100% { background-position: 100% 50%; }
-  }
-  @keyframes vibrantStop1 {
-    0%   { stop-color: #ec4899; }
-    50%  { stop-color: #f43f5e; }
-    100% { stop-color: #8b5cf6; }
-  }
-  @keyframes vibrantStop2 {
-    0%   { stop-color: #8b5cf6; }
-    50%  { stop-color: #6366f1; }
-    100% { stop-color: #06b6d4; }
-  }
-  @keyframes vibrantStop3 {
-    0%   { stop-color: #06b6d4; }
-    50%  { stop-color: #3b82f6; }
-    100% { stop-color: #ec4899; }
-  }
-  /* Big linear star at the wand tip + small filled particles. */
-  .star-tip-linear {
-    transform-origin: 17px 6.15px;
-    transition: transform 0.3s ease;
-    animation: starFloatTip 2.5s ease-in-out infinite alternate;
-  }
-  .particle-filled-1 {
-    transform-origin: 5px 6px;
-    transition: transform 0.3s ease;
-    animation: particleFloat1 2.2s ease-in-out infinite alternate;
-  }
-  .particle-filled-2 {
-    transform-origin: 20px 14px;
-    transition: transform 0.3s ease;
-    animation: particleFloat2 2.8s ease-in-out infinite alternate;
-  }
-  .appeal-enhance-btn:hover:not(:disabled) .star-tip-linear {
-    animation: starContinuousRotate 2.5s linear infinite;
-  }
-  .appeal-enhance-btn:hover:not(:disabled) .particle-filled-1 {
-    animation: particlePulse1 0.75s ease-in-out infinite alternate;
-  }
-  .appeal-enhance-btn:hover:not(:disabled) .particle-filled-2 {
-    animation: particlePulse2 0.9s ease-in-out 0.15s infinite alternate;
-  }
-  @keyframes starFloatTip {
-    0%   { transform: scale(0.95) rotate(-5deg); }
-    100% { transform: scale(1.1) rotate(12deg); }
-  }
-  /* Continuous one-direction spin while hovering the button. */
-  @keyframes starContinuousRotate {
-    0%   { transform: rotate(0deg) scale(1.1); }
-    100% { transform: rotate(360deg) scale(1.1); }
-  }
-  @keyframes particleFloat1 {
-    0%   { transform: scale(0.85) translate(0, 0); }
-    100% { transform: scale(1.15) translate(-0.5px, -1px); }
-  }
-  @keyframes particleFloat2 {
-    0%   { transform: scale(0.8) translate(0, 0); }
-    100% { transform: scale(1.2) translate(0.5px, 0.8px); }
-  }
-  @keyframes particlePulse1 {
-    0%   { transform: scale(0.8) rotate(0deg); }
-    100% { transform: scale(1.4) rotate(20deg); }
-  }
-  @keyframes particlePulse2 {
-    0%   { transform: scale(0.75) rotate(0deg); }
-    100% { transform: scale(1.35) rotate(-25deg); }
-  }
-  .wand-body {
-    transform-origin: 5px 19px;
-    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  .appeal-enhance-btn:hover:not(:disabled) .wand-body {
-    transform: rotate(-6deg) translateY(-0.5px);
-  }
-  /* Magic gradient border flash on click (.clicked toggled for 700ms). */
-  .magic-border-glow {
-    position: absolute;
-    inset: -1px;
-    border-radius: 16px;
-    border: 1.5px solid transparent;
-    background: linear-gradient(135deg, #ec4899, #8b5cf6, #06b6d4) border-box;
-    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: destination-out;
-    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
-    mask-composite: exclude;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.3s ease;
-  }
-  .appeal-enhance-btn.clicked .magic-border-glow {
-    opacity: 1;
-    animation: borderFlash 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-  @keyframes borderFlash {
-    0%   { opacity: 1; transform: scale(0.98); }
-    50%  { opacity: 0.9; transform: scale(1.03); }
-    100% { opacity: 0; transform: scale(1.05); }
-  }
-  /* In-flight spinner inherits the same aurora via currentColor-free CSS:
-     keep it subtle dark so it reads on the white pill. */
-  .appeal-enhance-btn.busy .loading-spinner,
-  .appeal-enhance-btn .icon-container .loading { color: #8b5cf6; }
 </style>

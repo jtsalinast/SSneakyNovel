@@ -10,6 +10,7 @@
   // resto de la app). allowClear={false}: son campos obligatorios sin opción
   // vacía, como el <select> original.
   import SmartSelect from '../lib/components/SmartSelect.svelte';
+  import { setRibbon } from '../lib/ribbon.js';
 
   // Passed down from App.svelte: the same chat dispatch the config-page
   // Generate buttons use, so Pre-planning's button runs through the agent's
@@ -34,12 +35,27 @@
   $: statusMeta = {
     pending:  { label: $t('outline.status.pending'),  cls: 'badge-ghost' },
     writing:  { label: $t('outline.status.writing'),  cls: 'badge-warning' },
-    review:   { label: $t('outline.status.review'),   cls: 'badge-info' },
-    accepted: { label: $t('outline.status.accepted'), cls: 'badge-success' },
+    review:   { label: $t('outline.status.review'),   cls: 'badge-outline' },
+    accepted: { label: $t('outline.status.accepted'), cls: 'badge-neutral' },
   };
 
   let reviseFeedback = '';
   let showRevise = false;
+
+  // Section steps (rendered by the shell ribbon): Pre-planning → Sequence →
+  // Critique. Only one pane is mounted at a time.
+  let outlineTab = 'preplan';
+  const outlineTabDefs = [
+    { id: 'preplan', titleKey: 'outline.tab.preplan' },
+    { id: 'sequence', titleKey: 'outline.tab.sequence' },
+    { id: 'critique', titleKey: 'outline.tab.critique' },
+  ];
+  $: setRibbon(
+    'outline',
+    outlineTabDefs.map(def => ({ id: def.id, label: $t(def.titleKey) })),
+    outlineTab,
+    id => { outlineTab = id; }
+  );
 
   // Inline editing
   let editingNum = -1;
@@ -142,6 +158,7 @@
     if (!num) return;
     const ch = chapters.find(c => c.num === num);
     if (!ch || !isOutlineEditable(ch.status) || $taskRunning) return;
+    outlineTab = 'sequence';
     startEdit(ch);
     await tick();
     const el = document.querySelector(`[data-outline-chapter="${num}"]`);
@@ -203,7 +220,8 @@
   function sortedChecklist(pl) {
     return [...(pl?.checklist || [])].sort((a, b) => a.level - b.level);
   }
-  const PRIORITY_BADGE = { high: 'badge-error', medium: 'badge-warning', low: 'badge-ghost' };
+
+  const scoreWash = (n) => (n >= 80 ? 'wash-green' : n >= 60 ? 'wash-amber' : 'wash-red');
   function priorityLabel(p) {
     const msg = $t('analysis.priority.' + p);
     return msg && msg !== 'analysis.priority.' + p ? msg : p;
@@ -506,13 +524,15 @@
       longTermDirection = prePlan.long_term_direction;
     }
     replacingBatch = null;
-    document.getElementById('CardSection_BatchPlanning')?.scrollIntoView({ behavior: 'smooth' });
+    outlineTab = 'sequence';
+    tick().then(() => document.getElementById('CardSection_BatchPlanning')?.scrollIntoView({ behavior: 'smooth' }));
   }
 </script>
 
-<div class="space-y-3">
+<div class="space-y-4 page-width">
+  {#if outlineTab === 'preplan'}
   <div id="CardSection_StoryPrePlan" class="card bg-base-200">
-    <div class="card-body p-4 gap-3">
+    <div class="card-body p-12 gap-4">
       <div class="flex items-center justify-between gap-2 flex-wrap">
         <h3 class="card-title text-base">{$t('outline.preplan.title')}</h3>
         <div class="flex gap-2">
@@ -524,7 +544,7 @@
       </div>
       <p class="text-xs text-base-content/70">{$t('outline.preplan.help')}</p>
       {#if !prePlan}
-        <div class="text-sm text-base-content/60 border border-dashed rounded-lg p-4 text-center">{$t('outline.preplan.empty')}</div>
+        <div class="text-sm text-base-content/55 bg-base-300/20 rounded-lg p-4 text-center">{$t('outline.preplan.empty')}</div>
       {:else}
         <div class="flex flex-wrap gap-4 text-sm">
           <div><span class="font-semibold">{$t('outline.preplan.total')}:</span> {prePlan.total_chapters}</div>
@@ -533,18 +553,18 @@
         {#if prePlan.long_term_direction}
           <div>
             <div class="text-sm font-semibold mb-1">{$t('outline.preplan.direction')}</div>
-            <div class="whitespace-pre-wrap text-sm rounded-lg bg-base-100 border p-3">{prePlan.long_term_direction}</div>
+            <div class="whitespace-pre-wrap text-sm rounded-lg bg-base-100 p-3">{prePlan.long_term_direction}</div>
           </div>
         {/if}
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
           {#each prePlan.acts || [] as act, i}
-            <div class="card bg-base-100 border shadow-sm">
-              <div class="card-body p-3 gap-2">
+            <div class="card bg-base-100 rounded-lg group">
+              <div class="card-body p-6 gap-3">
                 <div class="flex items-start justify-between gap-2">
                   <h4 class="font-semibold text-sm">{$t('outline.preplan.act', { n: i + 1 })}: {act.name}</h4>
-                  <button class="btn btn-xs btn-primary shrink-0" on:click={() => usePrePlanAct(act)}>{$t('outline.preplan.use')}</button>
+                  <button class="btn btn-xs btn-primary shrink-0 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity" on:click={() => usePrePlanAct(act)}>{$t('outline.preplan.use')}</button>
                 </div>
-                {#if act.summary}<p class="text-xs text-base-content/80">{act.summary}</p>{/if}
+                {#if act.summary}<p class="text-xs leading-[1.5] text-base-content/80">{act.summary}</p>{/if}
                 <div class="text-xs">
                   <span class="badge badge-outline badge-sm">{$t('outline.preplan.chapters', { n: act.suggested_chapters })}</span>
                   {#if act.start_ch}<span class="badge badge-ghost badge-sm ml-1">{$t('outline.preplan.range', { start: act.start_ch, end: act.end_ch })}</span>{/if}
@@ -552,7 +572,7 @@
                 {#if act.batch_synopsis}
                   <details class="text-xs">
                     <summary class="cursor-pointer text-base-content/70">{$t('outline.preplan.synopsis')}</summary>
-                    <p class="whitespace-pre-wrap mt-1 text-base-content/80">{act.batch_synopsis}</p>
+                    <p class="whitespace-pre-wrap mt-1 leading-[1.5] text-base-content/80">{act.batch_synopsis}</p>
                   </details>
                 {/if}
               </div>
@@ -563,8 +583,9 @@
     </div>
   </div>
 
+  {:else if outlineTab === 'sequence'}
   <div id="CardSection_BatchPlanning" class="card bg-base-200">
-    <div class="card-body p-4 gap-3">
+    <div class="card-body p-12 gap-4">
       <h3 class="card-title text-base">{$t(batchActionKey)}</h3>
       <label class="block text-sm" for="batch-count">{$t('outline.batch.count')}</label>
       <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -635,7 +656,7 @@
 
     {#if showImport}
       <div id="CardSection_ImportExistingText" class="card bg-base-200">
-        <div class="card-body p-4 gap-2">
+        <div class="card-body p-12 gap-4">
           <h3 class="card-title text-base">{$t('outline.import.title')}</h3>
           <p class="text-xs text-base-content/65">{$t('outline.import.hint')}</p>
           <textarea class="textarea w-full text-sm font-serif" bind:value={importContent} on:input={() => importPreview = null} placeholder={$t('outline.import.placeholder')} disabled={$taskRunning}></textarea>
@@ -659,7 +680,7 @@
               </div>
               <p class="text-xs text-base-content/65">{$t('outline.import.startHint')}</p>
               <div class="flex justify-end">
-                <button class="btn btn-success btn-xs" on:click={startImport} disabled={$taskRunning || importPreview.length === 0}>{$t('outline.import.start')}</button>
+                <button class="btn btn-primary btn-xs" on:click={startImport} disabled={$taskRunning || importPreview.length === 0}>{$t('outline.import.start')}</button>
               </div>
             </div>
           {/if}
@@ -676,8 +697,8 @@
     <ConfigChangePanel />
 
     {#if $outlineCharacterShowSuggestions && $outlineCharacterSuggestions.length > 0}
-      <div id="CardSection_CharacterSuggestions" class="card bg-base-200 border border-primary/30 ">
-        <div class="card-body py-4 gap-3">
+      <div id="CardSection_CharacterSuggestions" class="card bg-base-200">
+        <div class="card-body p-12 gap-4">
           <h3 class="font-semibold">{$t('outline.charSuggestions.title', { n: $outlineCharacterSuggestions.length })}</h3>
           <p class="text-sm text-base-content/60">{$t('outline.charSuggestions.hint')}</p>
           <div class="space-y-2 max-h-72 overflow-y-auto">
@@ -706,13 +727,12 @@
 
     <!-- Action bar -->
     <div id="OutlineActionsBar" class="card bg-base-200">
-      <div class="card-body p-4 gap-2">
+      <div class="card-body p-12 gap-4">
         <div class="flex items-center gap-2 flex-wrap">
           <h3 class="text-base font-semibold flex-1 min-w-0 truncate">{displayTitle || $t('common.untitled')}</h3>
           {#if inOutlinePhase}
-            <button class="btn btn-success btn-xs" on:click={confirmOutline} disabled={$taskRunning || chapters.length === 0}>{$t('outline.btn.confirm')}</button>
+            <button class="btn btn-primary btn-xs" on:click={confirmOutline} disabled={$taskRunning || chapters.length === 0}>{$t('outline.btn.confirm')}</button>
           {/if}
-          <button class="btn btn-outline btn-xs" on:click={reviewStory} disabled={$taskRunning || !hasAccepted}>{$t('outline.dynamic.review')}</button>
           <button class="btn btn-outline btn-xs" on:click={() => showRevise = !showRevise} disabled={$taskRunning}>{$t('outline.btn.revise')}</button>
           {#if !hasAccepted}
             <button class="btn btn-error btn-outline btn-xs" on:click={deleteOutline} disabled={$taskRunning}>{$t('outline.btn.deleteOutline')}</button>
@@ -732,11 +752,7 @@
           </div>
         {/if}
 
-		{#if p.latest_planning_review}
-			<div class="bg-secondary/10 border border-secondary/30 rounded p-3 text-sm whitespace-pre-wrap">{p.latest_planning_review.content}</div>
-		{/if}
-
-        {#if p.core_prompt}
+		{#if p.core_prompt}
           <div>
             <span class="text-xs text-base-content/65">{$t('outline.corePrompt')}</span>
             <div class="bg-base-100 rounded p-2 text-sm mt-0.5 max-h-24 overflow-y-auto">{p.core_prompt}</div>
@@ -748,23 +764,23 @@
 
     <!-- Chapter outline list -->
     <div id="ChapterOutlineList" class="card bg-base-200">
-      <div class="card-body p-4 gap-2">
+      <div class="card-body p-12 gap-4">
         <div class="flex items-center justify-between">
           <h4 class="text-sm font-semibold text-base-content/60">{$t('outline.chapterList')} <span class="font-normal text-base-content/65">{$t('outline.chapterList.summary', { total: projectChapterCount, suffix: pendingCount ? $t('outline.chapterList.pendingSuffix', { n: pendingCount }) : '' })}</span></h4>
           <span class="text-xs text-base-content/65">{$t('outline.chapterList.editHint')}</span>
         </div>
-        <div class="space-y-1.5">
+        <div class="space-y-2">
           {#each groups as group (group.id)}
-            <section id="OutlineBatchGroup" class="border border-base-content/10 rounded-lg p-3 space-y-2">
+            <section id="OutlineBatchGroup" class="bg-base-300/25 rounded-lg p-8 space-y-3">
               <div class="flex items-center justify-between gap-2">
                 <h4 class="font-semibold text-sm">{group.id ? $t('outline.batch.range', { start: group.start_ch, end: group.end_ch }) : $t('outline.batch.imported')}</h4>
-                {#if group.planned_final}<span class="badge badge-info">{$t('ending.marker', {num: group.end_ch})}</span>{/if}
+                {#if group.planned_final}<span class="badge badge-neutral">{$t('ending.marker', {num: group.end_ch})}</span>{/if}
                 {#if canReplan(group)}<button class="btn btn-outline btn-xs" disabled={batchBlocked} on:click={() => replan(group)}>{$t('outline.batch.replan')}</button>{/if}
               </div>
-              {#if group.synopsis}<p class="whitespace-pre-wrap text-sm text-base-content/70 mb-3">{group.synopsis}</p>{/if}
+              {#if group.synopsis}<p class="whitespace-pre-wrap text-sm text-base-content/70 mb-4">{group.synopsis}</p>{/if}
           {#each group.chapters as ch (ch.num)}
             {#if editingNum === ch.num}
-              <div data-outline-chapter={ch.num} id="ChapterCard_Edit" class="bg-base-100 rounded-lg p-3 space-y-2 ring-1 ring-primary/50">
+              <div data-outline-chapter={ch.num} id="ChapterCard_Edit" class="bg-base-100 rounded-lg p-4 space-y-3 ring-1 ring-primary/50">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-bold text-base-content/65 shrink-0">{$t('outline.chapter.chapterLabel', { num: ch.num })}</span>
                   <input type="text" class="input input-sm flex-1" bind:value={editTitle} placeholder={$t('outline.chapter.titlePlaceholder')} disabled={$taskRunning} />
@@ -777,7 +793,7 @@
                 </div>
                 <div class="flex justify-end gap-2">
                   <button class="btn btn-ghost btn-xs" on:click={cancelEdit}>{$t('common.cancel')}</button>
-                  <button class="btn btn-success btn-xs" on:click={saveEdit} disabled={$taskRunning}>{$t('common.save')}</button>
+                  <button class="btn btn-primary btn-xs" on:click={saveEdit} disabled={$taskRunning}>{$t('common.save')}</button>
                 </div>
               </div>
             {:else}
@@ -786,7 +802,7 @@
               <div
                 data-outline-chapter={ch.num}
                 id="ChapterCard_Summary"
-                class="bg-base-100 rounded-lg p-2.5 group {isOutlineEditable(ch.status) && !$taskRunning ? 'cursor-pointer hover:ring-1 hover:ring-primary/40' : ''}"
+                class="bg-base-100 rounded-lg p-3.5 group {isOutlineEditable(ch.status) && !$taskRunning ? 'cursor-pointer hover:ring-1 hover:ring-primary/40' : ''}"
                 on:click={() => isOutlineEditable(ch.status) && !$taskRunning && startEdit(ch)}
               >
                 <div class="flex items-center gap-2">
@@ -801,7 +817,7 @@
                   <div class="flex flex-wrap gap-1 mt-1.5 ml-14">
                     {#each ch.characters as c}
                       <span class="badge badge-ghost badge-xs gap-0.5" title={c.note || ''}>
-                        {c.name}{#if c.first_appearance}<span class="text-warning">*</span>{/if}
+                        {c.name}{#if c.first_appearance}<span class="text-base-content/50">*</span>{/if}
                       </span>
                     {/each}
                   </div>
@@ -824,25 +840,34 @@
         {/if}
       </div>
     </div>
-    <!-- Bestseller-editor full-outline analysis -->
+  {/if}
+
+  {:else}
     {#if hasOutline}
       <div id="CardSection_OutlineAnalysis" class="card bg-base-200">
-        <div class="card-body p-4 gap-3">
-          <div class="flex items-start justify-between gap-2 flex-wrap">
-            <div>
+        <div class="card-body p-12 gap-4">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
               <h3 class="card-title text-base">{$t('outline.analysis.title')}</h3>
               <span class="field-label">{$t('outline.analysis.subtitle')}</span>
             </div>
-            {#if outlineAnalysis}
-              <button class="btn btn-ghost btn-xs shrink-0" on:click={clearOutlineAnalysis} disabled={$taskRunning}>{$t('outline.analysis.clear')}</button>
-            {/if}
+            <div class="flex items-center gap-2 shrink-0">
+              <button class="btn btn-outline btn-xs" on:click={reviewStory} disabled={$taskRunning || !hasAccepted}>{$t('outline.dynamic.review')}</button>
+              {#if outlineAnalysis}
+                <button class="btn btn-outline btn-xs" on:click={clearOutlineAnalysis} disabled={$taskRunning}>{$t('outline.analysis.clear')}</button>
+              {/if}
+            </div>
           </div>
 
+          {#if p.latest_planning_review}
+            <div class="bg-base-300/25 rounded-lg p-8 text-sm whitespace-pre-wrap leading-[1.5]">{p.latest_planning_review.content}</div>
+          {/if}
+
           {#if outlineAnalysis}
-            <div class="space-y-3">
-              <div class="flex items-center gap-3 text-sm text-base-content/70">
+            <div class="space-y-4">
+              <div class="flex items-center gap-3 text-sm text-base-content/70 flex-wrap">
                 {#if outlineAnalysis.overall_score}
-                  <span class="badge badge-lg {outlineAnalysis.overall_score >= 80 ? 'badge-success' : outlineAnalysis.overall_score >= 60 ? 'badge-warning' : 'badge-error'}">
+                  <span class="badge badge-lg {scoreWash(outlineAnalysis.overall_score)}">
                     {$t('outline.analysis.score')}: {outlineAnalysis.overall_score}/100
                   </span>
                 {/if}
@@ -853,7 +878,7 @@
               </div>
 
               {#if outlineAnalysis.summary}
-                <details open class="bg-base-100 rounded-lg p-3">
+                <details open class="bg-base-100 rounded-lg p-4">
                   <summary class="cursor-pointer text-sm font-semibold">{$t('outline.analysis.summary')}</summary>
                   <p class="whitespace-pre-wrap mt-2 text-sm text-base-content/80">{outlineAnalysis.summary}</p>
                 </details>
@@ -870,19 +895,19 @@
                   (outlineAnalysis.suggestions || []).some(
                     (s) => (pillarCatMap[key] || []).includes(s.category) && s.status !== 'applied'
                   )}
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
                   {#each outlineAnalysis.pillar_scores as p (p.key)}
                     {@const strong = p.score >= 90 && !hasOpenSuggestionFor(p.key)}
-                    <div class="bg-base-100 rounded-lg p-2.5 space-y-1">
+                    <div class="bg-base-300/25 rounded-lg p-3 space-y-1.5">
                       <div class="flex items-center justify-between gap-1">
-                        <span class="text-xs font-semibold truncate">{$t('outline.analysis.pillar.' + p.key)}</span>
-                        <span class="badge badge-sm {p.score >= 90 ? 'badge-success' : p.score >= 75 ? 'badge-info' : p.score >= 60 ? 'badge-warning' : 'badge-error'}">{p.score}</span>
+                        <span class="min-w-0 text-[11px] font-semibold leading-tight">{$t('outline.analysis.pillar.' + p.key)}</span>
+                        <span class="badge badge-sm {scoreWash(p.score)}">{p.score}</span>
                       </div>
                       {#if strong}
-                        <div class="text-xs text-success font-medium">✓ {$t('outline.analysis.noChangesNeeded')}</div>
+                        <div class="text-xs text-base-content/70 font-medium">✓ {$t('outline.analysis.noChangesNeeded')}</div>
                       {:else}
                         <div class="w-full h-1.5 rounded-full bg-base-content/10 overflow-hidden">
-                          <div class="h-full rounded-full {p.score >= 90 ? 'bg-success' : p.score >= 75 ? 'bg-info' : p.score >= 60 ? 'bg-warning' : 'bg-error'}" style="width: {p.score}%"></div>
+                          <div class="h-full rounded-full {p.score >= 80 ? 'bg-[#86efac]' : p.score >= 60 ? 'bg-[#f9d342]' : 'bg-[#fca5a5]'}" style="width: {p.score}%"></div>
                         </div>
                       {/if}
                       {#if p.note}<p class="text-[11px] leading-snug text-base-content/60 line-clamp-3">{p.note}</p>{/if}
@@ -896,7 +921,7 @@
                             {#each sortedChecklist(p) as c (c.key)}
                               <li class="flex items-center justify-between gap-1.5">
                                 <span class="truncate text-base-content/70">{criterionLabel(c.key)}</span>
-                                <span class="badge badge-xs normal-case {c.level >= 85 ? 'badge-success' : c.level >= 60 ? 'badge-warning' : 'badge-error'}">{c.level}</span>
+                                <span class="badge badge-xs normal-case {scoreWash(c.level)}">{c.level}</span>
                               </li>
                             {/each}
                           </ul>
@@ -908,30 +933,36 @@
               {/if}
 
               <div class="font-semibold text-sm">{$t('outline.analysis.suggestions')} ({outlineAnalysis.suggestions?.length || 0})</div>
-              <div class="space-y-2">
+              <div class="space-y-3">
                 {#each outlineAnalysis.suggestions || [] as s (s.id)}
-                  <section class="border border-base-content/10 rounded-lg p-3 space-y-2">
+                  <section class="bg-base-100 rounded-lg p-4 space-y-3 group/suggestion">
                     <div class="flex items-center gap-2 flex-wrap">
-                      <span class="badge badge-outline badge-sm">{$t('outline.analysis.category.' + (s.category || 'other'))}</span>
+                      <span class="badge badge-sm badge-outline">{$t('outline.analysis.category.' + (s.category || 'other'))}</span>
                       {#if s.priority}
-                        <span class="badge badge-sm normal-case {PRIORITY_BADGE[s.priority] || 'badge-ghost'}">{$t('analysis.priority.' + s.priority)}</span>
+                        <span class="badge badge-sm badge-ghost">{$t('analysis.priority.' + s.priority)}</span>
                       {/if}
-                      <h4 class="font-semibold text-sm flex-1 min-w-0">{s.title}</h4>
                       {#if s.score_impact > 0}
-                        <span class="badge badge-success badge-sm normal-case" title={$t('analysis.checklist.tip')}>{$t('analysis.scoreImpact', { n: s.score_impact })}</span>
+                        <span class="badge badge-ghost badge-sm normal-case ml-auto" title={$t('analysis.checklist.tip')}>{$t('analysis.scoreImpact', { n: s.score_impact })}</span>
                       {/if}
                       {#if s.status === 'applied'}
-                        <span class="badge badge-success badge-sm">✓ {$t('outline.analysis.applied')}</span>
+                        <span class="badge badge-sm wash-green">✓ {$t('outline.analysis.applied')}</span>
                       {/if}
                     </div>
+                    <h4 class="font-semibold text-[15px] leading-snug">{s.title}</h4>
                     {#if s.criteria?.length}
-                      <p class="text-[11px] text-base-content/55">
-                        {$t('analysis.criteriaLabel')}: {s.criteria.map(criterionLabel).join(', ')}
+                      <p class="text-xs text-base-content/60">
+                        {$t('analysis.criteriaLabel')} {s.criteria.map((c) => criterionLabel(c.key)).join(', ')}
                         {#if s.pillar} · {$t('outline.analysis.pillar.' + s.pillar)}{/if}
                       </p>
                     {/if}
-                    {#if s.detail}<p class="text-sm text-base-content/80 whitespace-pre-wrap">{s.detail}</p>{/if}
+                    {#if s.detail}<p class="text-sm text-base-content/80 whitespace-pre-wrap mb-2">{s.detail}</p>{/if}
                     {#if s.action}<p class="text-sm text-base-content/70 italic whitespace-pre-wrap">{s.action}</p>{/if}
+                    {#if s.evidence}
+                      <p class="text-xs text-base-content/60 border-l-2 border-[#c4b5fd] pl-3">
+                        <span class="font-semibold">{$t('analysis.evidence')}</span>
+                        <span class="italic">“{s.evidence}”</span>
+                      </p>
+                    {/if}
                     {#if s.applies_to_chapters?.length}
                       <p class="text-xs text-base-content/60">{$t('outline.analysis.chapters', { list: s.applies_to_chapters.join(', ') })}</p>
                     {/if}
@@ -940,10 +971,13 @@
                         {#each s.recommendations as rec (rec.chapter_num)}
                           <!-- Accordion collapsed by default: the author opens each
                                proposed replacement on purpose before applying. -->
-                          <details class="bg-base-100 rounded p-2.5 text-xs">
-                            <summary class="cursor-pointer font-semibold select-none">
+                          <details class="bg-base-300/25 rounded-lg p-3 text-xs">
+                            <summary class="cursor-pointer font-semibold select-none flex items-center gap-2">
                               Ch. {rec.chapter_num}{chapterTitleOf(rec.chapter_num) ? ' — ' + chapterTitleOf(rec.chapter_num) : ''}
                               {#if rec.cast?.length}<span class="badge badge-outline badge-xs ml-1 normal-case">{$t('outline.analysis.castBadge')}: {rec.cast.map(c => c.name).join(', ')}</span>{/if}
+                            <span class="zoom-in-icon ml-auto shrink-0 text-base-content/40" aria-hidden="true">
+                              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7" /><path d="m16.5 16.5 4.5 4.5M8 11h6M11 8v6" /></svg>
+                            </span>
                             </summary>
                             <div class="space-y-1.5 pt-1.5">
                             {#if rec.new_title}
@@ -979,7 +1013,7 @@
                                   {#each rec.cast as cc (cc.name)}
                                     <li>
                                       <span class="font-medium">{cc.name}</span>
-                                      {#if cc.first_appearance}<span class="badge badge-info badge-xs ml-1 normal-case">{$t('outline.analysis.castDebut')}</span>{/if}
+                                      {#if cc.first_appearance}<span class="badge badge-outline badge-xs ml-1 normal-case">{$t('outline.analysis.castDebut')}</span>{/if}
                                       {#if cc.note}<span class="text-base-content/55"> — {cc.note}</span>{/if}
                                     </li>
                                   {/each}
@@ -992,7 +1026,7 @@
                         {/each}
                       </div>
                       {#if s.status !== 'applied'}
-                        <div class="flex justify-end gap-2">
+                        <div class="flex justify-end gap-2 opacity-0 pointer-events-none group-hover/suggestion:opacity-100 group-hover/suggestion:pointer-events-auto group-focus-within/suggestion:opacity-100 group-focus-within/suggestion:pointer-events-auto transition-opacity duration-200">
                           <!-- Each section keeps its own Propose button: the backend
                                accumulates new proposals on top of the existing ones,
                                so improvements applied earlier are never discarded. -->
@@ -1000,7 +1034,7 @@
                             {#if proposingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
                             {$t('outline.analysis.propose')}
                           </button>
-                          <button class="btn btn-success btn-xs" on:click={() => applyAnalysisSuggestion(s)} disabled={$taskRunning || applyingSuggestionId === s.id}>
+                          <button class="btn btn-primary btn-xs" on:click={() => applyAnalysisSuggestion(s)} disabled={$taskRunning || applyingSuggestionId === s.id}>
                             {#if applyingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
                             {$t('outline.analysis.apply')}
                           </button>
@@ -1012,7 +1046,7 @@
                           {$t(analysisHasProposals ? 'outline.analysis.noApply' : 'outline.analysis.adviceOnly')}
                         </p>
                         <div class="flex justify-end">
-                          <button class="btn btn-outline btn-xs" on:click={() => proposeForSuggestion(s)} disabled={$taskRunning || proposingSuggestionId === s.id}>
+                          <button class="btn btn-outline btn-xs opacity-0 pointer-events-none group-hover/suggestion:opacity-100 group-hover/suggestion:pointer-events-auto group-focus-within/suggestion:opacity-100 group-focus-within/suggestion:pointer-events-auto transition-opacity duration-200" on:click={() => proposeForSuggestion(s)} disabled={$taskRunning || proposingSuggestionId === s.id}>
                             {#if proposingSuggestionId === s.id}<span class="loading loading-spinner loading-xs"></span>{/if}
                             {$t('outline.analysis.propose')}
                           </button>
@@ -1035,7 +1069,16 @@
           </div>
         </div>
       </div>
+    {:else}
+      <div class="text-center py-14 text-base-content/65">
+        <p class="text-base mb-1">{$t('outline.empty.title')}</p>
+        <p class="text-sm text-base-content/65">{$t('outline.empty.hint')}</p>
+      </div>
     {/if}
   {/if}
 
 </div>
+
+<style>
+  details[open] .zoom-in-icon { display: none; }
+</style>

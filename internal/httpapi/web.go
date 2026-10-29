@@ -51,6 +51,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("GET /api/config", h.GetConfig)
 	mux.HandleFunc("GET /api/novel-params", h.GetNovelParams)
 	mux.HandleFunc("PUT /api/config", h.PutConfig)
+	mux.HandleFunc("POST /api/brainstorm", h.PostBrainstorm)
 	mux.HandleFunc("GET /api/config/pending-changes", h.GetPendingConfigChanges)
 	mux.HandleFunc("POST /api/config/apply-changes", h.PostApplyConfigChanges)
 	mux.HandleFunc("DELETE /api/config/pending-changes", h.DeletePendingConfigChanges)
@@ -61,6 +62,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("POST /api/generate/{section}", h.PostSectionGenerate)
 	mux.HandleFunc("POST /api/generate/differentiating_idea/suggest", h.PostDifferentiatingIdeaSuggest)
 	mux.HandleFunc("POST /api/generate/differentiating_idea/enhance", h.PostDifferentiatingIdeaEnhance)
+	mux.HandleFunc("POST /api/enhance/text", h.PostEnhanceText)
 	mux.HandleFunc("DELETE /api/progress", h.DeleteProgress)
 	mux.HandleFunc("GET /api/status", h.GetStatus)
 

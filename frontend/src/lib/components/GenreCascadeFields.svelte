@@ -21,6 +21,7 @@
   import SmartCombobox from './SmartCombobox.svelte';
   import SmartSelect from './SmartSelect.svelte';
   import InfoTip from './InfoTip.svelte';
+  import EnhanceButton from './EnhanceButton.svelte';
   import { createEventDispatcher } from 'svelte';
   import { get } from 'svelte/store';
   import { uiLocale, translate } from '../i18n/index.js';
@@ -56,7 +57,11 @@
   // renders it there, bound to the same cfg.tone field). When this flag is set,
   // the cascade hides its own Tone block so the field is not duplicated.
   export let showTone = true;
-  // UI-reorder request: render a daisyUI `<div class="divider">` right before
+  // Optional wand "Enhance" for the free-text specific-settings list (the
+  // parent passes the same handler used by the other Novel parameters fields).
+  export let onEnhance = null;
+  export let enhanceBusy = false;
+  // UI-reorder request: render a SneakyUI `<div class="divider">` right before
   // the "Specific settings" block (both flat and card layouts). Used when the
   // cascade sits inside a larger field grid so the section gets a visual rule.
   export let dividerBeforeSettings = false;
@@ -847,6 +852,14 @@
   // would silently disappear from the UI while still being saved.
   let freeSettingsText = '';
   let freeSettingsDirty = false;
+  let settingsFocused = false;
+  function settingsFocusOut(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) settingsFocused = false;
+  }
+  function enhanceSettings() {
+    applyFreeSettings();
+    if (onEnhance) onEnhance('specific_settings', cfg.specific_settings);
+  }
   $: if (!freeSettingsDirty) {
     const known = showSettingShortcuts ? new Set(settingOpts) : new Set();
     freeSettingsText = currentList().filter((x) => !known.has(x)).join('\n');
@@ -1137,14 +1150,19 @@
            storage field as the checkboxes so both stay in sync. The textarea
            placeholder now carries the former ⓘ tooltip text plus the "one per
            line" instruction (user request: no tooltip next to the label). -->
-      <textarea
-        class="textarea textarea-sm w-full text-xs font-mono mt-1"
-        bind:value={freeSettingsText}
-        on:blur={applyFreeSettings}
-        on:input={() => { freeSettingsDirty = true; }}
-        placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
-        disabled={disabled}
-      ></textarea>
+      <div class="relative" on:focusin={() => (settingsFocused = true)} on:focusout={settingsFocusOut}>
+        <textarea
+          class="textarea textarea-sm w-full text-xs font-mono mt-1 pr-10"
+          bind:value={freeSettingsText}
+          on:blur={applyFreeSettings}
+          on:input={() => { freeSettingsDirty = true; }}
+          placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
+          disabled={disabled}
+        ></textarea>
+        {#if settingsFocused || enhanceBusy}
+          <EnhanceButton busy={enhanceBusy} label={labels.enhance || 'Enhance'} on:click={enhanceSettings} />
+        {/if}
+      </div>
     </div>
 
     <!-- UI-reorder: Length & Structure moved OUT of this block — Config.svelte
@@ -1380,14 +1398,19 @@
   <!-- Free-text specific settings (newline-separated tokens), kept in the SAME
        storage field as the checkboxes so both stay in sync. Placeholder carries
        the former ⓘ tooltip text + the "one per line" instruction. -->
-  <textarea
-    class="textarea textarea-sm w-full text-xs font-mono"
-    bind:value={freeSettingsText}
-    on:blur={applyFreeSettings}
-    on:input={() => { freeSettingsDirty = true; }}
-    placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
-    disabled={disabled}
-  ></textarea>
+  <div class="relative" on:focusin={() => (settingsFocused = true)} on:focusout={settingsFocusOut}>
+    <textarea
+      class="textarea textarea-sm w-full text-xs font-mono pr-10"
+      bind:value={freeSettingsText}
+      on:blur={applyFreeSettings}
+      on:input={() => { freeSettingsDirty = true; }}
+      placeholder={labels.settingsTip ? labels.settingsTip + '. ' + (labels.settingsPlaceholder || '') : (labels.settingsPlaceholder || 'custom_setting_per_line')}
+      disabled={disabled}
+    ></textarea>
+    {#if settingsFocused || enhanceBusy}
+      <EnhanceButton busy={enhanceBusy} label={labels.enhance || 'Enhance'} on:click={enhanceSettings} />
+    {/if}
+  </div>
 
   <!-- Tone: free text + per-subgenre suggestion chips (from the resolved
        catalog). Same comma-separated storage as the legacy field. -->

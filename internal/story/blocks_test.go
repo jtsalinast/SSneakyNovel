@@ -31,6 +31,52 @@ func TestSyncChapterBlocksStableIDs(t *testing.T) {
 	}
 }
 
+func TestSceneMetaCollapsedRepair(t *testing.T) {
+	ch := &ChapterState{Num: 1, Status: StatusReview, Content: "Primera escena con prosa.\n\n---\n\nSegunda escena con prosa.", ScenePlan: &ScenePlan{Scenes: []Scene{
+		{ID: 1, Title: "A", Description: "a", WordsBudget: 100},
+		{ID: 2, Title: "B", Description: "b", WordsBudget: 100},
+	}}}
+	SyncChapterBlocks(ch)
+	for i := range ch.Blocks {
+		ch.Blocks[i].ScenePos = 0 // stale tiling from before the plan was regenerated
+	}
+	if !sceneMetaCollapsed(ch) {
+		t.Fatal("collapsed scene metadata not detected")
+	}
+	ch.Status = StatusWriting
+	if sceneMetaCollapsed(ch) {
+		t.Fatal("a partially written chapter must not be re-tiled")
+	}
+	ch.Status = StatusReview
+	repairSceneSpans(ch)
+	if !remapScenePositions(ch) {
+		t.Fatal("existing blocks could not be remapped onto the repaired spans")
+	}
+	seen := map[int]bool{}
+	for _, b := range ch.Blocks {
+		seen[b.ScenePos] = true
+	}
+	if len(seen) != 2 {
+		t.Fatalf("scene chips still collapsed: scene_pos=%v", seen)
+	}
+	if len(ch.Blocks) != 2 {
+		t.Fatalf("remap must keep the existing blocks, got %d", len(ch.Blocks))
+	}
+
+	// A block spanning both scenes must be split, not dropped.
+	ch.Blocks = []Block{{ID: 7, Text: ch.Content}}
+	ch.NextBlockID = 8
+	if !remapScenePositions(ch) {
+		t.Fatal("spanning block could not be remapped")
+	}
+	if len(ch.Blocks) != 2 || ch.Blocks[0].ID != 7 || ch.Blocks[1].ID != 8 {
+		t.Fatalf("spanning block not split with stable IDs: %+v", ch.Blocks)
+	}
+	if ch.Blocks[0].ScenePos == ch.Blocks[1].ScenePos {
+		t.Fatalf("split parts share a scene: %+v", ch.Blocks)
+	}
+}
+
 func TestSyncSingleNewlineFallback(t *testing.T) {
 	ch := chWith("第一行。\n第二行。\n第三行。")
 	if len(ch.Blocks) != 3 || ch.BlockSep != "\n" {

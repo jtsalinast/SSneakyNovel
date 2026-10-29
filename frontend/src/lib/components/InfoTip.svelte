@@ -14,6 +14,9 @@
 
   export let text = '';       // tooltip content (the ~200-char explanation)
   export let label = 'Info';  // aria-label for the trigger button
+  // Dark variant matching the SmartSelect / SmartCombobox summary popovers.
+  export let dark = false;
+  export let width = 240;
   // Optional: when a `trigger` slot is provided, it replaces the default "i"
   // circle as the clickable popover trigger (e.g. the colored trope-issue dots
   // in Writing.svelte). The popover behavior (fixed positioning, click-outside,
@@ -28,7 +31,7 @@
     await tick();
     if (!root) return;
     const r = root.getBoundingClientRect();
-    const W = 240;                       // matches w-56 below
+    const W = width;
     const pad = 8;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -85,8 +88,8 @@
 {#if open && text}
   <span
     role="tooltip"
-    style="position: fixed; left: {popX}px; top: {popY}px; width: 240px; max-width: calc(100vw - 16px);"
-    class="z-[9999] rounded-md border border-base-content/20 bg-base-100 px-2.5 py-2 text-[11px] font-normal leading-snug shadow-lg text-left whitespace-normal normal-case tracking-normal pointer-events-auto"
+    style="position: fixed; left: {popX}px; top: {popY}px; width: {width}px; max-width: calc(100vw - 16px);"
+    class="z-[9999] rounded-xl border px-3.5 py-3 text-[11px] font-normal leading-snug shadow-2xl text-left whitespace-normal normal-case tracking-normal pointer-events-auto {dark ? 'border-white/10 bg-neutral-900 text-white' : 'border-base-content/20 bg-base-100'}"
   >{#each String(text).split(/\n{2,}/) as para, i}{#if i > 0}<br /><br />{/if}{para}{/each}</span>
 {/if}
 

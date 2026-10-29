@@ -584,6 +584,12 @@ func (h *Handlers) PutAPIConfig(w http.ResponseWriter, r *http.Request) {
 		newCfg.HTTPTimeoutSeconds = config.DefaultHTTPTimeoutSeconds
 	}
 	llm.EnsureContextBudget(&newCfg)
+	if b := newCfg.Brainstorm; b != nil {
+		if b.HTTPTimeoutSeconds <= 0 {
+			b.HTTPTimeoutSeconds = config.DefaultHTTPTimeoutSeconds
+		}
+		llm.EnsureContextBudget(b)
+	}
 
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
@@ -2757,6 +2763,18 @@ func (h *Handlers) PutCharacter(w http.ResponseWriter, r *http.Request) {
 			if req.Arc != "" {
 				h.settings.Characters[i].Arc = req.Arc
 			}
+			if req.Want != "" {
+				h.settings.Characters[i].Want = req.Want
+			}
+			if req.Need != "" {
+				h.settings.Characters[i].Need = req.Need
+			}
+			if req.Wound != "" {
+				h.settings.Characters[i].Wound = req.Wound
+			}
+			if req.Agency != "" {
+				h.settings.Characters[i].Agency = req.Agency
+			}
 			if len(req.Extra) > 0 {
 				if h.settings.Characters[i].Extra == nil {
 					h.settings.Characters[i].Extra = map[string]string{}
@@ -3285,6 +3303,13 @@ func (h *Handlers) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// startForcedFastPath reports whether the HTTP chat fast path must start the
+// forced section itself. "enhance" is left to the agent loop's forced call so
+// one click rewrites the field exactly once.
+func startForcedFastPath(call *agent.ToolCall) bool {
+	return call != nil && agent.ForcedSectionName(call) != "enhance"
+}
+
 func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.tryStartTask() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
@@ -3358,7 +3383,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		// generation silently (that silent drop was why Pre-planning's Generate
 		// button showed a spinner but produced no chat activity at all). Any
 		// other error surfaces in the chat as before.
-		if fastForced != nil {
+		if startForcedFastPath(fastForced) {
 			sectionName := agent.ForcedSectionName(fastForced)
 			tcJSON, _ := json.Marshal(fastForced)
 			h.logger.ToolCallStart(sessionID, fastForced.Name, string(tcJSON))
@@ -3378,6 +3403,7 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 					Story:           &h.cfg.Story,
 					CreativityLevel: forcedSectionCreativity(fastForced),
 					EnhanceText:     forcedSectionEnhance(fastForced),
+					EnhanceField:    forcedSectionEnhanceField(fastForced),
 				})
 			}
 			genErr = startOnce()

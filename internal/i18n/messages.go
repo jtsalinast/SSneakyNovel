@@ -151,9 +151,11 @@ var messageCatalog = map[string]map[string]string{
 	"log.chapter_analyze_cancelled": {
 
 		LangEN: "Chapter analysis cancelled"},
-	"log.chapter_analyze_bad_json_retry": {
+	// Shared by ALL bestseller critics (outline, scene plan, chapter, act):
+	// one of the per-pillar editorial calls failed; the rest still ship.
+	"log.critique_pillar_failed": {
 
-		LangEN: "Chapter %d: editor reply was not valid JSON (attempt %d) — asking the model again"},
+		LangEN: "Editorial call for pillar %q failed — this pillar is missing from the report, the others are kept. Re-run the critique to retry it"},
 	"log.chapter_analyze_failed": {
 
 		LangEN: "Chapter analysis failed: %v"},

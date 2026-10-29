@@ -9,15 +9,8 @@
   let categoryFilter = 'all';
 
   const categoryKeys = ['character', 'location', 'item', 'event', 'promise', 'other'];
-  const categoryBadge = {
-    character: 'badge-primary',
-    location: 'badge-secondary',
-    item: 'badge-accent',
-    event: 'badge-info',
-    promise: 'badge-warning',
-    other: 'badge-ghost',
-  };
-
+  // Category tags borrow the chapter-writing critic-mark hues (.wash-*).
+  const categoryWash = (c) => ({ character: 'wash-violet', location: 'wash-green', item: 'wash-amber', event: 'wash-blue', promise: 'wash-pink' }[c] || 'badge-ghost');
   $: entries = $progress?.memory_entries || [];
   $: maxTokens = $progress?.memory_max_tokens || 0;
   $: categoryCounts = categoryKeys.reduce((acc, key) => {
@@ -64,7 +57,7 @@
   }
 </script>
 
-<div id="MemoryPage" class="space-y-4">
+<div id="MemoryPage" class="space-y-4 page-width">
   <div id="CardSection_MemoryOverview" class="card bg-base-200">
     <div class="card-body py-4 gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -140,8 +133,8 @@
                   <tr>
                     <td class="font-mono text-xs">{e.id}</td>
                     <td class="whitespace-nowrap">
-                      <!-- DaisyUI 5 badge fixed height with no nowrap；in narrow columns CJK text wraps per character into vertical stacks -->
-                      <span class="badge badge-sm {categoryBadge[e.category] || 'badge-ghost'} whitespace-nowrap">
+                      <!-- SneakyUI 5 badge fixed height with no nowrap；in narrow columns CJK text wraps per character into vertical stacks -->
+                      <span class="badge badge-sm whitespace-nowrap {categoryWash(e.category)}">
                         {$t('memory.category.' + (e.category || 'other'))}
                       </span>
                     </td>

@@ -53,11 +53,15 @@ func (r OutlineRecommendation) CastSummary() string {
 // OutlineSuggestion is one point of the editor's feedback: what works / what
 // must change and, when it applies, exactly what to replace in which chapter.
 type OutlineSuggestion struct {
-	ID                string                  `json:"id"`
-	Category          string                  `json:"category"` // hook|pacing|character|stakes|structure|market|tone|other
-	Title             string                  `json:"title"`
-	Detail            string                  `json:"detail"`
-	Action            string                  `json:"action"`
+	ID       string `json:"id"`
+	Category string `json:"category"` // hook|pacing|character|stakes|structure|market|tone|other
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Action   string `json:"action"`
+	// Evidence is the verbatim excerpt (prose) or exact planned beat
+	// (outline/beat sheet) that proves this point. Required by the multi-call
+	// editorial pass: feedback without evidence is not persisted as actionable.
+	Evidence          string                  `json:"evidence,omitempty"`
 	Status            string                  `json:"status"` // pending | applied
 	AppliedAt         string                  `json:"applied_at,omitempty"`
 	AppliesToChapters []int                   `json:"applies_to_chapters,omitempty"`
@@ -264,6 +268,13 @@ Rules:
 		pillarContractPromptBlockEN(structureName), structureName, lang, lang)
 }
 
+// buildOutlineEditorPromptForPillar returns the outline prompt scoped for one
+// call of the editorial sequence: pillarKey == "" is the first-impression call,
+// any pillar key is that pillar's single-pillar pass.
+func buildOutlineEditorPromptForPillar(cfg *config.Config, state *Progress, settings *ProjectSettings, lang, pillarKey string) string {
+	return buildOutlineEditorPrompt(cfg, state, settings, lang) + editorialScopeOverride(lang, pillarKey)
+}
+
 func editorPersona(lang string) string {
 	if strings.HasPrefix(lang, "es") {
 		return "un célebre editor literario mundial"
@@ -296,28 +307,22 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 			settingsForPrompt = selected
 		}
 	}
-	prompt := buildOutlineEditorPrompt(cfg, state, settingsForPrompt, lang)
+	prompt := buildOutlineEditorPromptForPillar(cfg, state, settingsForPrompt, lang, "")
 	system := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing an OUTLINE (per-chapter planning synopses), NOT drafted prose — never critique sentences, dialogue or writing style. Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.outline_analyze_running")
 	var result OutlineAnalysisReport
-	for attempt := 0; attempt < 2; attempt++ {
-		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, prompt, logger)
-		if raw == "" {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("API call failed or was canceled")
+	raw, err := editorialSequence(ctx, apiCfg, logger, system, lang, func(pillarKey string) string {
+		if pillarKey == "" {
+			return prompt
 		}
-		j := llm.ExtractJSON(raw)
-		result = OutlineAnalysisReport{}
-		if j != "" && json.Unmarshal([]byte(j), &result) == nil && len(result.Suggestions) >= 0 && (result.Summary != "" || len(result.Suggestions) > 0) {
-			break
-		}
-		if attempt == 1 {
-			return fmt.Errorf("model response is not valid outline-analysis JSON")
-		}
-		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
+		return buildOutlineEditorPromptForPillar(cfg, state, settingsForPrompt, lang, pillarKey)
+	})
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal([]byte(raw), &result) != nil || (result.Summary == "" && len(result.Suggestions) == 0) {
+		return fmt.Errorf("model response is not valid outline-analysis JSON")
 	}
 
 	// Sanitize: drop empty suggestions and invalid categories. Any
@@ -335,6 +340,7 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	for i, s := range result.Suggestions {
 		s.Title = strings.TrimSpace(s.Title)
 		s.Detail = strings.TrimSpace(s.Detail)
+		s.Evidence = strings.TrimSpace(s.Evidence)
 		s.Action = strings.TrimSpace(s.Action)
 		if !validCategory[s.Category] {
 			s.Category = "other"

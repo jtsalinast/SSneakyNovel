@@ -16,6 +16,7 @@ const context = vm.createContext({
   setTimeout, clearTimeout,
   onMount: fn => { mount = fn; }, onDestroy: () => {},
   connectSSE: () => {}, setLocale: () => {},
+  ICONS: { indent: { vb: '', d: '' }, outdent: { vb: '', d: '' } },
   $t: key => key, $uiLocale: 'en',
   api: async (method, url) => {
     calls.push([method, url]);
@@ -31,7 +32,7 @@ const context = vm.createContext({
 for (const [key, value] of Object.entries({
   taskRunning: false, currentProject: null, currentPage: 'writing', progress: null,
   config: null, settings: null, chatSessions: null, currentChatSession: null,
-  projectLanguage: 'zh',
+  projectLanguage: 'zh', ribbon: null, writingToolbar: null,
 })) {
   context[`$${key}`] = value;
   context[key] = { set: value => { context[`$${key}`] = value; } };

@@ -83,6 +83,125 @@ func classifyBlock(text string) string {
 	return BlockParagraph
 }
 
+// sceneMetaCollapsed reports whether every block still belongs to one scene
+// while the plan now has several. That happens when the scene plan was
+// regenerated (or expanded) after the prose had already been tiled: the reader
+// then shows a single "Scene 1" chip and hides the other scene boundaries.
+func sceneMetaCollapsed(ch *ChapterState) bool {
+	// Only complete prose is safe to re-tile: a chapter still being written can
+	// legitimately have all its blocks in scene 1 because later scenes have not
+	// been drafted yet, and repairing it would mislabel that prose.
+	if ch.Status != StatusReview && ch.Status != StatusAccepted {
+		return false
+	}
+	if ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) < 2 || len(ch.Blocks) < 2 {
+		return false
+	}
+	pos := ch.Blocks[0].ScenePos
+	for _, b := range ch.Blocks[1:] {
+		if b.ScenePos != pos {
+			return false
+		}
+	}
+	return true
+}
+
+// remapScenePositions reassigns the existing blocks to the repaired scene
+// spans without re-tiling the prose: block text, IDs and trope labels stay
+// intact, except a block that crosses a scene boundary is split (first part
+// keeps the ID). Returns false (leaving the chapter untouched) when a block
+// cannot be located in the current prose, because a wrong remap is worse than
+// one missing chip.
+func remapScenePositions(ch *ChapterState) bool {
+	paras, sep := splitBlockParagraphs(ch.Content)
+	spans := sceneParaSpans(ch, paras)
+	if spans == nil || len(paras) == 0 || len(ch.Blocks) == 0 {
+		return false
+	}
+	// Locate every existing block by the paragraph its text starts with, in
+	// order; block i then spans [starts[i], starts[i+1]).
+	starts := make([]int, len(ch.Blocks))
+	cursor := 0
+	for i, b := range ch.Blocks {
+		first := strings.Split(b.Text, sep)[0]
+		start := -1
+		for j := cursor; j < len(paras); j++ {
+			if !paraIsBreak(paras[j]) && paras[j] == first {
+				start = j
+				break
+			}
+		}
+		if start < 0 {
+			return false
+		}
+		starts[i] = start
+		cursor = start + 1
+	}
+
+	next := ch.NextBlockID
+	if next <= 0 {
+		next = 1
+	}
+	blocks := make([]Block, 0, len(ch.Blocks)+len(spans))
+	counts := make([]int, len(spans))
+	for i, b := range ch.Blocks {
+		end := len(paras)
+		if i+1 < len(ch.Blocks) {
+			end = starts[i+1]
+		}
+		firstPart := true
+		for pos, sp := range spans {
+			lo, hi := max(starts[i], sp[0]), min(end, sp[1])
+			if lo >= hi {
+				continue
+			}
+			var kept []string
+			for _, p := range paras[lo:hi] {
+				if !paraIsBreak(p) {
+					kept = append(kept, p)
+				}
+			}
+			if len(kept) == 0 {
+				continue
+			}
+			text := strings.Join(kept, sep)
+			// A block that crosses a scene boundary is split so every scene
+			// owns its own blocks (the chip row needs a block per scene). The
+			// first part keeps the ID, later parts get fresh ones — same rule
+			// SyncChapterBlocks uses for changed prose.
+			id := b.ID
+			if !firstPart {
+				id = next
+				next++
+			}
+			firstPart = false
+			sc := ch.ScenePlan.Scenes[pos]
+			metaOK := hasMeaningfulSceneMeta(sc)
+			blocks = append(blocks, Block{
+				ID: id, Type: classifyTropeBlock(text), Text: text,
+				ScenePos: pos, SceneTitle: sceneDisplayTitle(sc, pos),
+				SceneDescription: strings.TrimSpace(sc.Description),
+				SceneHasMeta: &metaOK, TropeLabel: b.TropeLabel,
+			})
+			counts[pos]++
+		}
+	}
+	if len(blocks) == 0 {
+		return false
+	}
+	seen := make([]int, len(spans))
+	for i := range blocks {
+		pos := blocks[i].ScenePos
+		seen[pos]++
+		blocks[i].TropeIndex = seen[pos]
+		blocks[i].TropeCount = counts[pos]
+	}
+	ch.Blocks = blocks
+	ch.NextBlockID = next
+	ch.BlockSep = sep
+	return true
+}
+
 // SyncChapterBlocks re-derives ch.Blocks from ch.Content, preserving the IDs
 // of blocks whose text is unchanged (first-unused exact match, in order).
 //

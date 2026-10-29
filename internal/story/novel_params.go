@@ -207,6 +207,16 @@ func NovelParametersBlock(cfg *config.Config) string {
 		add("[OBRAS DE INSPIRACIÓN] "+v+" (úsalas como referencia de estilo/atmósfera/oficio: toma su tono y técnicas, pero nunca copies sus tramas, personajes ni configuraciones propias)",
 			"[INSPIRATIONAL PIECES] "+v+" (use them as style/atmosphere/craft reference points: borrow their tone and techniques, never copy their plots, characters or proprietary settings)")
 	}
+	if strings.EqualFold(strings.TrimSpace(sc.WorkType), "fanfic") {
+		src := strings.TrimSpace(sc.FanficSource)
+		fromES, fromEN := "", ""
+		if src != "" {
+			fromES = " basada en \"" + src + "\""
+			fromEN = " based on \"" + src + "\""
+		}
+		add("[FAN FICTION] Esta obra es fan fiction"+fromES+". Trata los personajes, las reglas del mundo y el canon de la obra original como fijos: mantenlos en carácter, no contradigas el canon sin una razón explícita dentro de la historia y no reproduzcas texto con derechos de autor de forma literal. La trama debe ser original.",
+			"[FAN FICTION] This is a fan work"+fromEN+". Treat the source's established characters, world rules and canon as fixed: keep them in character, never contradict canon without an explicit in-story reason, and never reproduce copyrighted text verbatim. The plot must be original.")
+	}
 	if v := strings.TrimSpace(sc.Author); v != "" {
 		add("[AUTOR/AUTORÍA] "+v, "[AUTHOR] "+v)
 	}

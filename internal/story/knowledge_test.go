@@ -439,9 +439,9 @@ func TestGenerateChapterReviewAfterMemorySync(t *testing.T) {
 					}
 					return walkScene
 				case strings.HasPrefix(prompt, "You are a world-famous literary editor"):
-						// Evolved bestseller critic (factcheck_critic.go): PASS verdict.
-						return `{"result":"PASS","scope":"none","issues":[],"summary":"clean"}`
-					case strings.HasPrefix(prompt, "You are a novel editor"):
+					// Evolved bestseller critic (factcheck_critic.go): PASS verdict.
+					return `{"result":"PASS","scope":"none","issues":[],"summary":"clean"}`
+				case strings.HasPrefix(prompt, "You are a novel editor"):
 					// Whole-chapter length adjuster: keep the draft as-is.
 					return content
 				case strings.HasPrefix(prompt, "TEST_PROSE"):

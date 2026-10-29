@@ -1,4 +1,4 @@
-// Lightweight tooltip helper (daisyUI-style): shows a small floating bubble
+// Lightweight tooltip helper (SneakyUI-style): shows a small floating bubble
 // near the hovered element and hides it on leave/click/scroll. Used for the
 // novel-parameter fields (subgenre presets, narrative structures, etc.) so
 // each option explains itself without cluttering the UI.

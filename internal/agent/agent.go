@@ -11,6 +11,7 @@ import (
 	"showmethestory/internal/llm"
 	"showmethestory/internal/sse"
 	"showmethestory/internal/story"
+	"strconv"
 	"strings"
 )
 
@@ -41,6 +42,10 @@ type SectionGenRequest struct {
 	// author's own draft carried in this field, keeping every idea already
 	// expressed. Empty = normal creation. Ignored by every other section.
 	EnhanceText string
+	// EnhanceField is the StoryConfig JSON key rewritten by the "enhance"
+	// section (the wand button on every Novel parameters field). The draft is
+	// read from the saved config when EnhanceText is empty.
+	EnhanceField string
 	// WorldviewCategory optionally overrides the category derived from a
 	// per-category worldview section key (wv_geography, ...). The HTTP layer
 	// accepts it in the request body; empty means derive it from Section.
@@ -165,6 +170,10 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 
 	// ponytail: one parse-retry per loop; ceiling = still-broken after retry → hard error (no silent final reply).
 	parseRetryUsed := false
+	// A tagged turn only needs one summary call; after two failures the
+	// deterministic reply stands in, instead of hammering a failing endpoint
+	// for all maxSteps (the click already did its work on step 0).
+	apiFailures := 0
 
 	for step := 0; step < maxSteps; step++ {
 		if goCtx.Err() != nil {
@@ -214,10 +223,11 @@ func RunAgentLoop(goCtx context.Context, ctx *AgentContext, userMessage string, 
 			}
 			if forcedCall != nil {
 				// Tagged turn: the generate_section tool already ran. Give the
-				// summary LLM one more chance on the next step; if every model
-				// call fails, fall through to the deterministic reply below so
-				// the click still shows an assistant message in the chat.
-				if fallbackReply != "" && step >= maxSteps-1 {
+				// summary LLM a bounded number of chances; if the calls keep
+				// failing, fall through to the deterministic reply below so the
+				// click still shows an assistant message in the chat.
+				apiFailures++
+				if fallbackReply != "" && (apiFailures >= 2 || step >= maxSteps-1) {
 					break
 				}
 				continue
@@ -335,6 +345,7 @@ var generateSectionValid = map[string]bool{
 	"wv_knowledge": true, "wv_history": true, "wv_other": true,
 	"motif": true, "story_idea": true, "audience_profile": true, "inspirational_pieces": true,
 	"reader_expectation": true, "differentiating_idea": true,
+	"enhance":      true,
 	"pre_planning": true,
 }
 
@@ -423,6 +434,19 @@ func ForcedSectionName(call *ToolCall) string {
 	return forcedSectionName(call)
 }
 
+// setTagArg stores one parsed tag parameter. Numeric parameters must stay
+// numbers: consumers decode them into int struct fields, and a JSON string
+// silently fell back to Balanced / failed the generate_section tool.
+func setTagArg(args map[string]any, key, value string) {
+	if key == "creativity" {
+		if n, err := strconv.Atoi(value); err == nil {
+			args[key] = n
+			return
+		}
+	}
+	args[key] = value
+}
+
 func parseGenerateSectionTag(userMessage string) *ToolCall {
 	const marker = "[generate-section:"
 	idx := strings.Index(userMessage, marker)
@@ -445,7 +469,7 @@ func parseGenerateSectionTag(userMessage string) *ToolCall {
 	if !generateSectionValid[section] {
 		return nil
 	}
-	argsMap := map[string]string{"section": section}
+	argsMap := map[string]any{"section": section}
 	for _, kv := range parts[1:] {
 		kv = strings.TrimSpace(kv)
 		if kv == "" {
@@ -455,7 +479,7 @@ func parseGenerateSectionTag(userMessage string) *ToolCall {
 		if eq < 0 {
 			continue
 		}
-		argsMap[strings.TrimSpace(kv[:eq])] = strings.TrimSpace(kv[eq+1:])
+		setTagArg(argsMap, strings.TrimSpace(kv[:eq]), strings.TrimSpace(kv[eq+1:]))
 	}
 	// The Story appeal card may also append the level OUTSIDE the tag (e.g.
 	// "... [generate-section:differentiating_idea] [creativity=4]") because the
@@ -464,7 +488,7 @@ func parseGenerateSectionTag(userMessage string) *ToolCall {
 		if mi := strings.Index(userMessage, "[creativity="); mi >= 0 {
 			rest2 := userMessage[mi+len("[creativity="):]
 			if e2 := strings.Index(rest2, "]"); e2 >= 0 {
-				argsMap["creativity"] = strings.TrimSpace(rest2[:e2])
+				setTagArg(argsMap, "creativity", strings.TrimSpace(rest2[:e2]))
 			}
 		}
 	}
@@ -1537,8 +1561,8 @@ func getBuiltinTools() []Tool {
 		},
 		{
 			Name:        "generate_section",
-			Description: "AI generation section blocks (style/characters/organizations/relations/locations/worldview/motif/story_idea/audience_profile/inspirational_pieces/reader_expectation/differentiating_idea/pre_planning): generate the content of a given block type based on the current story parameters; pre_planning plans the book-level structure, chapter count, long-term direction and per-batch synopses before writing. motif fills theme/literary motif/tone plus the philosophical dilemma and reader expectation; story_idea fills the abstract overview plus forces in tension, elevator pitch and lighthouse sentence; reader_expectation generates ONLY the target reader's expectation field; differentiating_idea generates ONLY the differentiating idea (Story appeal) and accepts an optional creativity level 1-5 (1 Pragmatic .. 5 Disruptive, default 3 Balanced) via the creativity parameter — it never touches other fields. First confirm the target book number, then fill in the novel parameters and write into the corresponding fields/body. Optional direct references: character_id/org_id/entry_id (only for entries that already exist with empty fields), source_id+target_id (only when these two characters have a relationship), name+category or entry_id (single worldview entry; without them, worldview batch-generates entries across all categories). Per-category worldview sections also exist: wv_geography/wv_location/wv_faction/wv_rule/wv_knowledge/wv_history/wv_other generate ONLY entries of that worldview category.",
-			Parameters:  `{"section":"characters","character_id":"","org_id":"","entry_id":"","source_id":"","target_id":"","name":"","category":"","creativity":0}`,
+			Description: "AI generation section blocks (style/characters/organizations/relations/locations/worldview/motif/story_idea/audience_profile/inspirational_pieces/reader_expectation/differentiating_idea/pre_planning): generate the content of a given block type based on the current story parameters; pre_planning plans the book-level structure, chapter count, long-term direction and per-batch synopses before writing. motif fills theme/literary motif/tone plus the philosophical dilemma and reader expectation; story_idea fills the abstract overview plus forces in tension, elevator pitch and lighthouse sentence; reader_expectation generates ONLY the target reader's expectation field; differentiating_idea generates ONLY the differentiating idea (Story appeal) and accepts an optional creativity level 1-5 (1 Pragmatic .. 5 Disruptive, default 3 Balanced) via the creativity parameter — it never touches other fields. First confirm the target book number, then fill in the novel parameters and write into the corresponding fields/body. Optional direct references: character_id/org_id/entry_id (only for entries that already exist with empty fields), source_id+target_id (only when these two characters have a relationship), name+category or entry_id (single worldview entry; without them, worldview batch-generates entries across all categories). Per-category worldview sections also exist: wv_geography/wv_location/wv_faction/wv_rule/wv_knowledge/wv_history/wv_other generate ONLY entries of that worldview category. enhance rewrites ONE existing Novel parameters field in place: pass field with the StoryConfig key (theme, motif, philosophical_dilemma, tone, specific_settings, inspirational_pieces, audience_profile, reader_expectation, differentiating_idea, story_idea, forces_in_tension, elevator_pitch, lighthouse_sentence, writing_style, writing_pov).",
+			Parameters:  `{"section":"characters","character_id":"","org_id":"","entry_id":"","source_id":"","target_id":"","name":"","category":"","creativity":0,"field":"","enhance":""}`,
 			Execute: func(args json.RawMessage, ctx *AgentContext) (string, error) {
 				var params struct {
 					Section     string `json:"section"`
@@ -1550,12 +1574,14 @@ func getBuiltinTools() []Tool {
 					Name        string `json:"name"`
 					Category    string `json:"category"`
 					Creativity  int    `json:"creativity"`
+					Field       string `json:"field"`
+					Enhance     string `json:"enhance"`
 				}
 				if err := json.Unmarshal(args, &params); err != nil {
 					return "", agentErr(ctx, "invalid_json", err)
 				}
 				switch params.Section {
-				case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "pre_planning":
+				case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "enhance", "pre_planning":
 				default:
 					if !IsWorldviewCategorySection(params.Section) {
 						return "", agentErr(ctx, "unknown_field", fmt.Errorf("unsupported section %q", params.Section))
@@ -1593,6 +1619,8 @@ func getBuiltinTools() []Tool {
 					CharacterID:     params.CharacterID,
 					OrgID:           params.OrgID,
 					CreativityLevel: params.Creativity,
+					EnhanceText:     params.Enhance,
+					EnhanceField:    params.Field,
 					Ctx:             ctx.SectionGenCtx,
 				}
 				runner := ctx.StartSectionGenerate

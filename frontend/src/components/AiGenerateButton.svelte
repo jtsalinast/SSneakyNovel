@@ -19,6 +19,12 @@
   // existing .hover-target mechanism in Config.svelte. The host must live
   // inside one of those groups.
   export let hoverReveal = false;
+  // Expanded width. Buttons anchored to the right edge (flex justify-end)
+  // keep that edge fixed and grow leftwards, so longer labels need more room.
+  export let expandedWidth = 132;
+  // "Send to AI" variant: white paper-plane icon + white label on the same
+  // black pill (no aurora sparkles).
+  export let plane = false;
 
   // Reactive labels. Keep the store subscription on its own `$:` line: a
   // comma-joined statement like `$: $uiLocale, labelText = ...` only assigns
@@ -50,9 +56,11 @@
 <button
   type="button"
   class="ai-btn"
+  style="--ai-expanded-width: {expandedWidth}px"
   class:hovered
   class:clicked
   class:is-busy={busy}
+  class:is-plane={plane}
   class:hover-target={hoverReveal}
   aria-label={labelText}
   {title}
@@ -79,6 +87,10 @@
     <span class="sparks-container">
       {#if busy}
         <span class="loading loading-spinner loading-xs"></span>
+      {:else if plane}
+        <svg class="plane-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M22 2 11 13" /><path d="M22 2 15 22 11 13 2 9 22 2Z" />
+        </svg>
       {:else}
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <svg class="spark-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -132,7 +144,7 @@
   }
 
   .ai-btn.hovered:not(:disabled) {
-    width: 132px;
+    width: var(--ai-expanded-width, 132px);
     border-color: rgba(255, 255, 255, 0.22);
     background: #14171d;
     box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.25),
@@ -149,7 +161,21 @@
   }
 
   .ai-btn.is-busy {
-    width: 132px;
+    width: var(--ai-expanded-width, 132px);
+  }
+
+  /* Inverted "Submit to AI" variant: white pill with grey icon and label. */
+  .ai-btn.is-plane {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.12);
+    color: #4b5563;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+
+  .ai-btn.is-plane.hovered:not(:disabled) {
+    background: #f9fafb;
+    border-color: rgba(0, 0, 0, 0.2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   }
 
   .btn-content {
@@ -199,6 +225,18 @@
     width: 20px;
     height: 20px;
     overflow: visible;
+  }
+
+  .plane-icon {
+    width: 20px;
+    height: 20px;
+    color: #4b5563;
+  }
+
+  .ai-btn.is-plane .label {
+    background: none;
+    -webkit-text-fill-color: #4b5563;
+    color: #4b5563;
   }
 
   .orbit-wrapper,

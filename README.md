@@ -1,10 +1,10 @@
 [English](README.md)
 
 <p align="center">
-  <img src="docs/show-me-the-story.webp" alt="Show Me The Story" width="240">
+  <img src="docs/sssnovelstudio.webp" alt="SSSNovelStudio" width="240">
 </p>
 
-# Show Me The Story
+# SSSNovelStudio
 
 <p align="center"><a href="docs/guide.en.md">User guide</a> · <a href="https://github.com/Nigh/show-me-the-story/releases">Download releases</a></p>
 
@@ -89,7 +89,7 @@ If Windows reports an unknown publisher, verify the download source. After decid
 
 ## Development
 
-Go 1.25.1 with the standard library; Vite 5, Svelte 4, Tailwind CSS 4, DaisyUI 5, and `@xianii/design-system`. Frontend assets and built-in skills are embedded in the executable.
+Go 1.25.1 with the standard library; Vite 5, Svelte 4, Tailwind CSS 4, SneakyUI 5, and `@xianii/design-system`. Frontend assets and built-in skills are embedded in the executable.
 
 Install Go and Node.js, optionally [Task](https://taskfile.dev/):
 

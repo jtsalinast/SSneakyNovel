@@ -183,7 +183,7 @@ func newScenePlanFixture(t *testing.T) (*config.Config, *Progress, string) {
 	cfg := config.DefaultConfig()
 	cfg.Language = "en"
 	state := &Progress{
-		Phase:             "writing",
+		Phase:               "writing",
 		CurrentChapterIndex: 0,
 		Chapters: []ChapterState{
 			{Num: 1, Title: "The Gate", Outline: "Ka reaches the gate, crosses with Rin, survives an ambush.", Status: StatusPending},

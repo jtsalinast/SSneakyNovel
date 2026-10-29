@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"showmethestory/internal/config"
-	"showmethestory/internal/llm"
 	"showmethestory/internal/sse"
 )
 
@@ -194,6 +193,13 @@ Reglas:
 		structureName, strings.ReplaceAll(schemaEN, "LANGUAGE", "español"), ch.Num)
 }
 
+// buildChapterPlanEditorPromptForPillar returns the chapter prompt scoped for
+// one call of the editorial sequence: pillarKey == "" is the first-impression
+// call, any pillar key is that pillar's single-pillar pass.
+func buildChapterPlanEditorPromptForPillar(cfg *config.Config, state *Progress, settings *ProjectSettings, idx int, lang, pillarKey string) string {
+	return buildChapterPlanEditorPrompt(cfg, state, settings, idx, lang) + editorialScopeOverride(lang, pillarKey)
+}
+
 // AnalyzeChapterPlan runs the bestseller-editor pass over ONE drafted chapter
 // in ONE LLM call — the exact flow of the scene-plan critic (AnalyzePending
 // ScenePlans) adapted to the chapter rubric — and stores the report on that
@@ -233,28 +239,22 @@ func AnalyzeChapterPlan(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 			settingsForPrompt = selected
 		}
 	}
-	prompt := buildChapterPlanEditorPrompt(cfg, state, settingsForPrompt, idx, lang)
+	prompt := buildChapterPlanEditorPromptForPillar(cfg, state, settingsForPrompt, idx, lang, "")
 	system := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing ONE DRAFTED CHAPTER (actual manuscript prose) of a novel in progress. Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.chapter_analyze_running", ch.Num)
 	var result ChapterAnalysisReport
-	for attempt := 0; attempt < 2; attempt++ {
-		raw := llm.CallAPIWithRetryLog(ctx, apiCfg, system, prompt, logger)
-		if raw == "" {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("API call failed or was canceled")
+	raw, err := editorialSequence(ctx, apiCfg, logger, system, lang, func(pillarKey string) string {
+		if pillarKey == "" {
+			return prompt
 		}
-		j := llm.ExtractJSON(raw)
-		result = ChapterAnalysisReport{}
-		if j != "" && json.Unmarshal([]byte(j), &result) == nil && (result.Summary != "" || len(result.Suggestions) > 0) {
-			break
-		}
-		if attempt == 1 {
-			return fmt.Errorf("model response is not valid chapter-analysis JSON")
-		}
-		prompt += "\n\nYour previous response was invalid. Return one complete JSON object only, using the required schema."
+		return buildChapterPlanEditorPromptForPillar(cfg, state, settingsForPrompt, idx, lang, pillarKey)
+	})
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal([]byte(raw), &result) != nil || (result.Summary == "" && len(result.Suggestions) == 0) {
+		return fmt.Errorf("model response is not valid chapter-analysis JSON")
 	}
 
 	// Sanitize: the initial pass is advice-only; bundled interventions are
@@ -268,6 +268,7 @@ func AnalyzeChapterPlan(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	for i, s := range result.Suggestions {
 		s.Title = strings.TrimSpace(s.Title)
 		s.Detail = strings.TrimSpace(s.Detail)
+		s.Evidence = strings.TrimSpace(s.Evidence)
 		s.Action = strings.TrimSpace(s.Action)
 		if !validToneCategories[s.Category] {
 			s.Category = "other"

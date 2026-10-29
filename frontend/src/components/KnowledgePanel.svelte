@@ -45,23 +45,23 @@
   }
 </script>
 
-<details class="bg-base-100 rounded" open={expanded} on:toggle={e => expanded = e.currentTarget.open}>
-  <summary class="p-2 text-xs text-base-content/60 cursor-pointer select-none flex items-center gap-2">
+<details class="bg-neutral-50 border border-neutral-100 rounded-lg" open={expanded} on:toggle={e => expanded = e.currentTarget.open}>
+  <summary class="p-6 text-xs text-base-content/60 cursor-pointer select-none flex items-center gap-2">
     <span class="flex-1">{$t('facts.title')}</span>
     <span class="badge badge-ghost badge-sm">{$t('facts.count', {count: facts.length})}</span>
     {#if pending.length}<span class="badge badge-warning badge-sm">{$t('facts.pendingCount', {count: pending.length})}</span>{/if}
     {#if changes.length}<span class="badge badge-warning badge-outline badge-sm">{$t('facts.changeCount', {count: changes.length})}</span>{/if}
   </summary>
-  <div class="border-t border-base-content/10 p-3 space-y-3 text-sm">
+  <div class="border-t border-base-content/10 p-6 space-y-4 text-sm">
     {#if pending.length}
       <div class="flex flex-wrap items-center gap-2 text-warning">{$t('facts.pending', {chapters: pending.join(', ')})}
         <button class="btn btn-xs" disabled={$taskRunning} on:click={retry}>{$t('facts.retry')}</button>
       </div>
     {/if}
     {#if facts.length === 0}<p class="text-base-content/60">{$t('facts.empty')}</p>{/if}
-    <div class="flex flex-col items-start gap-2">
+    <div class="flex flex-col items-start gap-3">
       {#each facts as f}
-        <button class="btn btn-outline btn-sm h-auto min-h-8 max-w-full py-2 text-left justify-start whitespace-normal break-words font-normal" aria-pressed={activeFact?.id === f.id} class:btn-primary={activeFact?.id === f.id} on:click={() => activeFact = activeFact?.id === f.id ? null : f}>#{f.id} {f.content}</button>
+        <button class="fact-chip btn btn-outline btn-sm h-auto min-h-8 max-w-full py-2 text-left justify-start whitespace-normal break-words font-normal" aria-pressed={activeFact?.id === f.id} class:btn-primary={activeFact?.id === f.id} on:click={() => activeFact = activeFact?.id === f.id ? null : f}>#{f.id} {f.content}</button>
       {/each}
     </div>
     {#if activeFact}
@@ -101,3 +101,15 @@
     {/if}
   </div>
 </details>
+
+<style>
+  .fact-chip:hover {
+    background-color: #ffffff !important;
+    border-color: color-mix(in oklab, currentColor 45%, transparent) !important;
+    color: inherit !important;
+  }
+  .fact-chip.btn-primary:hover {
+    background-color: var(--color-primary) !important;
+    color: var(--color-primary-content) !important;
+  }
+</style>
