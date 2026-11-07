@@ -16,7 +16,7 @@ func TestStoryEnhanceFieldRoundTrip(t *testing.T) {
 		"theme", "motif", "philosophical_dilemma", "tone", "specific_settings",
 		"inspirational_pieces", "audience_profile", "reader_expectation",
 		"differentiating_idea", "story_idea", "forces_in_tension", "elevator_pitch",
-		"lighthouse_sentence", "writing_style", "writing_pov",
+		"lighthouse_sentence", "writing_style", "writing_pov", "author_hidden_agenda",
 	}
 	for _, field := range fields {
 		want := "draft-" + field

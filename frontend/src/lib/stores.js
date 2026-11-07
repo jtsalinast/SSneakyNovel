@@ -22,6 +22,11 @@ export const streamingContent = writable('');
 export const streamingChapterIdx = writable(-1);
 // Cumulative tokens for the current task (sent/received), updated via SSE token_usage
 export const taskTokenUsage = writable(null);
+// Live tokens for the current Brainstorm request set (dedicated SSE channel).
+export const brainstormTokens = writable(null);
+// Writing's selection toolbar asks the Brainstorm panel to open with a preset
+// action/text. nonce makes each request distinct even with equal payloads.
+export const brainstormIntent = writable(null);
 // Auto-confirm mode: each chapter auto-confirms after generation, then the next begins
 export const autoConfirm = writable(false);
 
@@ -70,6 +75,11 @@ export const foreshadowShowSuggestions = writable(false);
 
 export const outlineCharacterSuggestions = writable([]);
 export const outlineCharacterShowSuggestions = writable(false);
+
+// Latest beta-reader progress event ({act_no, stage, index, total, detail}).
+// The Writing act-review checklist reads it; it is cleared when a new task
+// starts so a stale act can never show another act's progress.
+export const betaProgress = writable(null);
 
 export const pendingConfigChanges = writable([]);
 export const showConfigChangePanel = writable(false);

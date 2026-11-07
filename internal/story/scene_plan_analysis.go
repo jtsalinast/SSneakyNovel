@@ -169,6 +169,25 @@ func buildScenePlanEditorPrompt(cfg *config.Config, state *Progress, settings *P
 
 // buildScenePlanEditorPromptFor restricts the plans under review to a single
 // chapter when onlyCh > 0 (per-chapter scene-plan critique).
+// scenePlanGroundingMaterial is the planning text a scene-plan suggestion may
+// quote: chapter outline plus every planned scene beat.
+func scenePlanGroundingMaterial(state *Progress, onlyCh int) string {
+	var b strings.Builder
+	for _, ch := range state.Chapters {
+		if ch.Status == StatusAccepted || ch.ScenePlan == nil || len(ch.ScenePlan.Scenes) == 0 {
+			continue
+		}
+		if onlyCh > 0 && ch.Num != onlyCh {
+			continue
+		}
+		fmt.Fprintf(&b, "Chapter #%d \"%s\"\n%s\n", ch.Num, ch.Title, strings.TrimSpace(ch.Outline))
+		for _, s := range ch.ScenePlan.Scenes {
+			fmt.Fprintf(&b, "%s | %s | %s\n", s.Title, strings.TrimSpace(s.Description), s.PoV)
+		}
+	}
+	return b.String()
+}
+
 func buildScenePlanEditorPromptFor(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string, onlyCh int) string {
 	scopeNote := scenePlanScopeNote(onlyCh)
 	// prevChecklist embeds the previous pass's graded rubric (when any) so a
@@ -258,7 +277,7 @@ Analyze the plans against ALL parameters above, giving special weight to these f
 Also weigh: outline coverage fidelity, scene count and budget realism, POV clarity, chapter-ending hooks.
 
 Return STRICT JSON only (no markdown fences, no prose):
-{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the plans currently do and why they fall short of bestseller level","action":"concrete guidance on which scenes to change and how","applies_to_chapters":[3,4]}]}
+{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"...","detail":"...","action":"...","applies_to_chapters":[3,4]}]}
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
 - Score each of the four pillars 0-100 against BESTSELLER level, not "competent". 90+ means the PLANS are genuinely strong as-is. Reserve 90+ for truly exceptional planning; most plans land mid-range. Derive every score independently from THESE specific plans: the pillar number must equal the average of its criteria_levels, so re-grading corrected plans raises exactly the items that improved. Redundant scenes, vague beats, unrealistic budgets or weak chapter-ending hooks cap scores below 85.
@@ -274,14 +293,14 @@ Rules:
 - Write summary, titles, details and actions in the SAME language as the plans above.
 - If the plans are genuinely strong, say so and return fewer, higher-value suggestions.%s`,
 		editorPersona(lang), meta.String(), structureName, planned, planBuf.String(), prevChecklist,
-		pillarContractPromptBlockEN(structureName), structureName, lang, lang, scopeNote)
+		pillarContractPromptBlockEN(structureName), structureName, ContentLanguageName(lang), ContentLanguageName(lang), scopeNote)
 }
 
 // buildScenePlanEditorPromptForPillar returns the scene-plan prompt scoped for
 // one call of the editorial sequence: pillarKey == "" is the first-impression
 // call, any pillar key is that pillar's single-pillar pass.
 func buildScenePlanEditorPromptForPillar(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string, onlyCh int, pillarKey string) string {
-	return buildScenePlanEditorPromptFor(cfg, state, settings, lang, onlyCh) + editorialScopeOverride(lang, pillarKey)
+	return buildScenePlanEditorPromptFor(cfg, state, settings, lang, onlyCh) + editorialScopeOverride(lang, pillarKey) + ReportLanguageRule(lang)
 }
 
 // scenePlanScopeNote is appended to the prompt rules when the pass is
@@ -379,7 +398,7 @@ func analyzeScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 		logger.InfoKey("log.sceneplan_analyze_unchanged")
 		return nil
 	}
-	lang := cfg.Language
+	lang := ContentLanguage(cfg)
 	settingsForPrompt := settings
 	if settings != nil {
 		if selected, _ := retrieveSettings(settings, collectAllOutlines(state), settingsContextRunes); selected != nil {
@@ -396,7 +415,7 @@ func analyzeScenePlans(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 			return prompt
 		}
 		return buildScenePlanEditorPromptForPillar(cfg, state, settingsForPrompt, lang, onlyCh, pillarKey)
-	})
+	}, scenePlanGroundingMaterial(state, onlyCh))
 	if err != nil {
 		return err
 	}
@@ -591,6 +610,7 @@ func ProposeScenePlanReplacements(ctx context.Context, apiCfg *config.APIConfig,
 	}
 
 	sc := cfg.Story
+	lang := ContentLanguage(cfg)
 	prompt := fmt.Sprintf(`You are %s. You previously gave the author this editorial point about their novel's SCENE PLANS (per-chapter beat sheets — the prose is NOT written yet, so never critique sentences, dialogue or writing style):
 
 POINT: %s
@@ -610,14 +630,15 @@ This point currently has NO concrete replacement proposals. Every replacement yo
 
 Return STRICT JSON only (no markdown fences): {"recommendations":[{"chapter_num":3,"scene_id":2,"present":true,"new_title":"...","new_description":"...","new_pov":"...","new_words_budget":900,"merge_into_scene_id":1}]}
 "merge_into_scene_id" is OPTIONAL and only used for absorbed scenes in a merge; omit it (or 0) for plain replacements. Only include chapters/scenes that exist in the plans above.`,
-		editorPersona(cfg.Language), s.Title, s.Detail, s.Action,
-		sc.Tone, sc.Theme, structureLabel(sc.Structure, cfg.Language), sc.AudienceProfile, sc.InspirationalPieces,
+		editorPersona(lang), s.Title, s.Detail, s.Action,
+		sc.Tone, sc.Theme, structureLabel(sc.Structure, lang), sc.AudienceProfile, sc.InspirationalPieces,
 		planBuf.String())
 	if s.Pillar != "" {
 		prompt += "\n\nPILLAR THIS POINT BELONGS TO (same rubric as the critique pass):\n" +
 			pillarContractPromptBlockEN("THE SCENE PLANS") +
 			fmt.Sprintf("\nThis point targets pillar \"%s\". Draft replacements that raise its open checklist criteria to 80+.", s.Pillar)
 	}
+	prompt += ReportLanguageRule(lang)
 	system := "You are a world-famous literary editor turning feedback into concrete SCENE-PLAN (beat sheet) rewrites — never manuscript prose. You rewrite planned scenes with one clear goal: make the book a global bestseller on the pillar under discussion, not just fix the complaint. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.sceneplan_analyze_proposing")

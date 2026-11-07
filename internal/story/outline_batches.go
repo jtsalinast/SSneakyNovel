@@ -35,7 +35,10 @@ type OutlineBatchRequest struct {
 	EndingIntent       string `json:"ending_intent"`
 	EndingStyle        string `json:"ending_style"`
 	EndingRequirements string `json:"ending_requirements"`
-	ConfirmContinue    bool   `json:"confirm_continue"`
+	// Guidance is the author's optional pre-generation instruction for this
+	// batch ("open on the funeral, keep the duel for the last chapter").
+	Guidance        string `json:"guidance"`
+	ConfirmContinue bool   `json:"confirm_continue"`
 }
 
 // ValidateOutlineBatch never mutates the project. Call again inside the task.
@@ -159,6 +162,9 @@ func GenerateOutlineBatch(ctx context.Context, apiCfg *config.APIConfig, cfg *co
 	template += endingPrompt(OutlineBatch{EndCh: start + req.ChapterCount - 1, EndingIntent: req.EndingIntent, EndingStyle: req.EndingStyle, EndingRequirements: req.EndingRequirements, PlannedFinal: req.EndingIntent == "final" || req.EndingIntent == "sequel"}, 0, cfg.Language)
 	if np := NovelParametersBlock(cfg); np != "" {
 		template += "\n\n" + np
+	}
+	if block := AuthorGuidanceBlock(req.Guidance, cfg.Language); block != "" {
+		template += "\n\n" + block
 	}
 	data := map[string]string{
 		"Title": preferUserValue(cfg.Story.Title, state.Title), "StoryType": cfg.Story.Type,

@@ -155,6 +155,18 @@ func (h *Handlers) runPrePlanGenerateWith(ctx context.Context, sc config.StoryCo
 
 	b.WriteString(storyParamsContext(&sc, cfgLang))
 	b.WriteString("\n")
+	// Story Web threads: the act breakdown must grow out of the characters'
+	// main/minor quests instead of inventing a parallel plot.
+	if q := story.CharacterQuestsBlock(h.settings, cfgLang); q != "" {
+		b.WriteString(q)
+		b.WriteString("\n\n")
+	}
+	// The world aesthetic is the visual/tonal lens of the whole book, so the
+	// act breakdown must already respect it.
+	if a := story.WorldbuildingAestheticBlock(h.settings, cfgLang); a != "" {
+		b.WriteString(a)
+		b.WriteString("\n\n")
+	}
 	fmt.Fprintf(&b, "Narrative structure framework (MUST drive the act breakdown): %s\nSuggested total-chapter range for this length: %d-%d\n", structLabel, minCh, maxCh)
 	b.WriteString("Requirements:\n1) recommended_total_chapters: one concrete integer (usually inside the suggested range) considering structure, length and target words per chapter.\n2) long_term_direction: the book's cross-batch direction (3-6 sentences): protagonist arc, escalation path of the central conflict, ending direction.\n3) acts: split the book strictly according to the structure framework above (e.g. three-act = 3 acts; hero's journey condensed into 4-6 workable stages). Each act has: name, summary (one line about its duty), suggested_chapters (positive integers summing to roughly the total; each act must be <= 36 chapters because one outline batch covers at most 36), and batch_synopsis (a ready-to-paste synopsis for the \"Batch synopsis\" field: key events, escalation and the act-ending turn, 3-5 sentences).\n")
 	b.WriteString("All text content must be written in the output language pinned above (Spanish if es, English if en).")

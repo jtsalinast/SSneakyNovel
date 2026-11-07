@@ -109,7 +109,7 @@ func (h *Handlers) PostScenePlanApprove(w http.ResponseWriter, r *http.Request) 
 // the climax"...). Runs as a task so the cancel button works and no other
 // task races against it.
 func (h *Handlers) PostScenePlanRegenerate(w http.ResponseWriter, r *http.Request) {
-	if !h.tryStartTask() {
+	if !h.tryStartTaskLong() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 		return
 	}

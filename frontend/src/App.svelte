@@ -1,13 +1,15 @@
 <script>
   import { currentPage, navigate } from './lib/router.js';
-  import { progress, taskRunning, contextPage, toastStore, addToast, currentProject, projectLanguage, config, settings, chatSessions, currentChatSession, logEntries } from './lib/stores.js';
+  import { progress, taskRunning, contextPage, toastStore, addToast, currentProject, projectLanguage, config, settings, chatSessions, currentChatSession, logEntries, brainstormIntent, brainstormTokens, taskTokenUsage } from './lib/stores.js';
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
   import { ribbon } from './lib/ribbon.js';
-  import { readLastPage, writeLastPage } from './lib/lastPage.js';
+  import { readLastPage, writeLastPage, writeLastStep } from './lib/lastPage.js';
+  import { groupLogEntries } from './lib/logGroups.js';
   import { writingToolbar } from './lib/toolbar.js';
   import ICONS from './lib/icons.js';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { derived } from 'svelte/store';
   import { t, uiLocale } from './lib/i18n/index.js';
   import TaskTokenBadge from './components/TaskTokenBadge.svelte';
   import Projects from './pages/Projects.svelte';
@@ -134,6 +136,23 @@
   let assistantOpen = false;
   let logOpen = false;
   let brainstormOpen = false;
+  let logListEl;
+  let logAtBottom = true;
+  function logScrolled() {
+    if (!logListEl) return;
+    logAtBottom = logListEl.scrollHeight - logListEl.scrollTop - logListEl.clientHeight < 48;
+  }
+  function scrollLogBottom() {
+    if (logListEl) logListEl.scrollTop = logListEl.scrollHeight;
+  }
+  // Opening the panel jumps to the newest line; new lines follow only while the
+  // author is already at the bottom, so reading older entries is not disturbed.
+  $: if (logOpen) tick().then(scrollLogBottom);
+  $: if (logOpen && logAtBottom) { $logEntries.length; tick().then(scrollLogBottom); }
+  $: logGroups = groupLogEntries($logEntries);
+  // Writing's selection toolbar asks Brainstorm to open with a preset action.
+  // Opening from here also closes Log and the agent, keeping the shared slot.
+  let handledBrainstormIntent = 0;
   let agentButton;
   // Collapsible lateral bar (desktop): persisted so the choice survives reloads.
   // Guarded for SSR / non-browser contexts.
@@ -186,6 +205,21 @@
       pendingPage = null;
       writeLastPage($currentProject, $currentPage);
     }
+  }
+  // Remember the ribbon subsection of the current page too.
+  $: if ($ribbon && $currentProject && $ribbon.page === $currentPage && $ribbon.active) {
+    writeLastStep($currentProject, $ribbon.page, $ribbon.active);
+  }
+
+  // The ribbon token slot is the only place token usage is shown: the running
+  // task's tracker first, otherwise the last Brainstorm call.
+  const ribbonTokenUsage = derived([taskTokenUsage, brainstormTokens], ([task, brainstorm]) => task || brainstorm);
+
+  $: if ($brainstormIntent && $brainstormIntent.nonce !== handledBrainstormIntent) {
+    handledBrainstormIntent = $brainstormIntent.nonce;
+    brainstormOpen = true;
+    logOpen = false;
+    setChatCollapsed(true);
   }
 
   onDestroy(() => { destroyed = true; clearTimeout(restoreTimer); });
@@ -463,9 +497,9 @@
         <div class="ribbon-token" title={$taskRunning ? $t('app.aiThinking') : $t('app.aiIdle')}>
           <span class="ribbon-token-dot" class:is-running={$taskRunning}></span>
           <span class="font-sans font-medium text-gray-500">{$taskRunning ? $t('app.aiThinking') : $t('app.aiIdle')}</span>
-          {#if $taskRunning}
+          {#if $ribbonTokenUsage}
             <span class="text-gray-300">|</span>
-            <TaskTokenBadge className="font-mono" />
+            <TaskTokenBadge className="font-mono" usage={ribbonTokenUsage} />
           {/if}
         </div>
       </div>
@@ -592,7 +626,7 @@
       <aside id="AgentChat" class:drawer-open={assistantOpen} class:chat-collapsed={chatCollapsed || logOpen || brainstormOpen} class="assistant-panel relative flex-1 min-w-72 max-w-md bg-base-200 overflow-hidden" aria-label={$t('app.assistant')}>
         <button class="btn btn-ghost btn-sm m-2 mb-0 xl:hidden" on:click={closeAssistant}>{$t('common.close')}</button>
         <div class="chat-panel-body h-full">
-          <ChatPanel bind:this={chatPanel} contextPage={$currentPage} />
+          <ChatPanel bind:this={chatPanel} contextPage={$currentPage} visible={assistantOpen || !chatCollapsed} />
         </div>
       </aside>
 
@@ -612,12 +646,30 @@
               <svg class="w-3.5 h-3.5" viewBox={ICONS.reject.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.reject.d} /></svg>
             </button>
           </div>
-          <div id="ShellLogList" class="flex-1 overflow-y-auto font-mono text-xs leading-relaxed space-y-1 p-4">
-            {#each $logEntries as entry}
-              <div class="flex gap-2">
-                <span class="text-base-content/30 shrink-0">{entry.time}</span>
-                <span class={entry.level === 'error' ? 'text-error' : entry.level === 'warn' ? 'text-warning' : entry.level === 'success' ? 'text-success' : 'text-base-content/60'}>{entry.msg}</span>
-              </div>
+          <div id="ShellLogList" bind:this={logListEl} on:scroll={logScrolled} class="flex-1 overflow-y-auto font-mono text-xs leading-relaxed space-y-1 p-4">
+            {#each logGroups as group}
+              {#if group.entries.length > 1}
+                <details class="group/req rounded-md hover:bg-base-200/40">
+                  <summary class="flex items-center gap-2 cursor-pointer select-none rounded-md px-1 py-0.5 hover:bg-base-200/60">
+                    <span class="text-base-content/30 shrink-0">{group.entries[0].time}</span>
+                    <span class="text-base-content/60 truncate">{group.key}</span>
+                    <span class="badge badge-xs badge-ghost shrink-0">×{group.entries.length}</span>
+                  </summary>
+                  <div class="pl-4 space-y-1 py-1">
+                    {#each group.entries as entry}
+                      <div class="flex gap-2">
+                        <span class="text-base-content/30 shrink-0">{entry.time}</span>
+                        <span class="text-base-content/50">{entry.msg}</span>
+                      </div>
+                    {/each}
+                  </div>
+                </details>
+              {:else}
+                <div class="flex gap-2">
+                  <span class="text-base-content/30 shrink-0">{group.entries[0].time}</span>
+                  <span class={group.entries[0].level === 'error' ? 'text-error' : group.entries[0].level === 'warn' ? 'text-warning' : group.entries[0].level === 'success' ? 'text-success' : 'text-base-content/60'}>{group.entries[0].msg}</span>
+                </div>
+              {/if}
             {:else}
               <p class="font-sans text-sm text-base-content/60">{$t('app.log.empty')}</p>
             {/each}

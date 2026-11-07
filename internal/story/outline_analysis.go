@@ -156,6 +156,26 @@ func outlineFingerprint(state *Progress) string {
 // and asks for strict JSON with advice only: concrete per-chapter replacements
 // are drafted later, on demand, via ProposeOutlineReplacements ("Propose
 // outline changes"), so the initial pass never suggests silent rewrites.
+// outlineGroundingMaterial is the planning text an outline suggestion may
+// quote: editable chapter titles and synopses (all chapters when the plan is
+// fully drafted, mirroring the prompt's fallback).
+func outlineGroundingMaterial(state *Progress) string {
+	var b strings.Builder
+	appendChapters := func(onlyEditable bool) {
+		for _, ch := range state.Chapters {
+			if onlyEditable && ch.Status == StatusAccepted {
+				continue
+			}
+			fmt.Fprintf(&b, "Chapter #%d | %s | %s\n", ch.Num, ch.Title, strings.TrimSpace(ch.Outline))
+		}
+	}
+	appendChapters(true)
+	if b.Len() == 0 {
+		appendChapters(false)
+	}
+	return b.String()
+}
+
 func buildOutlineEditorPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, lang string) string {
 	// prevChecklist carries the previous pass's graded rubric (if any) so a
 	// re-analysis after corrections RE-GRADES the same items and the score
@@ -249,7 +269,7 @@ Analyze the outline against ALL of the parameters above, giving special weight t
 Also weigh: premise hook & marketability, protagonist agency & arc, antagonist/stakes escalation, subplots, endings/payoff, chapter-level titles & blurbs (are they compelling back-cover lines?).
 
 Return STRICT JSON only (no markdown fences, no prose):
-{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the outline currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and how","applies_to_chapters":[3,4]}]}
+{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in %s","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"one-sentence verdict in %s"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|character|stakes|structure|market|tone|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"...","detail":"...","action":"...","applies_to_chapters":[3,4]}]}
 
 Grading standard (you are ruthless — your reputation rests on books that hit #1 worldwide):
 - Score each of the four pillars 0-100 against BESTSELLER level, not against "competent debut". 90+ means the PLAN is genuinely strong as-is: you would sign it without touching that pillar. Reserve 90+ for truly exceptional planning; most outlines land mid-range. Derive every score independently from this specific outline: the pillar number must equal the average of its criteria_levels, so re-grading corrected material raises exactly the items that improved. Grade hard: dead beats, vague stakes, generic hooks or an inconsistent tonal plan all cap scores below 85.
@@ -265,14 +285,14 @@ Rules:
 - Write summary, titles, details and actions in the SAME language as the outline text above.
 - If the outline is genuinely strong, say so in the summary and return fewer, higher-value suggestions.`,
 		editorPersona(lang), meta.String(), structureName, written, outlineText, prevChecklist,
-		pillarContractPromptBlockEN(structureName), structureName, lang, lang)
+		pillarContractPromptBlockEN(structureName), structureName, ContentLanguageName(lang), ContentLanguageName(lang))
 }
 
 // buildOutlineEditorPromptForPillar returns the outline prompt scoped for one
 // call of the editorial sequence: pillarKey == "" is the first-impression call,
 // any pillar key is that pillar's single-pillar pass.
 func buildOutlineEditorPromptForPillar(cfg *config.Config, state *Progress, settings *ProjectSettings, lang, pillarKey string) string {
-	return buildOutlineEditorPrompt(cfg, state, settings, lang) + editorialScopeOverride(lang, pillarKey)
+	return buildOutlineEditorPrompt(cfg, state, settings, lang) + editorialScopeOverride(lang, pillarKey) + ReportLanguageRule(lang)
 }
 
 func editorPersona(lang string) string {
@@ -300,7 +320,7 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		logger.InfoKey("log.outline_analyze_unchanged")
 		return nil
 	}
-	lang := cfg.Language
+	lang := ContentLanguage(cfg)
 	settingsForPrompt := settings
 	if settings != nil {
 		if selected, _ := retrieveSettings(settings, collectAllOutlines(state), settingsContextRunes); selected != nil {
@@ -317,7 +337,7 @@ func AnalyzeFullOutline(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 			return prompt
 		}
 		return buildOutlineEditorPromptForPillar(cfg, state, settingsForPrompt, lang, pillarKey)
-	})
+	}, outlineGroundingMaterial(state))
 	if err != nil {
 		return err
 	}
@@ -547,6 +567,7 @@ func ProposeOutlineReplacements(ctx context.Context, apiCfg *config.APIConfig, c
 		}
 	}
 	sc := cfg.Story
+	lang := ContentLanguage(cfg)
 	prompt := fmt.Sprintf(`You are %s. You previously gave the author this editorial point about their novel OUTLINE (a planning synopsis per chapter — the prose is NOT drafted yet, so never critique sentences, dialogue or writing style):
 
 POINT: %s
@@ -568,9 +589,10 @@ This point currently has NO concrete replacement proposals. Your goal is NOT mer
 
 Return STRICT JSON only (no markdown fences): {"recommendations":[{"chapter_num":3,"present":true,"new_title":"...","new_outline":"...","cast":[{"name":"...","first_appearance":true,"note":"one-line role"}]}]}
 Only include chapters that exist and are marked editable.`,
-		editorPersona(cfg.Language), s.Title, s.Detail, s.Action,
-		sc.Tone, sc.Theme, structureLabel(sc.Structure, cfg.Language), sc.AudienceProfile, sc.InspirationalPieces,
+		editorPersona(lang), s.Title, s.Detail, s.Action,
+		sc.Tone, sc.Theme, structureLabel(sc.Structure, lang), sc.AudienceProfile, sc.InspirationalPieces,
 		chapBuf.String(), castSheetOrNone(settings))
+	prompt += ReportLanguageRule(lang)
 	system := "You are a world-famous literary editor turning feedback into concrete OUTLINE (chapter-plan) rewrites — never manuscript prose. You rewrite chapter plans with one clear goal: make the book a global bestseller on the pillar under discussion, not just fix the complaint. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.outline_analyze_proposing")

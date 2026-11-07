@@ -68,6 +68,39 @@ func TestFinalizePillarReport_ScoreDerivedFromChecklist(t *testing.T) {
 	}
 }
 
+func TestFinalizePillarReport_FillsSkippedCriteriaFromScore(t *testing.T) {
+	in := []PillarAssessment{{
+		Key: "tone", Score: 62,
+		CriteriaLevels: []struct {
+			Key   string `json:"key"`
+			Level int    `json:"level"`
+		}{{"tone_consistency", 70}},
+	}}
+	pillars, _ := finalizePillarReport(in, nil)
+	for _, p := range pillars {
+		if p.Key != "tone" {
+			continue
+		}
+		if p.Score != 64 {
+			t.Fatalf("score must derive from all items (70 + 4x62 = 64), got %d", p.Score)
+		}
+		for _, c := range p.Checklist {
+			if c.Level < 0 {
+				t.Fatalf("criterion %s left ungraded (-1)", c.Key)
+			}
+			want := 62
+			if c.Key == "tone_consistency" {
+				want = 70
+			}
+			if c.Level != want {
+				t.Fatalf("criterion %s level = %d, want %d", c.Key, c.Level, want)
+			}
+		}
+		return
+	}
+	t.Fatal("tone pillar missing from the finalized report")
+}
+
 func TestFinalizePillarReport_ClosingAllItemsDrivesTo100(t *testing.T) {
 	lv := func(v int) []struct {
 		Key   string `json:"key"`

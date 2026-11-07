@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { addLog, addToast, config, progress, skills, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, outlineCharacterSuggestions, outlineCharacterShowSuggestions, pendingConfigChanges, showConfigChangePanel, storageError, chatTurnEnd } from './stores.js';
+import { addLog, addToast, config, progress, skills, taskRunning, streamingContent, streamingChapterIdx, taskTokenUsage, brainstormTokens, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, outlineCharacterSuggestions, outlineCharacterShowSuggestions, pendingConfigChanges, showConfigChangePanel, storageError, chatTurnEnd, betaProgress } from './stores.js';
 import { api } from './api.js';
 import { getLocale, translate, formatLogEntry, formatToolResult } from './i18n/index.js';
 import { TOKEN_POLL_INTERVAL_MS } from './tokenPoll.js';
@@ -9,6 +9,8 @@ let reconnectTimer = null;
 let tokenPollTimer = null;
 let taskEventVersion = 0;
 let statusRequest = 0;
+// Brainstorm usage is request-scoped: request_id -> (variant -> snapshot).
+const brainstormUsage = new Map();
 
 // —— Streaming-output throttle buffer + tail window ——
 const FLUSH_INTERVAL = 150;
@@ -148,6 +150,7 @@ async function syncTaskFromStatus() {
       resetContentStream(-1);
       clearChatBuf();
       stopTokenPoll();
+      stopStuckTaskWatch();
       if (wasRunning) {
         refreshProgress(true);
         api('GET', '/api/settings').then(settings.set).catch(() => {});
@@ -182,6 +185,13 @@ function startStuckTaskWatch() {
     }
     syncTaskFromStatus();
   }, STUCK_TASK_CHECK_INTERVAL_MS);
+}
+
+function stopStuckTaskWatch() {
+  if (stuckTaskTimer) {
+    clearInterval(stuckTaskTimer);
+    stuckTaskTimer = null;
+  }
 }
 
 export function connectSSE() {
@@ -238,10 +248,8 @@ export function connectSSE() {
     resetContentStream(-1);
     clearChatBuf();
     taskTokenUsage.set(null);
+    betaProgress.set(null);
     currentTaskName.set(taskLabel(d.task));
-    // Keep agent tool lines so the Log panel also shows what the agent did
-    // before handing work to the background task.
-    logEntries.update(entries => (entries || []).filter(entry => entry.source === 'agent'));
     lastFailedTask.set(null);
     // A new task started while a sendMessageToChat() caller (Generate button)
     // is waiting: the chat turn itself is over — the agent invoked its tool and
@@ -310,6 +318,25 @@ export function connectSSE() {
     taskTokenUsage.set(d);
   });
 
+  eventSource.addEventListener('brainstorm_tokens', e => {
+    const d = JSON.parse(e.data);
+    if (!d.request_id) return;
+    let slots = brainstormUsage.get(d.request_id);
+    if (!slots) {
+      slots = new Map();
+      brainstormUsage.set(d.request_id, slots);
+      if (brainstormUsage.size > 20) brainstormUsage.delete(brainstormUsage.keys().next().value);
+    }
+    slots.set(d.variant || 1, { p: d.prompt_tokens || 0, c: d.completion_tokens || 0 });
+    let prompt = 0;
+    let completion = 0;
+    for (const v of slots.values()) {
+      prompt += v.p;
+      completion += v.c;
+    }
+    brainstormTokens.set({ request_id: d.request_id, prompt_tokens: prompt, completion_tokens: completion });
+  });
+
   eventSource.addEventListener('stream_start', e => {
     const d = JSON.parse(e.data);
     resetContentStream(d.chapter_idx);
@@ -369,6 +396,14 @@ export function connectSSE() {
     const d = JSON.parse(e.data);
     refreshProgress(true);
     addToast(translate('toast.foreshadowOutlineConflict', { n: (d.conflicts || []).length }), 'warning');
+  });
+
+  eventSource.addEventListener('beta_progress', e => {
+    const d = JSON.parse(e.data);
+    betaProgress.set(d);
+    // The report only lands in progress.json at the end of the beta session;
+    // refresh then so the card switches from the checklist to the report.
+    if (d.stage === 'personas' || d.stage === 'done') refreshProgress(true);
   });
 
   eventSource.addEventListener('writing_conflict', e => {

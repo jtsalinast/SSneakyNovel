@@ -23,6 +23,18 @@ import { GENRES, SUBGENRE_DATA } from './novelwriterGenres.js';
 export const norm = (s) =>
   String(s || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
 
+// Mirrors Go config.TooltipKey: catalog labels/tokens -> snake_case keys used
+// by internal/config/Tooltips_helpers.json ("Insurgency & Occupation" ->
+// "insurgency_and_occupation"). Keep both sides in sync.
+export const tooltipKey = (s) =>
+  String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
 const titleCase = (s) =>
   String(s || '').replace(/(^|[\s-])(\S)/g, (_m, sep, ch) => sep + ch.toUpperCase());
 

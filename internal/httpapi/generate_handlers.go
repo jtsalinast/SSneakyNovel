@@ -29,7 +29,7 @@ func (h *Handlers) PostSectionGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	section := r.PathValue("section")
 	switch section {
-	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "enhance", "pre_planning":
+	case "style", "characters", "organizations", "relations", "locations", "worldview", "motif", "story_idea", "audience_profile", "inspirational_pieces", "reader_expectation", "differentiating_idea", "author_hidden_agenda", "enhance", "pre_planning":
 	default:
 		// Per-category worldview sections (wv_geography, wv_faction, ...) are
 		// also valid — see agent.WorldviewCategoryBySection.
@@ -176,7 +176,7 @@ func (h *Handlers) normalizeSectionGen(req SectionGenRequest) (config.StoryConfi
 	// that *produce* a story idea must never require one: they are seeded from
 	// the other novel parameters already entered. Everything else needs the
 	// story idea as its generation seed.
-	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "reader_expectation" && req.Section != "differentiating_idea" && req.Section != "enhance" && req.Section != "pre_planning" {
+	if storyIdea == "" && req.Section != "motif" && req.Section != "story_idea" && req.Section != "audience_profile" && req.Section != "style" && req.Section != "inspirational_pieces" && req.Section != "reader_expectation" && req.Section != "differentiating_idea" && req.Section != "author_hidden_agenda" && req.Section != "enhance" && req.Section != "pre_planning" {
 		return storyCfg, errors.New("story_idea_required")
 	}
 	return storyCfg, nil
@@ -345,6 +345,8 @@ func (h *Handlers) runDetachedSectionGenerate(req SectionGenRequest, ctx context
 			err = h.generateReaderExpectation(ctx, &storyCfg)
 		case "differentiating_idea":
 			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
+		case "author_hidden_agenda":
+			err = h.generateAuthorHiddenAgenda(ctx, &storyCfg)
 		case "enhance":
 			err = h.enhanceStoryField(ctx, &storyCfg, req.EnhanceField, req.EnhanceText)
 		default:
@@ -420,6 +422,8 @@ func (h *Handlers) runSectionGenerate(req SectionGenRequest) error {
 			err = h.generateReaderExpectation(ctx, &storyCfg)
 		case "differentiating_idea":
 			err = h.generateDifferentiatingIdea(ctx, &storyCfg, req.CreativityLevel, req.EnhanceText)
+		case "author_hidden_agenda":
+			err = h.generateAuthorHiddenAgenda(ctx, &storyCfg)
 		case "enhance":
 			err = h.enhanceStoryField(ctx, &storyCfg, req.EnhanceField, req.EnhanceText)
 		default:
@@ -497,6 +501,9 @@ func sectionLabel(section, lang string) string {
 	case "differentiating_idea":
 
 		return "differentiating idea"
+	case "author_hidden_agenda":
+
+		return "author hidden agenda"
 	case "enhance":
 
 		return "enhanced field"
@@ -1170,6 +1177,7 @@ var storyEnhanceFields = map[string]string{
 	"audience_profile":      "ideal reader profile",
 	"reader_expectation":    "target reader's expectation",
 	"differentiating_idea":  "differentiating idea",
+	"author_hidden_agenda":  "author hidden agenda (private subtext steering note)",
 	"story_idea":            "story idea",
 	"forces_in_tension":     "narrative forces in tension",
 	"elevator_pitch":        "elevator pitch",
@@ -1198,6 +1206,8 @@ func getStoryField(sc *config.StoryConfig, field string) string {
 		return sc.ReaderExpectation
 	case "differentiating_idea":
 		return sc.DifferentiatingIdea
+	case "author_hidden_agenda":
+		return sc.AuthorHiddenAgenda
 	case "story_idea":
 		return sc.StoryIdea
 	case "forces_in_tension":
@@ -1234,6 +1244,8 @@ func setStoryField(sc *config.StoryConfig, field, value string) bool {
 		sc.ReaderExpectation = value
 	case "differentiating_idea":
 		sc.DifferentiatingIdea = value
+	case "author_hidden_agenda":
+		sc.AuthorHiddenAgenda = value
 	case "story_idea":
 		sc.StoryIdea = value
 	case "forces_in_tension":
@@ -1349,6 +1361,72 @@ func (h *Handlers) generateDifferentiatingIdea(ctx context.Context, sc *config.S
 	newCfg.Story = *sc
 	newCfg.Story.DifferentiatingIdea = idea
 	newCfg.Story.CreativityLevel = level
+	data, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(h.cfgPath, data); err != nil {
+		return err
+	}
+	h.cfg = &newCfg
+	return nil
+}
+
+// generateAuthorHiddenAgenda writes the "Author hidden agenda": the private
+// appeal the book should serve without ever stating it on the page (a contest
+// jury's winning style, a niche readership, a theme carried only in subtext).
+// It is a steering note, never copy: NovelParametersBlock injects it into
+// outline/writing prompts as a direction the prose must not name.
+func (h *Handlers) generateAuthorHiddenAgenda(ctx context.Context, sc *config.StoryConfig) error {
+	var b strings.Builder
+	b.WriteString("You are a literary strategist. Based on the work parameters below, propose the AUTHOR'S HIDDEN AGENDA for this book: the private appeal the author wants to win WITHOUT ever stating it on the page.\n")
+	b.WriteString("Good answers pick ONE concrete target and the subtextual means to reach it, for example: winning a specific publisher's literary contest whose winners share a recognizable style; appealing to readers obsessed with a specific subject or conspiracy; carrying a specific theme only in subtext; flattering a specific gatekeeper's worldview.\n")
+	b.WriteString("Write 3-5 short lines (one per line): who/what the book quietly appeals to, the stylistic and thematic signals that reach them, and what must never be said outright. Stay compatible with the stated genre, subgenre, tone and target audience; never turn it into a lecture, propaganda or a plot change.\n\n")
+
+	wroteParams := false
+	addLine := func(label, v string) {
+		if v = strings.TrimSpace(v); v == "" {
+			return
+		}
+		b.WriteString(label + ": " + v + "\n")
+		wroteParams = true
+	}
+	addLine("Genre", sc.Type)
+	for _, part := range config.SplitSubgenreList(sc.Subgenre) {
+		addLine("Subgenre", part)
+	}
+	addLine("Theme", sc.Theme)
+	addLine("Tone", sc.Tone)
+	addLine("Literary motif", sc.EffectiveMotif())
+	addLine("Conflict scale", sc.EffectiveConflict())
+	addLine("Target audience", config.AudienceLabel(sc.TargetAudience, "en"))
+	addLine("Ideal reader profile", sc.AudienceProfile)
+	addLine("Reader expectation", sc.ReaderExpectation)
+	addLine("Differentiating idea", sc.DifferentiatingIdea)
+	addLine("Existing story idea (background only)", sc.StoryIdea)
+	addLine("Current hidden agenda (rewrite/refine it, keep the same intent)", sc.AuthorHiddenAgenda)
+	if !wroteParams {
+		b.WriteString("No parameters were provided; infer a plausible genre/audience combination and state a credible hidden agenda for it.\n")
+	}
+	b.WriteString(jsonRule(h.cfg.Language, `{"author_hidden_agenda": "..."}`))
+
+	var out struct {
+		AuthorHiddenAgenda string `json:"author_hidden_agenda"`
+	}
+	if err := h.llmJSON(ctx, b.String(), &out); err != nil {
+		return err
+	}
+	agenda := strings.TrimSpace(out.AuthorHiddenAgenda)
+	if agenda == "" {
+		return errEmptyGeneration
+	}
+
+	newCfg := *h.cfg
+	newCfg.Story = *sc
+	newCfg.Story.AuthorHiddenAgenda = agenda
 	data, err := json.MarshalIndent(newCfg, "", "  ")
 	if err != nil {
 		return err
@@ -2595,27 +2673,18 @@ func nextRelationIDFor(list *[]story.Relation) string {
 // specific settings) so the frontend can render them; every conflict/protagonist
 // list includes "other" and an empty ("auto") choice is always allowed.
 func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
-	en := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN
-	pick := func(p [2]string) string {
-		if en {
-			return p[1]
+	lang := config.TooltipLanguage(h.cfg)
+	resolveHints := func(m map[string]config.TooltipEntry) map[string]string {
+		out := make(map[string]string, len(m))
+		for k, v := range m {
+			out[k] = v.For(lang)
 		}
-		return p[0]
+		return out
 	}
-	subgenreHints := make(map[string]string, 2*len(config.SubgenreHints))
-	for k, v := range config.SubgenreHints {
-		subgenreHints[k] = pick(v)
-		// Round 27 (key-normalization fix): the frontend subgenre combobox
-		// looks hints up by snake_case token ("cozy_mystery", "lit_rpg"),
-		// while SubgenreHints keys are display labels with spaces. Without a
-		// normalized alias every label-keyed hint silently missed and chips
-		// rendered without a description. Ship both spellings.
-		if tok := strings.ToLower(strings.NewReplacer(" ", "_", "-", "_").Replace(k)); tok != k {
-			if _, exists := subgenreHints[tok]; !exists {
-				subgenreHints[tok] = pick(v)
-			}
-		}
-	}
+	// Static tooltips come from internal/config/Tooltips_helpers.json (single
+	// source of truth) and are resolved by the story language here, so the
+	// frontend only has to render the strings it receives.
+	subgenreHints := resolveHints(config.TooltipSubgenres())
 	// Per-subgenre catalogs (normalized token -> lists + canonical parent).
 	// The frontend used to keep its own duplicated copy of these tables; now
 	// the backend ships everything and the UI only filters client-side from
@@ -2684,10 +2753,7 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 		}
 		putSubCatalog(key, c)
 	}
-	structureHints := make(map[string]string)
-	for k, v := range story.StructureDescriptions() {
-		structureHints[k] = pick(v)
-	}
+	structureHints := resolveHints(config.TooltipStructures())
 	// Cross-cutting modifier presets (isekai, wuxia, cyberpunk, cozy, noir...):
 	// exposed so the "Specific settings" section can offer their signature
 	// tokens as checkable suggestions whenever the author's Type/Subgenre text
@@ -2714,6 +2780,11 @@ func (h *Handlers) GetNovelParams(w http.ResponseWriter, r *http.Request) {
 		"gender_bias_options": []string{"random", "balanced", "male", "female"},
 		"subgenre_presets":    config.SubgenrePresetKeys,
 		"subgenre_hints":      subgenreHints,
+		"conflict_hints":      resolveHints(config.TooltipConflictScales()),
+		"protagonist_hints":   resolveHints(config.TooltipProtagonistTypes()),
+		"setting_hints":       resolveHints(config.TooltipSettings()),
+		"genre_hints":         resolveHints(config.TooltipGenres()),
+		"length_hints":        resolveHints(config.TooltipLengths()),
 		// Full per-subgenre cascade catalogs (token -> {conflicts,
 		// protagonists, settings, genre}): the backend ships ALL parameters
 		// and the frontend is the only place that filters them by the

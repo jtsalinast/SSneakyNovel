@@ -27,6 +27,12 @@ type ChapterState struct {
 	// later chapters or outline revisions are generated, these notes are fed as
 	// hard continuity constraints so the same mistakes are not repeated.
 	ContinuityNotes []string `json:"continuity_notes,omitempty"`
+	// WritingGuidance is the author's optional pre-generation instruction for
+	// this chapter ("have her drop the glass before she answers", "a blue
+	// butterfly crosses the yard"). It feeds both the scene planner and the
+	// prose writer, survives the scene-plan review pause, and is cleared when
+	// the chapter is accepted.
+	WritingGuidance string `json:"writing_guidance,omitempty"`
 	// WordCount is the prose-unit count of Content, refreshed on save so the
 	// frontend can show word counts without fetching full chapter content.
 	WordCount int `json:"word_count,omitempty"`
@@ -263,6 +269,18 @@ type Progress struct {
 	// it when the last chapter of an act is confirmed; POST /api/acts/analyze
 	// re-runs it on demand). Keyed by 1-based act number.
 	ActAnalyses map[int]*ActAnalysisReport `json:"act_analyses,omitempty"`
+	// BetaPanel is the project-wide simulated reader panel. It is generated
+	// once from the novel metadata and reused for every act so the audience
+	// segments stay comparable across the book.
+	BetaPanel *BetaPanel `json:"beta_panel,omitempty"`
+	// BetaReports holds every beta-reading session per act, oldest first.
+	// A revised act appends a NEW session; earlier sessions are never
+	// overwritten so the author can compare them.
+	BetaReports map[int][]*BetaReaderReport `json:"beta_reports,omitempty"`
+	// BetaMemories is each persona's reading memory carried across acts
+	// (knowledge, character views, predictions, open questions). Keyed by
+	// persona ID.
+	BetaMemories map[string]*BetaReaderMemory `json:"beta_memories,omitempty"`
 	// AutoScenePlan enables automatic scene-plan approval: when true, chapter
 	// generation plans its scenes and proceeds to write without waiting for
 	// the author to review/edit the plan in the UI. When false (default),

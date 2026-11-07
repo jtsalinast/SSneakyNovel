@@ -1,6 +1,6 @@
 <script>
   import { api } from '../lib/api.js';
-  import { progress, config, streamingContent, streamingChapterIdx, taskRunning, addToast, showConfirm, outlineCharacterSuggestions, outlineCharacterShowSuggestions, settings } from '../lib/stores.js';
+  import { progress, config, streamingContent, streamingChapterIdx, taskRunning, addToast, showConfirm, outlineCharacterSuggestions, outlineCharacterShowSuggestions, settings, currentProject } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
   import { onMount, tick } from 'svelte';
   import ConfigChangePanel from '../components/ConfigChangePanel.svelte';
@@ -10,7 +10,11 @@
   // resto de la app). allowClear={false}: son campos obligatorios sin opción
   // vacía, como el <select> original.
   import SmartSelect from '../lib/components/SmartSelect.svelte';
+  import { suggestStructure, STRUCTURE_ORDER } from '../lib/structureSuggest.js';
+  import Modal from '../lib/components/Modal.svelte';
+  import EnhanceField from '../lib/components/EnhanceField.svelte';
   import { setRibbon } from '../lib/ribbon.js';
+  import { readLastStep } from '../lib/lastPage.js';
 
   // Passed down from App.svelte: the same chat dispatch the config-page
   // Generate buttons use, so Pre-planning's button runs through the agent's
@@ -42,10 +46,12 @@
   let reviseFeedback = '';
   let showRevise = false;
 
-  // Section steps (rendered by the shell ribbon): Pre-planning → Sequence →
-  // Critique. Only one pane is mounted at a time.
-  let outlineTab = 'preplan';
+  // Section steps (rendered by the shell ribbon): Story web → Pre-planning →
+  // Sequence → Critique. Only one pane is mounted at a time.
+  const savedOutlineTab = readLastStep($currentProject, 'outline');
+  let outlineTab = ['web', 'preplan', 'sequence', 'critique'].includes(savedOutlineTab) ? savedOutlineTab : 'web';
   const outlineTabDefs = [
+    { id: 'web', titleKey: 'outline.tab.web' },
     { id: 'preplan', titleKey: 'outline.tab.preplan' },
     { id: 'sequence', titleKey: 'outline.tab.sequence' },
     { id: 'critique', titleKey: 'outline.tab.critique' },
@@ -110,6 +116,7 @@
   let continuationCount = 5;
   let planningRequirements = "";
   let longTermDirection = "";
+  let batchGuidance = "";
   let endingIntent = 'serial';
   let endingStyle = 'closed';
   let endingRequirements = '';
@@ -140,7 +147,7 @@
   }
 
 
-  onMount(() => { refreshImportStatus(); loadPrePlan(); });
+  onMount(() => { refreshImportStatus(); loadPrePlan(); loadNovelParams(); });
   $: if (!$taskRunning) refreshImportStatus();
 
   let outlineFocusTried = false;
@@ -334,7 +341,7 @@
   async function generateContinuation() {
     if (!planningRequirements.trim() || !validCount || batchBlocked) return;
     if (endingIntent !== 'serial' && endingStyle === 'custom' && !endingRequirements.trim()) return;
-    const body = { chapter_count: Number(continuationCount), outline_synopsis: planningRequirements.trim(), long_term_direction: longTermDirection.trim(), mode: replacingBatch ? 'replace_last' : 'append', batch_id: replacingBatch?.id || 0 };
+    const body = { chapter_count: Number(continuationCount), outline_synopsis: planningRequirements.trim(), long_term_direction: longTermDirection.trim(), guidance: batchGuidance.trim(), mode: replacingBatch ? 'replace_last' : 'append', batch_id: replacingBatch?.id || 0 };
     Object.assign(body, { ending_intent: endingIntent, ending_style: endingIntent === 'serial' ? '' : endingStyle, ending_requirements: endingRequirements.trim() });
     const submitted = { revision: replacingBatch ? (replacingBatch.revision || 0) + 1 : 1, start: batchStart, end: batchStart + body.chapter_count - 1, synopsis: body.outline_synopsis };
     const run = async () => {
@@ -424,6 +431,141 @@
       await api("POST", "/api/story/review");
       addToast($t("outline.dynamic.reviewStarted"), "info");
     } catch (e) { addToast(e.message, "error"); }
+  }
+
+  // —— Story Web (before pre-planning): character quest threads ——
+  // Main-presence characters are listed first; incomplete ones (missing main,
+  // minor or overarching quest) carry an amber "Incomplete" pill until filled.
+  const presenceRank = c => ({ main: 0, recurring: 1, incidental: 2, shadow: 3 }[c.presence] ?? 4);
+  $: webChars = ($settings?.characters || []).slice().sort((a, b) => presenceRank(a) - presenceRank(b));
+  $: mainPlotChar = webChars.find(c => c.affiliation === 'protagonist' && String(c.main_quest || '').trim())
+    || webChars.find(c => String(c.main_quest || '').trim());
+
+  function webMissing(c) {
+    const missing = [];
+    if (!String(c.main_quest || '').trim()) missing.push($t('outline.web.mainQuest'));
+    const needsMinors = !c.presence || c.presence === 'main' || c.presence === 'secondary';
+    if (needsMinors && !(c.minor_quests || []).some(q => String(q.text || '').trim())) missing.push($t('outline.web.minorQuests'));
+    if (!String(c.overarching_quest || '').trim()) missing.push($t('outline.web.overarchingQuest'));
+    return missing;
+  }
+  function webOpenCount(c) {
+    let n = 0;
+    if (String(c.main_quest || '').trim() && !c.main_resolved) n++;
+    if (String(c.overarching_quest || '').trim() && !c.overarching_resolved) n++;
+    n += (c.minor_quests || []).filter(q => String(q.text || '').trim() && !q.resolved).length;
+    return n;
+  }
+
+  let webOpen = false;
+  let webChar = null;
+  let webMain = '', webMainResolved = false;
+  let webOver = '', webOverResolved = false;
+  let webMinors = [];
+  let webBusy = false;
+  let webEnhanceBusy = {};
+
+  function openWeb(c) {
+    webChar = c;
+    webOpen = true;
+    webMain = c.main_quest || '';
+    webMainResolved = !!c.main_resolved;
+    webOver = c.overarching_quest || '';
+    webOverResolved = !!c.overarching_resolved;
+    webMinors = (c.minor_quests || []).map(q => ({ text: q.text || '', resolved: !!q.resolved }));
+  }
+  function closeWeb() { webOpen = false; webChar = null; }
+  function addMinorQuest() { webMinors = [...webMinors, { text: '', resolved: false }]; }
+  function removeMinorQuest(i) { webMinors = webMinors.filter((_, k) => k !== i); }
+
+  async function saveWeb() {
+    if (!webChar) return;
+    try {
+      await api('PUT', '/api/characters/' + webChar.id + '/quests', {
+        main_quest: webMain,
+        main_resolved: webMainResolved,
+        minor_quests: webMinors.filter(q => String(q.text || '').trim()).map(q => ({ text: q.text, resolved: !!q.resolved })),
+        overarching_quest: webOver,
+        overarching_resolved: webOverResolved,
+      });
+      settings.set(await api('GET', '/api/settings'));
+      addToast($t('outline.web.saved'), 'success');
+      closeWeb();
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
+  async function generateWebQuests() {
+    if (!webChar || webBusy) return;
+    webBusy = true;
+    try {
+      const res = await api('POST', '/api/characters/' + webChar.id + '/quests/generate');
+      if (res.main_quest) webMain = res.main_quest;
+      if (res.overarching_quest) webOver = res.overarching_quest;
+      if (res.minor_quests?.length) webMinors = res.minor_quests.map(q => ({ text: q.text || '', resolved: false }));
+      addToast($t('outline.web.generated'), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { webBusy = false; }
+  }
+
+  async function enhanceWeb(field, value) {
+    const current = String(value ?? '').trim();
+    if (!current) { addToast($t('outline.web.enhanceEmpty'), 'info'); return ''; }
+    webEnhanceBusy = { ...webEnhanceBusy, [field]: true };
+    try {
+      const res = await api('POST', '/api/enhance/text', { text: current, hint: $t('outline.web.enhanceHint') });
+      return res?.text || '';
+    } catch (e) { addToast(e.message, 'error'); return ''; }
+    finally { webEnhanceBusy = { ...webEnhanceBusy, [field]: false }; }
+  }
+  function webFieldBusy(field) { return !!webEnhanceBusy[field]; }
+
+  // —— Story structure control (moved here from Novel parameters) ——
+  // The structure seeds every act/batch/chapter plan below, so it lives in
+  // Pre-planning, right before the plan is generated. Suggest picks the best
+  // fit from the current novel parameters (lib/structureSuggest.js).
+  let structureKeys = STRUCTURE_ORDER;
+  let structureHints = {};
+  let structureValue = '';
+  $: structureOpts = structureKeys.map((k) => ({ value: k, label: $t('config.story.structure.' + k), description: structureHints[k] || '' }));
+  $: if ($config?.story) structureValue = $config.story.structure || '';
+
+  async function loadNovelParams() {
+    try {
+      const np = await api('GET', '/api/novel-params');
+      if (Array.isArray(np.all_structure_keys) && np.all_structure_keys.length) structureKeys = np.all_structure_keys;
+      structureHints = np.structure_hints || {};
+    } catch { /* keep the local fallbacks */ }
+  }
+
+  async function saveStructure(valueArg) {
+    const val = String(valueArg ?? structureValue ?? '').trim();
+    structureValue = val;
+    let cur = $config;
+    // Never PUT a partial config: load it first if this page mounted before
+    // the global config store was populated (would otherwise wipe the story).
+    if (!cur || !cur.story) {
+      try { cur = await api('GET', '/api/config'); config.set(cur); }
+      catch (e) { addToast(e.message, 'error'); return; }
+    }
+    const story = { ...(cur.story || {}), structure: val };
+    try {
+      const saved = await api('PUT', '/api/config', { ...cur, story });
+      config.set(saved);
+      addToast($t('outline.preplan.structureSaved'), 'success');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+  function onStructureSelect(e) { saveStructure(e?.detail?.value); }
+  function onSuggestStructure() {
+    const st = $config?.story || {};
+    saveStructure(suggestStructure({
+      genre: st.type,
+      subgenre: st.subgenre,
+      protagonist: st.protagonist_type,
+      conflict: st.conflict_scale,
+      targetAudience: st.target_audience,
+      length: st.story_length,
+      romanceLevel: st.romance_level,
+    }, structureKeys));
   }
 
   // —— Pre-planning (book-level plan above the batch cards) ——
@@ -530,7 +672,152 @@
 </script>
 
 <div class="space-y-4 page-width">
-  {#if outlineTab === 'preplan'}
+  {#if outlineTab === 'web'}
+  <div id="CardSection_StoryWeb" class="card bg-base-200">
+    <div class="card-body p-12 gap-4">
+      <div class="flex items-start justify-between gap-2 flex-wrap">
+        <div>
+          <h3 class="card-title text-base">{$t('outline.web.title')}</h3>
+          <p class="text-xs text-base-content/70 mt-1">{$t('outline.web.help')}</p>
+        </div>
+        <span class="badge badge-ghost">{webChars.length}</span>
+      </div>
+
+      {#if webChars.length === 0}
+        <p class="text-sm text-base-content/60 bg-base-300/20 rounded-lg p-4 text-center">{$t('outline.web.empty')}</p>
+      {:else}
+        <div class="rounded-lg bg-base-300/25 p-4">
+          <div class="text-[11px] font-semibold uppercase tracking-wider text-base-content/55 mb-1">{$t('outline.web.mainPlot')}</div>
+          {#if mainPlotChar}
+            <div class="text-sm"><span class="font-semibold">{mainPlotChar.name}</span> — {mainPlotChar.main_quest}</div>
+            {#if mainPlotChar.overarching_quest}
+              <div class="text-xs text-base-content/65 mt-1">{$t('outline.web.overarchingQuest')}: {mainPlotChar.overarching_quest}</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-base-content/60">{$t('outline.web.mainPlotNone')}</div>
+          {/if}
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {#each webChars as c (c.id)}
+            {@const missing = webMissing(c)}
+            <button class="text-left bg-base-300/25 rounded-lg p-4 hover:bg-base-300/40 transition-colors" on:click={() => openWeb(c)}>
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="text-sm font-semibold truncate">{c.name}</div>
+                  <div class="flex flex-wrap gap-1 mt-1">
+                    {#if c.presence}<span class="badge badge-xs badge-outline">{$t('config.char.presence.' + c.presence).split(' — ')[0]}</span>{/if}
+                    {#if c.affiliation}<span class="badge badge-xs badge-ghost">{$t('config.char.affiliation.' + c.affiliation).split(' — ')[0]}</span>{/if}
+                  </div>
+                </div>
+                {#if missing.length}
+                  <span class="badge badge-xs badge-warning shrink-0" title={$t('outline.web.missing') + ': ' + missing.join(', ')}>{$t('outline.web.incomplete')}</span>
+                {:else}
+                  <span class="badge badge-xs badge-ghost shrink-0">{$t('outline.web.complete')}</span>
+                {/if}
+              </div>
+              <div class="mt-2 text-xs text-base-content/70 line-clamp-2">{c.main_quest || $t('outline.web.noQuests')}</div>
+              <div class="mt-2 flex items-center justify-between text-[11px] text-base-content/55">
+                <span>{$t('outline.web.minorCount', { n: (c.minor_quests || []).length })}</span>
+                <span>{$t('outline.web.openCount', { n: webOpenCount(c) })}</span>
+              </div>
+            </button>
+          {/each}
+        </div>
+        {#if webChars.some(c => webMissing(c).length)}
+          <p class="text-xs text-base-content/55">{$t('outline.web.completeHint')}</p>
+        {/if}
+      {/if}
+    </div>
+  </div>
+
+  <Modal open={webOpen} wide title={$t('outline.web.modalTitle', { name: webChar ? webChar.name : '' })} on:close={closeWeb}>
+    <svelte:fragment slot="actions">
+      <AiGenerateButton busy={webBusy} labelKey="common.generate" title={$t('outline.web.generate')} on:click={generateWebQuests} />
+    </svelte:fragment>
+    <div class="space-y-4">
+      <div>
+        <div class="flex items-center justify-between gap-2">
+          <span class="field-label">{$t('outline.web.mainQuest')}</span>
+          <label class="flex items-center gap-1.5 text-[11px] text-base-content/70">
+            <input type="checkbox" class="toggle toggle-xs" bind:checked={webMainResolved} />
+            {$t('outline.web.resolved')}
+          </label>
+        </div>
+        <EnhanceField field="web:main" rows="2" bind:value={webMain} disabled={webBusy}
+          placeholder={$t('outline.web.mainPlaceholder')}
+          busy={webFieldBusy('web:main')} label={$t('config.appeal.enhance')} onEnhance={enhanceWeb} />
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between gap-2 mb-1">
+          <span class="field-label">{$t('outline.web.minorQuests')}</span>
+          <button class="btn btn-ghost btn-xs" on:click={addMinorQuest}>+ {$t('outline.web.addMinor')}</button>
+        </div>
+        {#if webMinors.length === 0}
+          <p class="text-xs text-base-content/55">{$t('outline.web.noMinors')}</p>
+        {/if}
+        <div class="space-y-2">
+          {#each webMinors as m, i}
+            <div class="flex items-start gap-2">
+              <div class="flex-1 min-w-0">
+                <EnhanceField field={'web:minor:' + i} rows="2" bind:value={m.text} disabled={webBusy}
+                  placeholder={$t('outline.web.minorPlaceholder')}
+                  busy={webFieldBusy('web:minor:' + i)} label={$t('config.appeal.enhance')} onEnhance={enhanceWeb} />
+              </div>
+              <label class="flex items-center pt-2 shrink-0" title={$t('outline.web.resolved')}>
+                <input type="checkbox" class="toggle toggle-xs" bind:checked={m.resolved} />
+              </label>
+              <button class="btn btn-ghost btn-xs btn-square text-error shrink-0 mt-1" title={$t('common.delete')} aria-label={$t('common.delete')} on:click={() => removeMinorQuest(i)}>✕</button>
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between gap-2">
+          <span class="field-label">{$t('outline.web.overarchingQuest')}</span>
+          <label class="flex items-center gap-1.5 text-[11px] text-base-content/70">
+            <input type="checkbox" class="toggle toggle-xs" bind:checked={webOverResolved} />
+            {$t('outline.web.resolved')}
+          </label>
+        </div>
+        <EnhanceField field="web:over" rows="2" bind:value={webOver} disabled={webBusy}
+          placeholder={$t('outline.web.overPlaceholder')}
+          busy={webFieldBusy('web:over')} label={$t('config.appeal.enhance')} onEnhance={enhanceWeb} />
+      </div>
+    </div>
+    <svelte:fragment slot="footer">
+      <button class="btn btn-ghost btn-sm" on:click={closeWeb}>{$t('common.cancel')}</button>
+      <button class="btn btn-primary btn-sm" on:click={saveWeb} disabled={webBusy}>{$t('outline.web.save')}</button>
+    </svelte:fragment>
+  </Modal>
+
+  {:else if outlineTab === 'preplan'}
+  <div id="CardSection_StoryStructure" class="card bg-base-200">
+    <div class="card-body p-12 gap-4">
+      <div class="flex items-start justify-between gap-2 flex-wrap">
+        <div>
+          <h3 class="card-title text-base">{$t('outline.preplan.structureTitle')}</h3>
+          <p class="text-xs text-base-content/70 mt-1">{$t('outline.preplan.structureHelp')}</p>
+        </div>
+        <button class="btn btn-sm btn-outline" on:click={onSuggestStructure} disabled={$taskRunning}>{$t('outline.preplan.suggest')}</button>
+      </div>
+      <!-- svelte-ignore a11y-no-redundant-roles -->
+      <SmartSelect
+        options={structureOpts}
+        allowCustom={false}
+        placeholder={$t('config.story.structure.placeholder')}
+        emptyLabel={$t('config.story.auto')}
+        disabled={$taskRunning}
+        title={$t('config.tip.structure')}
+        ariaLabel={$t('config.story.structure')}
+        bind:value={structureValue}
+        on:change={onStructureSelect}
+      />
+    </div>
+  </div>
+
   <div id="CardSection_StoryPrePlan" class="card bg-base-200">
     <div class="card-body p-12 gap-4">
       <div class="flex items-center justify-between gap-2 flex-wrap">
@@ -604,6 +891,9 @@
       <label class="block text-sm" for="batch-direction">{$t('ending.direction')}</label>
       <p class="text-xs text-base-content/70">{$t('ending.directionHelp')}</p>
       <textarea id="batch-direction" class="textarea textarea-sm w-full" bind:value={longTermDirection} placeholder={$t('ending.directionExample')} disabled={batchBlocked}></textarea>
+      <label class="block text-sm" for="batch-guidance">{$t('outline.batch.guidance')}</label>
+      <p class="text-xs text-base-content/70">{$t('outline.batch.guidanceHelp')}</p>
+      <textarea id="batch-guidance" class="textarea textarea-sm w-full" bind:value={batchGuidance} placeholder={$t('outline.batch.guidancePlaceholder')} disabled={batchBlocked}></textarea>
       <label class="block text-sm" for="ending-intent">{$t('ending.intent')}</label>
       <!-- svelte-ignore a11y-no-redundant-roles -->
       <SmartSelect

@@ -76,6 +76,7 @@ func main() {
 
 	logger := sse.NewLogBroadcaster()
 	defer logger.Close()
+	logger.CaptureTerminal()
 
 	devlog.Init(progDir, version)
 

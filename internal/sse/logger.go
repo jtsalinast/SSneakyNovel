@@ -170,6 +170,18 @@ func (lb *LogBroadcaster) TokenUsage(promptTokens, completionTokens int) {
 	})
 }
 
+// BrainstormTokens reports one variant's usage. The client sums the variants of
+// the same request so the Brainstorm badge animates in real time without
+// touching the background task's token_usage channel.
+func (lb *LogBroadcaster) BrainstormTokens(requestID string, variant, promptTokens, completionTokens int) {
+	lb.Emit("brainstorm_tokens", map[string]interface{}{
+		"request_id":        requestID,
+		"variant":           variant,
+		"prompt_tokens":     promptTokens,
+		"completion_tokens": completionTokens,
+	})
+}
+
 func (lb *LogBroadcaster) Emit(event string, data interface{}) {
 	lb.broadcast(SSEMessage{Event: event, Data: data})
 }

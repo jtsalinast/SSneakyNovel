@@ -365,8 +365,9 @@ func scenePosFromIssue(plan *ScenePlan, iss CriticIssue) int {
 // possibly-repaired content plus the leftover issues that still require the
 // classic full-chapter retry loop (empty slice = chapter passes).
 func repairChapterWithCritic(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, content string, historySummary string, settings *ProjectSettings, logger *sse.LogBroadcaster) (string, []string) {
-	userPrompt := buildChapterCriticPrompt(cfg, state, idx, content, historySummary, cfg.Language)
-	systemPrompt := i18n.SystemPromptFor(cfg.Language, "bestseller_chapter_critic_json")
+	lang := ContentLanguage(cfg)
+	userPrompt := buildChapterCriticPrompt(cfg, state, idx, content, historySummary, lang) + ReportLanguageRule(lang)
+	systemPrompt := i18n.SystemPromptFor(lang, "bestseller_chapter_critic_json")
 	var raw string
 	if logger != nil {
 		raw = llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
@@ -447,7 +448,7 @@ func repairChapterWithCritic(ctx context.Context, apiCfg *config.APIConfig, cfg 
 		if ctx.Err() != nil {
 			break
 		}
-		fb := enFB(i18n.NormalizeLanguage(cfg.Language) == i18n.LangEN, "Consistency fix required in this unit: ", "Corrección de consistencia requerida en esta unidad: ")
+		fb := enFB(!normalizeLangEN(ContentLanguage(cfg)), "Consistency fix required in this unit: ", "Corrección de consistencia requerida en esta unidad: ")
 		if len(verdict.Issues) > 0 {
 			// Feed the most relevant issue text to the repair pass.
 			for _, iss := range verdict.Issues {
@@ -488,8 +489,9 @@ func recheckCriticOnce(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 	if ctx.Err() != nil {
 		return nil
 	}
-	userPrompt := buildChapterCriticPrompt(cfg, state, idx, content, historySummary, cfg.Language)
-	systemPrompt := i18n.SystemPromptFor(cfg.Language, "bestseller_chapter_critic_json")
+	lang := ContentLanguage(cfg)
+	userPrompt := buildChapterCriticPrompt(cfg, state, idx, content, historySummary, lang) + ReportLanguageRule(lang)
+	systemPrompt := i18n.SystemPromptFor(lang, "bestseller_chapter_critic_json")
 	var raw string
 	if logger != nil {
 		raw = llm.CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)

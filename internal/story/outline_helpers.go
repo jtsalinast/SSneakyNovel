@@ -61,6 +61,12 @@ func formatCharacterListForOutline(settings *ProjectSettings, lang string) strin
 	}
 	for _, c := range settings.Characters {
 		sb.WriteString(fmt.Sprintf("- %s", c.Name))
+		if tag := strings.Join(nonEmpty(c.Affiliation, c.Relevance, c.Presence), "/"); tag != "" {
+			sb.WriteString(" [" + tag + "]")
+		}
+		if len(c.Aliases) > 0 {
+			sb.WriteString(" (aka " + strings.Join(c.Aliases, ", ") + ")")
+		}
 		if c.Personality != "" {
 			if en {
 				sb.WriteString(fmt.Sprintf(" — personality: %s", c.Personality))
@@ -127,6 +133,16 @@ func finalizeOutlinePrompt(template, rendered string, cfg *config.Config, settin
 	}
 	if np := NovelParametersBlock(cfg); np != "" {
 		rendered += "\n\n" + np
+	}
+	// Story Web threads are base material for every outline batch and revision,
+	// including custom templates that never declare a placeholder for them.
+	if q := CharacterQuestsBlock(settings, lang); q != "" {
+		rendered += "\n\n" + q
+	}
+	// The world aesthetic is a project-wide lens: inject it even when a custom
+	// outline template has no placeholder for it.
+	if a := WorldbuildingAestheticBlock(settings, lang); a != "" {
+		rendered += "\n\n" + a
 	}
 	return rendered
 }

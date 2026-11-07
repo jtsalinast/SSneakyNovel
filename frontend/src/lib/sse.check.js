@@ -26,7 +26,7 @@ const context = vm.createContext({
 });
 for (const name of ['taskRunning', 'currentTaskName', 'taskTokenUsage', 'streamingContent',
   'streamingChapterIdx', 'progress', 'settings', 'chatSessions', 'currentChatSession',
-  'logEntries', 'lastFailedTask', 'chatTurnEnd']) {
+  'logEntries', 'lastFailedTask', 'chatTurnEnd', 'betaProgress']) {
   context[name] = { value: null, set(v) { this.value = v; }, update(fn) { this.value = fn(this.value); } };
 }
 vm.runInContext(script + '\nconnectSSE();', context);
@@ -53,7 +53,7 @@ await reply(true);
 emit('task_end', { task: 'chapter_generation', success: true });
 await reply(true);
 assert.equal(context.taskRunning.value, true);
-assert.equal(intervals.size, 1);
+assert.ok(intervals.size >= 1, 'task polling must stay active while the task runs');
 
 // Polling also repairs a dropped end event without a disconnect.
 [...intervals.values()][0]();

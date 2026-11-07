@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"showmethestory/internal/fsutil"
+	"showmethestory/internal/i18n"
 	"strconv"
 	"strings"
 )
@@ -19,6 +20,10 @@ type Character struct {
 	Motivation  string `json:"motivation,omitempty"`
 	Abilities   string `json:"abilities,omitempty"`
 	Notes       string `json:"notes,omitempty"`
+	// Aliases are the other names the prose may use for this character
+	// (nicknames, titles, short forms). They keep fact progression attached to
+	// one entity and are extended by the setting sync when prose invents one.
+	Aliases []string `json:"aliases,omitempty"`
 	// Protagonist arc quartet (classic want / need / wound / agency model).
 	// Optional, author-editable; the generator fills them when character arcs
 	// are enabled. Kept separate from goals/flaws/strengths/arc because those
@@ -38,14 +43,139 @@ type Character struct {
 	// suggested by the AI generator according to story type/subgenre. Optional;
 	// rendered in the UI via a dynamic key/value list.
 	Extra map[string]string `json:"extra,omitempty"`
+	// Enriched dramatic sheet: structural impact, page presence and narrative
+	// function. Enum values are validated by the API, never free text.
+	Relevance   string `json:"relevance,omitempty"`   // fundamental | secondary | contextual
+	Presence    string `json:"presence,omitempty"`    // main | recurring | incidental | shadow
+	Affiliation string `json:"affiliation,omitempty"` // protagonist | antagonist | ally | neutral | foil
+	// Story Web quest threads: what this character is chasing (main), the
+	// subplots they drag along (minor) and the theme that always stays in the
+	// background (overarching). Each records whether the book resolves it.
+	MainQuest           string           `json:"main_quest,omitempty"`
+	MainResolved        bool             `json:"main_resolved,omitempty"`
+	MinorQuests         []CharacterQuest `json:"minor_quests,omitempty"`
+	OverarchingQuest    string           `json:"overarching_quest,omitempty"`
+	OverarchingResolved bool             `json:"overarching_resolved,omitempty"`
+}
+
+// CharacterQuest is one subplot thread owned by a character. Resolved records
+// whether the book closes it.
+type CharacterQuest struct {
+	ID       string `json:"id,omitempty"`
+	Text     string `json:"text"`
+	Resolved bool   `json:"resolved,omitempty"`
+}
+
+// PresenceMain marks the characters the Story Web opens with.
+const PresenceMain = "main"
+
+// HasQuests reports whether any Story Web thread is filled in.
+func (c Character) HasQuests() bool {
+	return strings.TrimSpace(c.MainQuest) != "" ||
+		strings.TrimSpace(c.OverarchingQuest) != "" ||
+		len(c.MinorQuests) > 0
+}
+
+// CharacterQuestsBlock renders the Story Web threads as prompt material for
+// pre-planning and outline generation. It returns "" when no character has
+// quests, so callers can append it blindly.
+func CharacterQuestsBlock(ps *ProjectSettings, lang string) string {
+	if ps == nil {
+		return ""
+	}
+	en := i18n.NormalizeLanguage(lang) == i18n.LangEN
+	status := func(resolved bool) string {
+		if resolved {
+			return pick2(en, "RESUELTA", "RESOLVED")
+		}
+		return pick2(en, "ABIERTA", "OPEN")
+	}
+	var lines []string
+	for _, c := range ps.Characters {
+		if !c.HasQuests() {
+			continue
+		}
+		name := StripNameMarks(c.Name)
+		role := strings.TrimSpace(strings.Join(nonEmpty(c.Affiliation, c.Relevance, c.Presence), "/"))
+		line := "- " + name
+		if role != "" {
+			line += " (" + role + ")"
+		}
+		if q := strings.TrimSpace(c.MainQuest); q != "" {
+			line += pick2(en, "; trama principal: ", "; main quest: ") + q + " (" + status(c.MainResolved) + ")"
+		}
+		if len(c.MinorQuests) > 0 {
+			var minors []string
+			for _, q := range c.MinorQuests {
+				if t := strings.TrimSpace(q.Text); t != "" {
+					minors = append(minors, t+" ("+status(q.Resolved)+")")
+				}
+			}
+			if len(minors) > 0 {
+				line += pick2(en, "; subtramas: ", "; minor quests: ") + strings.Join(minors, " | ")
+			}
+		}
+		if q := strings.TrimSpace(c.OverarchingQuest); q != "" {
+			line += pick2(en, "; trama de fondo: ", "; overarching quest: ") + q + " (" + status(c.OverarchingResolved) + ")"
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if en {
+		b.WriteString("[STORY WEB — CHARACTER QUEST THREADS]\n")
+		b.WriteString("These threads are the base for the act breakdown and the chapter outlines: build the main plot from the main quests, the subplots from the minor quests, and keep the overarching quests as the thematic throughline. Respect each thread's RESOLVED/OPEN status.\n")
+	} else {
+		b.WriteString("[TRAMA DE PERSONAJES — HILOS DE QUESTS]\n")
+		b.WriteString("Estos hilos son la base para los actos y los outlines de capítulos: construye la trama principal con las quests principales, las subtramas con las quests menores y mantén las quests de fondo como hilo temático. Respeta el estado RESUELTA/ABIERTA de cada hilo.\n")
+	}
+	b.WriteString(strings.Join(lines, "\n"))
+	return b.String()
+}
+
+func nonEmpty(values ...string) []string {
+	var out []string
+	for _, v := range values {
+		if t := strings.TrimSpace(v); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func pick2(en bool, es, in string) string {
+	if en {
+		return in
+	}
+	return es
+}
+
+// NormalizeCharacterQuests trims every thread, drops empty minor quests, clears
+// resolution flags on empty quests and reassigns minor IDs deterministically.
+// The Story Web modal saves through this so removal and unchecking persist.
+func NormalizeCharacterQuests(mainQuest string, mainResolved bool, minors []CharacterQuest, overQuest string, overResolved bool) (string, bool, []CharacterQuest, string, bool) {
+	mainQuest = strings.TrimSpace(mainQuest)
+	overQuest = strings.TrimSpace(overQuest)
+	out := make([]CharacterQuest, 0, len(minors))
+	for _, q := range minors {
+		text := strings.TrimSpace(q.Text)
+		if text == "" {
+			continue
+		}
+		out = append(out, CharacterQuest{ID: fmt.Sprintf("q_%d", len(out)+1), Text: text, Resolved: q.Resolved})
+	}
+	return mainQuest, mainResolved && mainQuest != "", out, overQuest, overResolved && overQuest != ""
 }
 
 type WorldviewEntry struct {
-	ID          string `json:"id"`
-	Category    string `json:"category"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Tags        string `json:"tags,omitempty"`
+	ID          string   `json:"id"`
+	Category    string   `json:"category"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Tags        string   `json:"tags,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
 }
 
 type Organization struct {
@@ -55,6 +185,7 @@ type Organization struct {
 	Description string   `json:"description"`
 	Members     []string `json:"members,omitempty"`
 	Locations   []string `json:"locations,omitempty"` // location (worldview, category "location") IDs this org operates in
+	Aliases     []string `json:"aliases,omitempty"`
 }
 
 // Location is a first-class place/scene entity (borrowed from NovelWriter's
@@ -97,6 +228,10 @@ type ProjectSettings struct {
 	Worldview     []WorldviewEntry `json:"worldview"`
 	Organizations []Organization   `json:"organizations"`
 	Relations     []Relation       `json:"relations"`
+	// Aesthetic is the world's visual/tonal reference (Wes Anderson, Burton,
+	// Sabrina, A Series of Unfortunate Events…). It is a project-level prompt
+	// lens, not a lore entry, so it applies to every generation step.
+	Aesthetic string `json:"aesthetic,omitempty"`
 }
 
 func LoadProjectSettings(path string) (*ProjectSettings, error) {
@@ -181,4 +316,36 @@ func StripNameMarks(name string) string {
 		return string(runes[1 : len(runes)-1])
 	}
 	return name
+}
+
+// NormalizeAliases trims, dedupes (case-insensitive) and drops empty aliases.
+func NormalizeAliases(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range in {
+		a = strings.TrimSpace(a)
+		key := strings.ToLower(a)
+		if a == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+// WorldbuildingAestheticBlock renders the project's visual/tonal reference as
+// prompt material. It returns "" when unset, so callers can append it blindly.
+func WorldbuildingAestheticBlock(ps *ProjectSettings, lang string) string {
+	if ps == nil {
+		return ""
+	}
+	aesthetic := strings.TrimSpace(ps.Aesthetic)
+	if aesthetic == "" {
+		return ""
+	}
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		return "[WORLD AESTHETIC]\n" + aesthetic + "\nApply this as the visual, tonal and stylistic lens of every location, costume, object, character description and scene rhythm. Translate the references into original details; never quote or copy the source works."
+	}
+	return "[ESTÉTICA DEL MUNDO]\n" + aesthetic + "\nAplícala como lente visual, tonal y estilística de cada lugar, vestuario, objeto, descripción de personaje y ritmo de escena. Traduce las referencias a detalles originales; nunca cites ni copies las obras de referencia."
 }

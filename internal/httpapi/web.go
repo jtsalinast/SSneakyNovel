@@ -52,6 +52,8 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 	mux.HandleFunc("GET /api/novel-params", h.GetNovelParams)
 	mux.HandleFunc("PUT /api/config", h.PutConfig)
 	mux.HandleFunc("POST /api/brainstorm", h.PostBrainstorm)
+	mux.HandleFunc("POST /api/brainstorm/stream", h.PostBrainstormStream)
+	mux.HandleFunc("GET /api/brainstorm/entities", h.GetBrainstormEntities)
 	mux.HandleFunc("GET /api/config/pending-changes", h.GetPendingConfigChanges)
 	mux.HandleFunc("POST /api/config/apply-changes", h.PostApplyConfigChanges)
 	mux.HandleFunc("DELETE /api/config/pending-changes", h.DeletePendingConfigChanges)
@@ -82,6 +84,7 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 
 	// Bestseller critic: finished acts (post-writing, trope-level interventions).
 	mux.HandleFunc("POST /api/acts/analyze", h.PostActAnalyze)
+	mux.HandleFunc("POST /api/acts/beta", h.PostActBeta)
 	mux.HandleFunc("POST /api/acts/analysis/propose-interventions", h.PostActInterventionsPropose)
 	mux.HandleFunc("POST /api/acts/analysis/apply-interventions", h.PostActInterventionsApply)
 	mux.HandleFunc("POST /api/acts/reconfirm", h.PostActReconfirm)
@@ -158,12 +161,16 @@ func StartWebServer(apiCfg *config.APIConfig, apiCfgPath string, logger *sse.Log
 
 	mux.HandleFunc("POST /api/settings/reconcile", h.PostSettingsReconcile)
 	mux.HandleFunc("GET /api/settings", h.GetSettings)
+	mux.HandleFunc("PUT /api/settings/aesthetic", h.PutSettingsAesthetic)
+	mux.HandleFunc("POST /api/settings/aesthetic/generate", h.PostAestheticGenerate)
 	mux.HandleFunc("POST /api/settings/ai-generate", h.PostSettingsAIGenerate)
 	mux.HandleFunc("POST /api/settings/polish", h.PostSettingsPolish)
 
 	mux.HandleFunc("POST /api/characters", h.PostCharacter)
 	mux.HandleFunc("PUT /api/characters/{id}", h.PutCharacter)
 	mux.HandleFunc("DELETE /api/characters/{id}", h.DeleteCharacter)
+	mux.HandleFunc("PUT /api/characters/{id}/quests", h.PutCharacterQuests)
+	mux.HandleFunc("POST /api/characters/{id}/quests/generate", h.PostCharacterQuestsGenerate)
 
 	mux.HandleFunc("POST /api/worldview", h.PostWorldview)
 	mux.HandleFunc("PUT /api/worldview/{id}", h.PutWorldview)

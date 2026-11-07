@@ -1,17 +1,18 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
   import { api, apiFetch } from '../lib/api.js';
-  import { config, progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, autoConfirm, addToast, confirmModal } from '../lib/stores.js';
+  import { config, progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, autoConfirm, addToast, confirmModal, brainstormIntent, currentProject, betaProgress } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
   import { t } from '../lib/i18n/index.js';
   import { countProseUnits } from '../lib/proseUnits.js';
-  import TaskTokenBadge from '../components/TaskTokenBadge.svelte';
   import KnowledgePanel from '../components/KnowledgePanel.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
   import ScenePlanEditor from '../components/ScenePlanEditor.svelte';
   import BestsellerCritiqueCard from '../components/BestsellerCritiqueCard.svelte';
+  import BetaReaderCard from '../components/BetaReaderCard.svelte';
   import { settings } from '../lib/stores.js';
   import { setRibbon } from '../lib/ribbon.js';
+  import { readLastStep } from '../lib/lastPage.js';
   import { writingToolbar } from '../lib/toolbar.js';
   import ICONS from '../lib/icons.js';
   let showKnowledge = false;
@@ -41,17 +42,36 @@
   // —— Writing section steps (rendered by the shell ribbon) ——————————
   // Three steps: Scene matrix / Chapter writing / Review & accept. Each
   // step owns one pane of the chapter workflow.
-  let writingTab = 1;
+  const WRITING_TAB_IDS = ['scene', 'writing', 'review'];
+  const savedWritingTab = readLastStep($currentProject, 'writing');
+  let writingTab = Math.max(1, WRITING_TAB_IDS.indexOf(savedWritingTab) + 1);
   const writingTabDefs = [
     { num: 1, id: 'scene', titleKey: 'writing.tab.sceneMatrix' },
     { num: 2, id: 'writing', titleKey: 'writing.tab.chapterWriting' },
     { num: 3, id: 'review', titleKey: 'writing.tab.reviewAccept' },
   ];
+  // Act review owns its own three steps: beta panel → expert → reconfirm.
+  const ACT_REVIEW_TAB_IDS = ['beta', 'expert', 'confirm'];
+  const actReviewTabDefs = [
+    { id: 'beta', titleKey: 'writing.actReview.beta' },
+    { id: 'expert', titleKey: 'writing.actReview.expert' },
+    { id: 'confirm', titleKey: 'writing.actReview.confirm' },
+  ];
+  let actReviewTab = 1;
   $: setRibbon(
     'writing',
-    writingTabDefs.map(def => ({ id: def.id, label: $t(def.titleKey) })),
-    writingTabDefs[writingTab - 1]?.id || 'scene',
-    id => setWritingTab(writingTabDefs.find(def => def.id === id)?.num || 1)
+    (actReviewNo != null ? actReviewTabDefs : writingTabDefs).map(def => ({ id: def.id, label: $t(def.titleKey) })),
+    actReviewNo != null
+      ? (actReviewTabDefs[actReviewTab - 1]?.id || 'beta')
+      : (writingTabDefs[writingTab - 1]?.id || 'scene'),
+    id => {
+      if (actReviewNo != null) {
+        const idx = actReviewTabDefs.findIndex(def => def.id === id);
+        if (idx >= 0) actReviewTab = idx + 1;
+        return;
+      }
+      setWritingTab(writingTabDefs.find(def => def.id === id)?.num || 1);
+    }
   );
   function setWritingTab(n) {
     if (n < 1 || n > 3) return;
@@ -415,7 +435,10 @@
   // truth until Save) and dismisses the floating selection menu when the user
   // clicks elsewhere or collapses the selection.
   function sheetEditable(node) {
-    const onDocMouseUp = (e) => { if (!node.contains(e.target)) hideSelMenu(); };
+    // The floating selection toolbar is intentionally outside the sheet, so a
+    // click on it must not dismiss the menu before its handler runs.
+    const inSelMenu = (target) => !!(target && target.closest && target.closest('[role="toolbar"]'));
+    const onDocMouseUp = (e) => { if (!node.contains(e.target) && !inSelMenu(e.target)) hideSelMenu(); };
     const onDocSelection = () => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed) hideSelMenu();
@@ -478,26 +501,69 @@
       const r = el.getBoundingClientRect();
       if (r.bottom >= rect.top && r.top <= rect.bottom) ids.push(id);
     }
-    selMenu = { x: rect.left + rect.width / 2, y: rect.top, text, blockIds: [...new Set(ids)] };
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 300), Math.max(300, window.innerWidth - 300));
+    selMenu = { x, y: rect.top, text, blockIds: [...new Set(ids)] };
   }
-  function hideSelMenu() { selMenu = null; }
+  function hideSelMenu() { selMenu = null; selRewriteOpen = false; selFeedbackOpen = false; }
   // Clicking anywhere inside the sheet that is NOT a critic highlight closes
   // the IV popup; clicks on a <mark> bubble to its own openIVPopup handler.
   function onSheetClick(e) {
     if (!e.target.closest('.iv-mark')) hideIVPopup();
   }
-  function selBlockId() { return selMenu?.blockIds?.length ? selMenu.blockIds[0] : null; }
-  function selFromSheet(action) {
+  let selRewriteOpen = false;
+  let selFeedbackOpen = false;
+  const SEL_ICON_BTN = 'p-1.5 rounded-lg text-xs font-medium text-gray-300 hover:text-white hover:bg-white/10 active:bg-white/15 flex items-center justify-center w-8 h-8 transition-colors';
+  const SEL_LABEL_BTN = 'px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-300 hover:text-white hover:bg-white/10 active:bg-white/15 flex items-center gap-1.5 transition-colors';
+
+  // The selected text goes straight to the Brainstorm panel with the chapter
+  // context attached: Describe/Rewrite/Feedback need it to produce options
+  // about this passage instead of generic prose.
+  function chapterContext() {
+    const parts = [];
+    if (ch?.title) parts.push('Title: ' + ch.title);
+    if (ch?.outline) parts.push('Outline: ' + ch.outline);
+    const body = (displayContent || '').trim();
+    if (body) parts.push('Chapter text:\n' + body.slice(0, 6000));
+    return parts.join('\n\n');
+  }
+  function sendToBrainstorm(action, opts = {}) {
     if (!selMenu) return;
-    const id = selBlockId();
-    if (id == null) return;
-    const b = chapterBlocks.find(x => x.id === id);
-    if (!b) return;
+    const value = selMenu.text;
     hideSelMenu();
-    if (action === 'edit') startBlockEdit(b);
-    else if (action === 'revise') startBlockRevise(b);
-    else if (action === 'insertAfter') startBlockInsert(b.id);
-    else if (action === 'delete') deleteBlock(b);
+    brainstormIntent.set({
+      action,
+      text: value,
+      mode: opts.mode || '',
+      instruction: opts.instruction || '',
+      context: chapterContext(),
+      autoRun: opts.autoRun !== false,
+      nonce: Date.now(),
+    });
+  }
+  async function copySelection() {
+    if (!selMenu) return;
+    try {
+      await navigator.clipboard.writeText(selMenu.text);
+      addToast($t('writing.sel.copied'), 'success');
+    } catch (_) {}
+    hideSelMenu();
+  }
+  function cutSelection() {
+    try { document.execCommand('cut'); } catch (_) {}
+    hideSelMenu();
+  }
+  async function pasteSelection() {
+    hideSelMenu();
+    try {
+      const value = await navigator.clipboard.readText();
+      if (value) document.execCommand('insertText', false, value);
+    } catch (_) {
+      addToast($t('writing.sel.pasteBlocked'), 'info');
+    }
+  }
+  function addNoteFromSelection() {
+    hideSelMenu();
+    addToast($t('app.toolbar.unavailable', { tool: $t('writing.sel.addNote') }), 'info');
   }
 
   // —— Trope-issue dots (fact-check red / bestseller-critic violet) ————
@@ -1229,7 +1295,6 @@
   // During streaming $streamingContent only holds the tail window (perf guard); full text is fetched after generation ends
   $: displayContent = isStreamingThis ? $streamingContent : chapterContent;
   $: chapterWordCount = ch?.word_count || (chapterContent ? countProseUnits(chapterContent) : 0);
-  $: showTaskTokens = $taskRunning && isCurrent;
   $: totalWords = chapters.reduce((sum, c) => sum + (c.word_count || 0), 0);
 
   $: foreshadows = p?.foreshadows || [];
@@ -1344,6 +1409,9 @@
   }
   function openActReview(no) {
     actReviewNo = no;
+    // Land on the expert report when one exists; otherwise the beta panel is
+    // the step that produces it.
+    actReviewTab = (p?.act_analyses?.[no] ? 2 : 1);
     selectedChapter.set(-1);
     actReconfirming = false;
   }
@@ -1353,6 +1421,14 @@
   function critiqueAct(no) {
     api('POST', '/api/acts/analyze', { act_no: no })
       .then(() => addToast($t('act.analysis.toasts.started'), 'info'))
+      .catch((e) => addToast(e.message, 'error'));
+  }
+  // The beta reader panel is its own process: running it never scores the act,
+  // and re-running the expert never restarts the readers (it reuses the saved
+  // session for this exact draft).
+  function runBeta(no) {
+    api('POST', '/api/acts/beta', { act_no: no })
+      .then(() => addToast($t('beta.toast.started'), 'info'))
       .catch((e) => addToast(e.message, 'error'));
   }
   // Re-run the quality pipeline over this act's chapters after applying the
@@ -1378,6 +1454,10 @@
     return chapters.filter(c => c.num >= start && c.num <= end);
   })();
   $: actReviewRep = actReviewNo != null ? (p?.act_analyses?.[actReviewNo] || null) : null;
+  // Beta reader sessions for the open act (oldest first; the card selects the
+  // newest). Progress events only apply to the act they belong to.
+  $: actBetaReports = actReviewNo != null ? (p?.beta_reports?.[actReviewNo] || []) : [];
+  $: actBetaProgress = actReviewNo != null && $betaProgress?.act_no === actReviewNo ? $betaProgress : null;
   // Pre-plan acts that END right after chapter `num` — used to interleave the
   // manual act-critique "steps" inside ChapterSidebarList at every point where
   // one act hands over to the next (and after the last chapter for the final
@@ -1446,6 +1526,16 @@
 
   let reviseFeedback = '';
   let showRevise = false;
+  // Optional pre-generation guidance for the current chapter (persisted on the
+  // chapter so it survives the scene-plan pause and resumes). Re-seeded only
+  // when the selected chapter changes, so typing is never overwritten by an
+  // SSE progress refresh.
+  let chapterGuidance = '';
+  let guidanceChapterNum = -1;
+  $: if (ch && ch.num !== guidanceChapterNum) {
+    guidanceChapterNum = ch.num;
+    chapterGuidance = ch.writing_guidance || '';
+  }
   let contentEl;
   let reviseTextareaEl;
   let hasPolishSkills = false;
@@ -1549,7 +1639,7 @@
 
   async function doGenerate() {
     try {
-      await api('POST', '/api/chapter/generate');
+      await api('POST', '/api/chapter/generate', { guidance: chapterGuidance.trim() });
       addToast($t('writing.toasts.generateStarted', { num: ch?.num }), 'info');
     } catch (e) { addToast(e.message, 'error'); }
   }
@@ -1996,6 +2086,20 @@
            the quality pipeline after those interventions are applied. -->
       <div id="ActReviewSection_{actReviewNo}" class="space-y-3 min-w-0">
         {#key actReviewNo}
+          {#if actReviewTab === 1}
+          <!-- Simulated beta readers run BEFORE the expert and feed it their
+               consolidated report. Same panel every act; a new session is
+               appended when a revised act is analyzed again. -->
+          <BetaReaderCard
+            actNo={actReviewNo}
+            reports={actBetaReports}
+            panel={p?.beta_panel}
+            progress={actBetaProgress}
+            disabled={$taskRunning}
+            onRun={() => runBeta(actReviewNo)}
+            scrollId={"ActBetaSection_" + actReviewNo} />
+          {:else if actReviewTab === 2}
+          {#if actReviewRep}
           <BestsellerCritiqueCard
             kind="act"
             report={actReviewRep}
@@ -2003,8 +2107,21 @@
             disabled={$taskRunning}
             hasTargets={true}
             scrollId="ActReviewSection_" + actReviewNo />
+          {:else}
+          <div id={"ActReviewSection_" + actReviewNo} class="card bg-base-200">
+            <div class="card-body p-6 items-center gap-3 text-center">
+              <p class="text-sm text-base-content/70">{$t('act.analysis.emptyHint')}</p>
+              <button class="btn btn-primary btn-sm" disabled={$taskRunning} on:click={() => critiqueAct(actReviewNo)}>
+                {#if $taskRunning}<span class="loading loading-spinner loading-xs"></span>{/if}
+                {$t('act.analysis.btn')}
+              </button>
+            </div>
+          </div>
+          {/if}
+          {/if}
         {/key}
 
+        {#if actReviewTab === 3}
         <!-- Reconfirm: after applying the critic's surgical interventions the
              touched chapters must pass fact-check + bestseller critique again
              before their successors keep building on them; outline_only
@@ -2038,6 +2155,7 @@
             </div>
           </div>
         </div>
+        {/if}
       </div>
     {:else if ch}
     <!-- ═════════ TAB 1 · SCENE MATRIX ═════════
@@ -2085,15 +2203,11 @@
         {#if ch}
           <div id="CardSection_ChapterReader" class="card bg-base-200 p-10" use:setReaderCard>
             <div class="card-body p-0 gap-2">
-              {#if showTaskTokens || chapterWordCount > 0}
+              {#if chapterWordCount > 0}
                 <!-- Chapter title/status moved out of the reader card; only the
                      word count stays, pinned to the top-right corner. -->
                 <div class="chapter-head-row flex items-center justify-end gap-2 flex-wrap">
-                  {#if showTaskTokens}
-                    <TaskTokenBadge className="text-xs text-base-content/65 font-mono" />
-                  {:else}
-                    <span class="text-xs text-base-content/65">{$t('writing.chapter.words', { n: chapterWordCount.toLocaleString() })}</span>
-                  {/if}
+                  <span class="text-xs text-base-content/65">{$t('writing.chapter.words', { n: chapterWordCount.toLocaleString() })}</span>
                 </div>
               {/if}
 
@@ -2319,12 +2433,113 @@
                   </button>
                 {/if}
                 {#if selMenu && editingBlockId == null}
-                  <div class="fixed z-50 flex gap-1 bg-base-200 border border-base-content/20 rounded-lg px-1.5 py-1 shadow-lg"
-                       style="left: {selMenu.x}px; top: {selMenu.y}px; transform: translate(-50%, -100%); margin-top: -6px;">
-                    <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('edit')}>{$t('writing.block.edit')}</button>
-                    <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('revise')}>{$t('writing.block.revise')}</button>
-                    <button class="btn btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('insertAfter')}>{$t('writing.block.insertAfter')}</button>
-                    <button class="btn btn-error btn-outline btn-xs" disabled={$taskRunning} on:click|stopPropagation={() => selFromSheet('delete')}>{$t('writing.block.delete')}</button>
+                  <!-- Dark monochromatic floating selection toolbar. mousedown is
+                       prevented so clicking an action never collapses the sheet
+                       selection before the click lands. -->
+                  <div class="fixed z-50 select-none"
+                       role="toolbar" aria-label={$t('writing.sel.toolbar')}
+                       style="left: {selMenu.x}px; top: {selMenu.y}px; transform: translate(-50%, -100%); margin-top: -10px;"
+                       on:mousedown|preventDefault={() => {}}>
+                    <div class="sel-toolbar flex items-center gap-0.5 whitespace-nowrap rounded-xl border border-white/10 bg-[#1E1E22]/95 p-1 text-gray-300 backdrop-blur"
+                         style="box-shadow: 0 16px 36px -6px rgba(0,0,0,.65), 0 4px 12px -2px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.1);">
+                      <button class={SEL_ICON_BTN} title={$t('writing.sel.copy')} aria-label={$t('writing.sel.copy')} on:click|stopPropagation={copySelection}>
+                        <svg class="w-3 h-3 text-gray-400" viewBox={ICONS.copy.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.copy.d} /></svg>
+                      </button>
+                      <button class={SEL_ICON_BTN} title={$t('writing.sel.cut')} aria-label={$t('writing.sel.cut')} on:click|stopPropagation={cutSelection}>
+                        <svg class="w-3 h-3 text-gray-400" viewBox={ICONS.scissors.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.scissors.d} /></svg>
+                      </button>
+                      <button class={SEL_ICON_BTN} title={$t('writing.sel.paste')} aria-label={$t('writing.sel.paste')} on:click|stopPropagation={pasteSelection}>
+                        <svg class="w-3 h-3 text-gray-400" viewBox={ICONS.paste.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.paste.d} /></svg>
+                      </button>
+
+                      <div class="w-px h-4 bg-white/10 mx-0.5"></div>
+
+                      <button class="{SEL_LABEL_BTN} group relative" title={$t('writing.sel.addNote')} on:click|stopPropagation={addNoteFromSelection}>
+                        <svg class="w-3 h-3 text-gray-400 group-hover:text-white" viewBox={ICONS.noteSticky.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.noteSticky.d} /></svg>
+                        <span class="max-w-0 opacity-0 overflow-hidden whitespace-nowrap transition-all duration-200 group-hover:max-w-[110px] group-hover:opacity-100 group-hover:ml-1.5">{$t('writing.sel.addNote')}</span>
+                      </button>
+
+                      <div class="w-px h-4 bg-white/10 mx-0.5"></div>
+
+                      <button class="{SEL_LABEL_BTN} group relative" title={$t('writing.sel.explain')} on:click|stopPropagation={() => sendToBrainstorm('explain')}>
+                        <svg class="w-3 h-3 text-gray-400 group-hover:text-white" viewBox={ICONS.circleInfo.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.circleInfo.d} /></svg>
+                        <span class="max-w-0 opacity-0 overflow-hidden whitespace-nowrap transition-all duration-200 group-hover:max-w-[110px] group-hover:opacity-100 group-hover:ml-1.5">{$t('writing.sel.explain')}</span>
+                      </button>
+
+                      <div class="w-px h-4 bg-white/10 mx-0.5"></div>
+
+                      <button class={SEL_LABEL_BTN} title={$t('writing.sel.alternatives')} on:click|stopPropagation={() => sendToBrainstorm('alternatives')}>
+                        <svg class="w-3 h-3 text-gray-400" viewBox={ICONS.codeBranch.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.codeBranch.d} /></svg>
+                        <span>{$t('writing.sel.alternatives')}</span>
+                      </button>
+                      <button class={SEL_LABEL_BTN} title={$t('writing.sel.describe')} on:click|stopPropagation={() => sendToBrainstorm('describe')}>
+                        <svg class="w-3 h-3 text-gray-400" viewBox={ICONS.glasses.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.glasses.d} /></svg>
+                        <span>{$t('writing.sel.describe')}</span>
+                      </button>
+
+                      <div class="relative">
+                        <button class={SEL_LABEL_BTN} title={$t('writing.sel.rewrite')} on:click|stopPropagation={() => { selRewriteOpen = !selRewriteOpen; selFeedbackOpen = false; }}>
+                          <svg class="w-3 h-3 text-gray-400" viewBox={ICONS.feather.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.feather.d} /></svg>
+                          <span>{$t('writing.sel.rewrite')}</span>
+                          <svg class="w-2 h-2 text-gray-500" viewBox={ICONS.chevronDown.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.chevronDown.d} /></svg>
+                        </button>
+                        {#if selRewriteOpen}
+                          <div class="absolute left-0 top-full mt-2 w-48 rounded-xl border border-white/10 bg-[#18181B] p-1.5 text-xs space-y-0.5"
+                               style="box-shadow: 0 12px 28px -4px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.12);">
+                            <div class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-gray-500">{$t('writing.sel.rewriteModes')}</div>
+                            <button class="w-full text-left px-2.5 py-1.5 rounded-lg text-gray-300 hover:bg-white/10 hover:text-white transition-colors flex items-center justify-between" on:click|stopPropagation={() => sendToBrainstorm('rewrite', { mode: 'descriptive' })}>
+                              <span>{$t('brainstorm.mode.descriptive')}</span>
+                              <svg class="w-2.5 h-2.5 text-gray-500" viewBox={ICONS.feather.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.feather.d} /></svg>
+                            </button>
+                            <button class="w-full text-left px-2.5 py-1.5 rounded-lg text-gray-300 hover:bg-white/10 hover:text-white transition-colors flex items-center justify-between" on:click|stopPropagation={() => sendToBrainstorm('rewrite', { mode: 'shorter' })}>
+                              <span>{$t('brainstorm.mode.shorter')}</span>
+                              <svg class="w-2.5 h-2.5 text-gray-500" viewBox={ICONS.scissors.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.scissors.d} /></svg>
+                            </button>
+                            <button class="w-full text-left px-2.5 py-1.5 rounded-lg text-gray-300 hover:bg-white/10 hover:text-white transition-colors flex items-center justify-between" on:click|stopPropagation={() => sendToBrainstorm('rewrite', { mode: 'intense' })}>
+                              <span>{$t('writing.sel.adjustTone')}</span>
+                              <svg class="w-2.5 h-2.5 text-gray-500" viewBox={ICONS.brainstorm.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.brainstorm.d} /></svg>
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
+
+                      <div class="w-px h-4 bg-white/10 mx-0.5"></div>
+
+                      <button class="{SEL_LABEL_BTN} group relative" title={$t('writing.sel.feedback')} on:click|stopPropagation={() => { selFeedbackOpen = !selFeedbackOpen; selRewriteOpen = false; }}>
+                        <svg class="w-3 h-3 text-gray-400 group-hover:text-white" viewBox={ICONS.userTie.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.userTie.d} /></svg>
+                        <span class="max-w-0 opacity-0 overflow-hidden whitespace-nowrap transition-all duration-200 group-hover:max-w-[110px] group-hover:opacity-100 group-hover:ml-1.5">{$t('writing.sel.feedback')}</span>
+                      </button>
+                      <button class="{SEL_LABEL_BTN} group relative" title={$t('writing.sel.consult')} on:click|stopPropagation={() => sendToBrainstorm('commune', { autoRun: false })}>
+                        <svg class="w-3 h-3 text-gray-400 group-hover:text-white" viewBox={ICONS.personPraying.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.personPraying.d} /></svg>
+                        <span class="max-w-0 opacity-0 overflow-hidden whitespace-nowrap transition-all duration-200 group-hover:max-w-[110px] group-hover:opacity-100 group-hover:ml-1.5">{$t('writing.sel.consult')}</span>
+                      </button>
+                    </div>
+
+                    {#if selFeedbackOpen}
+                      <div class="absolute left-1/2 top-full mt-3 w-80 -translate-x-1/2 rounded-xl border border-white/10 bg-[#18181B] p-3.5 text-xs space-y-2.5"
+                           style="box-shadow: 0 12px 28px -4px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.12);">
+                        <div class="flex items-center justify-between border-b border-white/10 pb-2">
+                          <span class="flex items-center gap-2 font-semibold text-white">
+                            <svg class="w-3 h-3 text-gray-400" viewBox={ICONS.userTie.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.userTie.d} /></svg>
+                            {$t('writing.sel.feedbackTitle')}
+                          </span>
+                          <button class="text-gray-500 hover:text-white transition-colors" on:click|stopPropagation={() => selFeedbackOpen = false} aria-label={$t('common.close')}>
+                            <svg class="w-3 h-3" viewBox={ICONS.reject.vb} fill="currentColor" aria-hidden="true"><path d={ICONS.reject.d} /></svg>
+                          </button>
+                        </div>
+                        <p class="text-[11px] text-gray-400">{$t('writing.sel.feedbackHint')}</p>
+                        <div class="grid grid-cols-2 gap-2">
+                          <button class="rounded-lg border border-white/5 bg-[#222226] p-2 text-left hover:border-white/20 hover:bg-[#2A2A30] transition-all" on:click|stopPropagation={() => sendToBrainstorm('feedback', { mode: 'pacing' })}>
+                            <p class="text-[11px] font-medium text-gray-200">{$t('writing.sel.pacing')}</p>
+                            <p class="text-[9px] text-gray-500">{$t('writing.sel.pacingHint')}</p>
+                          </button>
+                          <button class="rounded-lg border border-white/5 bg-[#222226] p-2 text-left hover:border-white/20 hover:bg-[#2A2A30] transition-all" on:click|stopPropagation={() => sendToBrainstorm('feedback', { mode: 'clarity' })}>
+                            <p class="text-[11px] font-medium text-gray-200">{$t('writing.sel.voice')}</p>
+                            <p class="text-[9px] text-gray-500">{$t('writing.sel.voiceHint')}</p>
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
                   </div>
                 {/if}
                 {#if ivPopup}
@@ -2431,6 +2646,15 @@
                   {:else}
                     {$t('writing.chapter.pendingOther', { n: chapters[currentIdx]?.num ?? '-' })}
                   {/if}
+                </div>
+              {/if}
+
+              <!-- Optional pre-generation guidance: feeds the scene planner and
+                   the prose writer, so staging instructions land on the page. -->
+              {#if ch.status === 'pending' && isCurrent}
+                <div id="CardSection_ChapterGuidance" class="bg-base-100 rounded-lg p-3 space-y-1">
+                  <label class="block text-xs text-base-content/70" for="chapter-guidance">{$t('writing.guidance.label')}</label>
+                  <textarea id="chapter-guidance" class="textarea textarea-sm w-full" bind:value={chapterGuidance} placeholder={$t('writing.guidance.placeholder')} disabled={$taskRunning}></textarea>
                 </div>
               {/if}
 

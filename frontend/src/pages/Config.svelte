@@ -24,7 +24,7 @@
   import Modal from '../lib/components/Modal.svelte';
   import { GENRES, SUBGENRE_DATA, SUBGENRE_PARENT, parentGenreForSubgenre, genreBucketKeys, canonicalSubgenreLabel } from '../lib/novelwriterGenres.js';
   // Round 19: the cascade now flows EXCLUSIVELY through these two modules.
-  import { buildSubgenreIndex, subgenresForKeys, resolveParent, norm as normSub2, ownersOfTokens } from '../lib/subgenreTaxonomy.js';
+  import { buildSubgenreIndex, subgenresForKeys, resolveParent, norm as normSub2, ownersOfTokens, tooltipKey } from '../lib/subgenreTaxonomy.js';
 
   // —— Cross-tab generation state: both workspace tabs ("Config" and "Novel
   // parameters") render this same component, but Svelte destroys and recreates
@@ -53,7 +53,41 @@
   let charName = '', charAge = '', charAppearance = '', charPersonality = '', charBackground = '', charMotivation = '', charAbilities = '', charNotes = '';
   // Protagonist arc quartet (want / need / wound / agency).
   let charWant = '', charNeed = '', charWound = '', charAgency = '';
+  // Enriched dramatic sheet: structural impact, page presence, narrative function.
+  let charRelevance = '', charPresence = '', charAffiliation = '';
+  // Comma-separated aliases (nicknames, titles) for each lore entity.
+  let charAliases = '', wvAliases = '', orgAliases = '';
   let wvName = '', wvCategory = 'other', wvDescription = '', wvTags = '';
+
+  // Worldbuilding aesthetic: project-level visual/tonal lens shown at the top
+  // of the Lore tab.
+  let aesthetic = '';
+  let aestheticBusy = false;
+  function parseAliases(value) {
+    return String(value || '').split(',').map(s => s.trim()).filter(Boolean);
+  }
+  function aliasesText(list) {
+    return (list || []).join(', ');
+  }
+  async function saveAesthetic() {
+    aestheticBusy = true;
+    try {
+      await api('PUT', '/api/settings/aesthetic', { aesthetic });
+      addToast($t('config.aesthetic.saved'), 'success');
+      settings.set(await api('GET', '/api/settings'));
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { aestheticBusy = false; }
+  }
+  async function generateAesthetic() {
+    if (aestheticBusy) return;
+    aestheticBusy = true;
+    try {
+      const res = await api('POST', '/api/settings/aesthetic/generate', { aesthetic }, {}, 120000);
+      if (res?.text) aesthetic = res.text;
+      else addToast($t('config.aesthetic.generateEmpty'), 'error');
+    } catch (e) { addToast(e.message, 'error'); }
+    finally { aestheticBusy = false; }
+  }
 
   // Organization management
   let showOrgForm = false;
@@ -79,7 +113,9 @@
   // what the user typed).
   let sharedStoryDraft = null;   // last localStoryCfg value
 
-  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', philosophical_dilemma: '', reader_expectation: '', forces_in_tension: '', elevator_pitch: '', lighthouse_sentence: '', differentiating_idea: '', creativity_level: 0, work_type: '', fanfic_source: '' };
+  let localStoryCfg = { type: '', title: '', subgenre: '', theme: '', tone: '', author: '', story_length: '', structure: '', motif: '', inspirational_pieces: '', output_language: '', story_idea: '', character_arcs_enabled: false, conflict_scale: '', conflict_other: '', specific_settings: '', protagonist_type: '', protagonist_other: '', gender_bias: 'random', target_audience: '', audience_profile: '', romance_level: '', sexual_content: '', gore_level: '', world_darkness: '', locations_enabled: false, target_words_per_chapter: 2500, writing_style: '', writing_pov: '', philosophical_dilemma: '', reader_expectation: '', forces_in_tension: '', elevator_pitch: '', lighthouse_sentence: '', differentiating_idea: '', author_hidden_agenda: '', creativity_level: 0, work_type: '', fanfic_source: '' };
+  // Mock "Artwork medium" control: UI-only for now, deliberately not persisted.
+  let artworkMedium = '';
   // Preserve unsaved edits across workspace-tab switches (this component is
   // recreated on every tab change; without this the Genre field and friends
   // would silently reset to whatever was last saved on the server).
@@ -111,9 +147,11 @@
     } catch (e) { /* ignore */ }
   });
 
-// Novel-parameter tooltips (subgenre/structure hints) fetched from /api/novel-params.
+// Novel-parameter tooltips (subgenre/structure/length hints) fetched from
+// /api/novel-params, already resolved by the backend into the story language.
 let SUBGENRE_HINTS = {};
 let STRUCTURE_HINTS = {};
+let LENGTH_HINTS = {};
 let SUBGENRE_PRESETS = [];
 // Story length / structure catalogs & presets, refreshed from /api/novel-params
 // (backend is the single source of truth: config.LengthKeys,
@@ -125,7 +163,7 @@ let ALL_STRUCTURE_KEYS = ['three_act', 'six_act', 'fichtean', 'freytag', 'seven_
 // /api/novel-params payload). Round 13: novel -> 4000, epic -> 5000.
 let TARGET_WORDS_BY_LENGTH = { flash: 1000, short: 2000, novelette: 2500, novella: 2500, light_novel: 3500, anthology: 4000, novel: 4000, epic: 5000 };
 let novelParamsTick = 0;
-function subgenreHint(s) { return SUBGENRE_HINTS[(s || '').toLowerCase()] || ''; }
+function subgenreHint(s) { return SUBGENRE_HINTS[tooltipKey(s)] || ''; }
 function structHint(k) { return STRUCTURE_HINTS[k] || ''; }
 
 // Novel parameters: genre presets (mirror of backend config.Genre* maps; "other" is always available).
@@ -316,13 +354,6 @@ $: if ($config?.story && $config.story.type !== undefined) {
   }
 }
 
-// Build the genre combobox options: localized label + short blurb as the
-// secondary line of each item (rich item list).
-$: genreComboOpts = (() => {
-  void novelParamsTick;
-  return GENRES.map((g) => ({ value: g.label, label: g.label, desc: genreBlurb(g.key) }));
-})();
-
 // Genre combobox "change" handler (single or multi via chips; free text = Other).
 function onGenreComboChange(e) {
   const v = String(e.detail.value || '');
@@ -508,27 +539,6 @@ function unionSubgenresFor(keys) {
 
   $: subgenreOptions = subgenreOptionsFor(selectedGenreKeys);
 
-  // Combobox option objects for Subgenre: bold label + backend hint as the
-  // secondary description line (rich item list). Free-typed values that are
-  // not in the catalog are appended as options too, so the combobox keeps
-  // showing their localized label instead of a raw key.
-  $: subgenreComboOpts = (() => {
-    void novelParamsTick;
-    const opts = subgenreOptions.map((s) => ({ value: s, label: s, desc: subgenreHint(s) || '' }));
-    const cur = (localStoryCfg.subgenre || '').trim();
-    if (cur && !opts.some((o) => o.value === cur)) opts.push({ value: cur, label: cur, desc: subgenreHint(cur) || '' });
-    return opts;
-  })();
-
-  // Same for the genre combobox: keep any free-typed extras selectable/labelled.
-  $: genreComboOptsFull = (() => {
-    const opts = genreComboOpts;
-    for (const p of String(localStoryCfg.type || '').split(',').map((x) => x.trim()).filter(Boolean)) {
-      if (!opts.some((o) => o.value.toLowerCase() === p.toLowerCase())) opts.push({ value: p, label: p, desc: '' });
-    }
-    return opts;
-  })();
-
   // Reactive value shown in the genre/subgenre info box: the stored subgenre
   // (whether a preset label or free-typed "Other" text).
   $: infoSubgenre = String(localStoryCfg.subgenre || '');
@@ -629,24 +639,6 @@ function onStructureComboChange(e) {
 // Length: combobox with localized labels (the list is short so filtering just
 // narrows it while typing). Changing the length still applies its words-per-
 // chapter preset via onLengthChange.
-const LENGTH_BLURBS = {
-  en: {
-    flash: 'Flash fiction: a single continuous piece (under ~1,500 words). One moment, one turn — chapters here are micro-units.',
-    short: 'Short story (~1,500–7,500 words): one arc, few characters, immediate resolution. Compact pacing.',
-    novelette: 'Novelette (7,500–17,500 words): a fuller arc with one subplot; more room for character growth than a short.',
-    novella: 'Novella (17,500–40,000 words): focused plot, limited cast, novelistic depth without epic breadth.',
-    light_novel: 'Light Novel: Japanese-style serial prose — short punchy chapters (~3,500 words), dialogue-heavy, arc-driven.',
-    anthology: 'Anthology: a collection of self-contained stories linked by theme or world; each entry has its own arc.',
-    novel: 'Standard novel (~60k–90k words): full multi-chapter arc; ~4,000-word chapters balance pace and depth.',
-    epic: 'Epic novel (100k+ words): multiple POVs/subplots and world-scale stakes; longer ~5,000-word chapters.',
-  },
-
-};
-$: lengthDescFor = (k) => (LENGTH_BLURBS.en[k]) || '';
-$: lengthComboOpts = (() => {
-  void novelParamsTick;
-  return LENGTH_KEYS.map((k) => ({ value: k, label: $t('config.story.length.' + k), desc: lengthDescFor(k) }));
-})();
 
 // Conflict scale / protagonist type: searchable comboboxes over the lists
 // derived from the current subgenre/genre (rich "Other": any unmatched text
@@ -756,32 +748,9 @@ function onProtagonistComboChange(e) {
   localStoryCfg.protagonist_type = v;
 }
 
-// Info box (round 11): one-line description of the selected parent genre,
-// keyed by GENRES[].key. The subgenre side of the box uses the backend
-// subgenre_hints (via subgenreHint()); these static blurbs cover the genre.
-const GENRE_BLURBS = {
-  en: {
-    fantasy: 'Imaginative worlds with magic, mythical creatures or supernatural rules — from epic secondary worlds to urban hidden societies.',
-    scifi: 'Speculative fiction grounded in technology, science or future societies: space opera, cyberpunk, dystopia, first contact…',
-    mystery: 'Crime and puzzles at the center: an investigation drives the plot, from cozy village whodunits to hard-boiled noir and heists.',
-    romance: 'The love story is the main plot — emotional arcs, relationship obstacles and a satisfying ending are promised to the reader.',
-    thriller: 'Pace, danger and suspense: chases, conspiracies and high stakes, whether espionage, legal, domestic or action-driven.',
-    horror: 'Designed to frighten and unsettle: supernatural dread, cosmic insignificance, body terror or the monsters next door.',
-    historical: 'Fiction anchored in a real period, with period-authentic settings, customs and events shaping the characters’ lives.',
-    western: 'Frontier stories of lawlessness, honor codes and open land — classic, spaghetti, weird or transplanted to space.',
-    drama: 'Character-first literary fiction: family sagas, coming-of-age, psychorealism, metafiction, existentialist and philosophical stories.',
-    adventure: 'Movement-driven fiction: quests, exploration, survival and treasure hunts where the journey and its dangers are the plot — includes martial-arts, superhero and battle-royale action.',
-  },
-
-};
-function genreBlurb(key) {
-  return (GENRE_BLURBS.en)[key] || '';
-}
-
-// Info-box lines: one blurb per selected parent genre (multi-select aware).
-function genreBlurbLines() {
-  return selectedGenreKeys.filter((k) => k !== OTHER_GENRE).map((k) => genreBlurb(k)).filter(Boolean);
-}
+// Info box (round 11): the genre/subgenre blurbs now come from
+// /api/novel-params (internal/config/Tooltips_helpers.json) in the story
+// language; nothing is duplicated here anymore.
 
 // (Round 16: restoreSubgenreSelect removed — the Subgenre combobox is always
 // editable; free text IS the "Other" value, no separate mode to leave.)
@@ -906,15 +875,11 @@ function randomizeStoryParams() {
   $: structOpts = structureOptions();
   // UI-reorder (novel-params): SmartSelect option lists for the Length &
   // Structure cells now rendered directly in the Story grid (under Gore
-  // Level). Same data pipeline as lengthComboOpts/structureComboOpts but with
+  // Level). Descriptions come from /api/novel-params (story language) and use
   // the `description` field SmartSelect reads for its two-line rows.
   $: lengthOpts = (() => {
     void novelParamsTick;
-    return LENGTH_KEYS.map((k) => ({ value: k, label: $t('config.story.length.' + k), description: lengthDescFor(k) }));
-  })();
-  $: structureOpts = (() => {
-    void novelParamsTick;
-    return ALL_STRUCTURE_KEYS.map((k) => ({ value: k, label: $t('config.story.structure.' + k), description: structHint(k) || '' }));
+    return LENGTH_KEYS.map((k) => ({ value: k, label: $t('config.story.length.' + k), description: LENGTH_HINTS[k] || '' }));
   })();
   function onLengthChange(e) {
     // The Story-length SmartSelect also binds cfg.story_length directly; when
@@ -931,10 +896,6 @@ function randomizeStoryParams() {
     const firstPart = cur.split(',')[0].trim();
     const wasAuto = !cur || Object.values(DEFAULT_STRUCTURE).includes(firstPart);
     if (wasAuto) localStoryCfg.structure = DEFAULT_STRUCTURE[localStoryCfg.story_length] || 'three_act';
-  }
-
-  function onStructureChange(e) {
-    if (e && e.detail) localStoryCfg.structure = String(e.detail.value || '').trim();
   }
 
   // AI section generation (based on the story parameters currently in the form)
@@ -983,10 +944,11 @@ function randomizeStoryParams() {
         else if (sec === 'audience_profile') { owned.add('audience_profile'); owned.add('reader_expectation'); }
         else if (sec === 'reader_expectation') owned.add('reader_expectation');
         else if (sec === 'differentiating_idea') owned.add('differentiating_idea');
+        else if (sec === 'author_hidden_agenda') owned.add('author_hidden_agenda');
         else if (sec === 'style') { owned.add('writing_style'); owned.add('writing_pov'); }
       }
       const merged = {};
-      for (const k of ['theme', 'motif', 'tone', 'specific_settings', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov', 'philosophical_dilemma', 'reader_expectation', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence', 'differentiating_idea']) {
+      for (const k of ['theme', 'motif', 'tone', 'specific_settings', 'inspirational_pieces', 'story_idea', 'audience_profile', 'writing_style', 'writing_pov', 'philosophical_dilemma', 'reader_expectation', 'forces_in_tension', 'elevator_pitch', 'lighthouse_sentence', 'differentiating_idea', 'author_hidden_agenda']) {
         const sv = (st[k] || '').trim();
         if (!sv) continue;
         if (owned.has(k) || !(localStoryCfg[k] || '').trim()) merged[k] = st[k];
@@ -1282,6 +1244,7 @@ function randomizeStoryParams() {
       story_idea: $t('config.generate.chat.story_idea'),
       audience_profile: $t('config.generate.chat.audience_profile'),
       reader_expectation: $t('config.generate.chat.reader_expectation'),
+      author_hidden_agenda: $t('config.generate.chat.author_hidden_agenda'),
     };
     const msg = section === 'differentiating_idea'
       // Story appeal: the creativity level travels through the deterministic
@@ -1384,6 +1347,7 @@ function randomizeStoryParams() {
     audience_profile: 'config.audience.profileSubtitle',
     reader_expectation: 'config.readerExp.title',
     differentiating_idea: 'config.appeal.ideaTitle',
+    author_hidden_agenda: 'config.hiddenAgenda.title',
     story_idea: 'config.story_idea.subtitle',
     forces_in_tension: 'config.forces.title',
     elevator_pitch: 'config.elevator.title',
@@ -1534,28 +1498,37 @@ function randomizeStoryParams() {
     return m;
   })();
 
+  // Load the novel-parameter catalogs from the backend (single source of truth
+  // for subgenre/structure/term tooltips, length keys and word targets). Called
+  // on mount and again when the Story language changes, because the backend
+  // resolves every tooltip into that language.
+  async function loadNovelParams() {
+    const p = await api('GET', '/api/novel-params');
+    novelParamsPayload = p;
+    novelParamsTick++;
+    if (p.subgenre_catalogs && typeof p.subgenre_catalogs === 'object') SUBGENRE_CATALOGS = p.subgenre_catalogs;
+    if (p.subgenre_parents && typeof p.subgenre_parents === 'object') SUBGENRE_PARENT_TABLE = p.subgenre_parents;
+    if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
+    if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
+    if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
+    SUBGENRE_HINTS = p.subgenre_hints || {};
+    STRUCTURE_HINTS = p.structure_hints || {};
+    LENGTH_HINTS = p.length_hints || {};
+    SUBGENRE_PRESETS = p.subgenre_presets || [];
+  }
+
   onMount(async () => {
     try { apiConfig.set(await api('GET', '/api/config/api')); } catch (e) {}
     try { config.set(await api('GET', '/api/config')); } catch (e) {}
-    try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
-    // Load the novel-parameter catalogs from the backend (single source of
-    // truth for subgenre hints, length/structure keys and word targets).
+    try {
+      const s = await api('GET', '/api/settings');
+      settings.set(s);
+      aesthetic = s.aesthetic || '';
+    } catch (e) {}
     // NOTE: this call site used to reference an undefined `fetchNovelParams`,
     // which threw a ReferenceError inside onMount and killed every handler
     // that depends on it (including the Story-parameters randomizer).
-    try {
-      const p = await api('GET', '/api/novel-params');
-      novelParamsPayload = p;
-      novelParamsTick++;
-      if (p.subgenre_catalogs && typeof p.subgenre_catalogs === 'object') SUBGENRE_CATALOGS = p.subgenre_catalogs;
-      if (p.subgenre_parents && typeof p.subgenre_parents === 'object') SUBGENRE_PARENT_TABLE = p.subgenre_parents;
-      if (Array.isArray(p.length_keys) && p.length_keys.length) LENGTH_KEYS = p.length_keys;
-      if (Array.isArray(p.all_structure_keys) && p.all_structure_keys.length) ALL_STRUCTURE_KEYS = p.all_structure_keys;
-      if (p.target_words_by_length) TARGET_WORDS_BY_LENGTH = p.target_words_by_length;
-      SUBGENRE_HINTS = p.subgenre_hints || {};
-      STRUCTURE_HINTS = p.structure_hints || {};
-      SUBGENRE_PRESETS = p.subgenre_presets || [];
-    } catch (e) { /* fall back to the local mirrors above */ }
+    await loadNovelParams().catch(() => { /* fall back to the local mirrors */ });
     // A generation may still be running (it was started fire-and-forget, and
     // this component gets destroyed/recreated on every workspace-tab switch).
     // Re-adopt its busy flags, keep the global spinner honest, and make sure
@@ -1641,6 +1614,11 @@ function randomizeStoryParams() {
       const saved = await api('PUT', '/api/config', { ...($config || {}), story });
       config.set(saved);
       addToast($t('config.story.saved'), 'success');
+      // The backend resolves every static tooltip into the Story language, so
+      // refresh the catalog when that language changed (no reload needed).
+      if (String(story.output_language || '') !== String(prev.output_language || '')) {
+        loadNovelParams().catch(() => {});
+      }
 
       if (hasAccepted && settingsChanged) {
         showConfirm($t('config.story.reconcileAsk'), async () => {
@@ -1659,6 +1637,8 @@ function randomizeStoryParams() {
       name: charName, age: charAge, appearance: charAppearance, personality: charPersonality,
       background: charBackground, motivation: charMotivation, abilities: charAbilities, notes: charNotes,
       want: charWant, need: charNeed, wound: charWound, agency: charAgency,
+      relevance: charRelevance, presence: charPresence, affiliation: charAffiliation,
+      aliases: charAliases,
     });
   }
   function isCharFormDirty() {
@@ -1681,10 +1661,16 @@ function randomizeStoryParams() {
       charNeed = char.need || '';
       charWound = char.wound || '';
       charAgency = char.agency || '';
+      charRelevance = char.relevance || '';
+      charPresence = char.presence || '';
+      charAffiliation = char.affiliation || '';
+      charAliases = aliasesText(char.aliases);
     } else {
       $editingCharID = null;
       charName = charAge = charAppearance = charPersonality = charBackground = charMotivation = charAbilities = charNotes = '';
       charWant = charNeed = charWound = charAgency = '';
+      charRelevance = charPresence = charAffiliation = '';
+      charAliases = '';
     }
     charFormSnapshot = charFormSnapshotNow();
   }
@@ -1704,7 +1690,7 @@ function randomizeStoryParams() {
 
   async function saveCharacter() {
     if (!charName.trim()) { addToast($t('config.char.nameRequired'), 'error'); return; }
-    const data = { name: charName.trim(), age: charAge, appearance: charAppearance, personality: charPersonality, background: charBackground, motivation: charMotivation, abilities: charAbilities, notes: charNotes, want: charWant, need: charNeed, wound: charWound, agency: charAgency };
+    const data = { name: charName.trim(), age: charAge, appearance: charAppearance, personality: charPersonality, background: charBackground, motivation: charMotivation, abilities: charAbilities, notes: charNotes, want: charWant, need: charNeed, wound: charWound, agency: charAgency, relevance: charRelevance, presence: charPresence, affiliation: charAffiliation, aliases: parseAliases(charAliases) };
     try {
       let savedId = $editingCharID;
       if (savedId) {
@@ -1743,7 +1729,7 @@ function randomizeStoryParams() {
 
   let wvFormSnapshot = '';
   function wvFormSnapshotNow() {
-    return JSON.stringify({ name: wvName, category: wvCategory, description: wvDescription, tags: wvTags });
+    return JSON.stringify({ name: wvName, category: wvCategory, description: wvDescription, tags: wvTags, aliases: wvAliases });
   }
   function isWvFormDirty() {
     return showWvForm && wvFormSnapshotNow() !== wvFormSnapshot;
@@ -1757,10 +1743,12 @@ function randomizeStoryParams() {
       wvCategory = item.category || 'other';
       wvDescription = item.description || '';
       wvTags = item.tags || '';
+      wvAliases = aliasesText(item.aliases);
     } else {
       $editingWvID = null;
       // New entries opened from a category section start in that category.
       wvName = ''; wvCategory = cat || 'other'; wvDescription = ''; wvTags = '';
+      wvAliases = '';
     }
     wvFormSnapshot = wvFormSnapshotNow();
   }
@@ -1782,7 +1770,7 @@ function randomizeStoryParams() {
   // form's Generate button so generation can target the just-saved row.
   async function saveWorldview() {
     if (!wvName.trim()) { addToast($t('config.wv.requiredFields'), 'error'); return null; }
-    const data = { name: wvName.trim(), category: wvCategory, description: wvDescription.trim(), tags: wvTags };
+    const data = { name: wvName.trim(), category: wvCategory, description: wvDescription.trim(), tags: wvTags, aliases: parseAliases(wvAliases) };
     try {
       let savedId = $editingWvID;
       if (savedId) {
@@ -1824,6 +1812,7 @@ function randomizeStoryParams() {
   // state (nothing is persisted until Save).
   let loreEnhanceBusy = {};
   const LORE_ENHANCE_HINTS = {
+    'aesthetic': 'config.aesthetic.hint',
     'char:name': 'config.char.name',
     'char:age': 'config.char.age',
     'char:appearance': 'config.char.appearance',
@@ -1887,7 +1876,7 @@ function randomizeStoryParams() {
   // -- Organization CRUD --
   let orgFormSnapshot = '';
   function orgFormSnapshotNow() {
-    return JSON.stringify({ name: orgName, type: orgType, description: orgDescription, members: orgMembers });
+    return JSON.stringify({ name: orgName, type: orgType, description: orgDescription, members: orgMembers, aliases: orgAliases });
   }
   function isOrgFormDirty() {
     return showOrgForm && orgFormSnapshotNow() !== orgFormSnapshot;
@@ -1901,10 +1890,12 @@ function randomizeStoryParams() {
       orgType = org.type || '';
       orgDescription = org.description || '';
       orgMembers = [...(org.members || [])];
+      orgAliases = aliasesText(org.aliases);
     } else {
       editingOrgID = null;
       orgName = orgType = orgDescription = '';
       orgMembers = [];
+      orgAliases = '';
     }
     orgFormSnapshot = orgFormSnapshotNow();
   }
@@ -1924,7 +1915,7 @@ function randomizeStoryParams() {
 
   async function saveOrganization() {
     if (!orgName.trim()) { addToast($t('config.org.nameRequired'), 'error'); return; }
-    const data = { name: orgName.trim(), type: orgType, description: orgDescription, members: orgMembers };
+    const data = { name: orgName.trim(), type: orgType, description: orgDescription, members: orgMembers, aliases: parseAliases(orgAliases) };
     try {
       let savedId = editingOrgID;
       if (savedId) {
@@ -2428,6 +2419,48 @@ function randomizeStoryParams() {
 
           <div class="divider col-span-2 my-0 py-6 h-px"></div>
 
+          <!-- UI-reorder: Story language | Artwork medium, above the length row -->
+          <div>
+            <span class="field-label">{$t('config.story.language')}</span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={[
+                { value: 'en', label: '🇬🇧 ' + $t('config.story.language.en') },
+                { value: 'es', label: '🇪🇸 ' + $t('config.story.language.es') },
+              ]}
+              allowCustom={false}
+              emptyLabel={$t('config.story.language.auto')}
+              disabled={$taskRunning}
+              title={$t('config.tip.language')}
+              ariaLabel={$t('config.story.language')}
+              bind:value={localStoryCfg.output_language}
+            />
+          </div>
+          <!-- Mock control (no persistence yet): medium the work is meant for. -->
+          <div>
+            <span class="field-label">{$t('config.story.artworkMedium')}</span>
+            <!-- svelte-ignore a11y-no-redundant-roles -->
+            <SmartSelect
+              options={[
+                { value: 'novel', label: $t('config.story.artworkMedium.novel') },
+                { value: 'movie', label: $t('config.story.artworkMedium.movie') },
+                { value: 'tv_series', label: $t('config.story.artworkMedium.tv_series') },
+                { value: 'opera', label: $t('config.story.artworkMedium.opera') },
+                { value: 'vertical_short_drama', label: $t('config.story.artworkMedium.vertical_short_drama') },
+                { value: 'theatre', label: $t('config.story.artworkMedium.theatre') },
+                { value: 'graphic_novel', label: $t('config.story.artworkMedium.graphic_novel') },
+                { value: 'audio_drama', label: $t('config.story.artworkMedium.audio_drama') },
+                { value: 'video_game', label: $t('config.story.artworkMedium.video_game') },
+              ]}
+              allowCustom={false}
+              emptyLabel={$t('config.story.auto')}
+              disabled={$taskRunning}
+              title={$t('config.tip.artworkMedium')}
+              ariaLabel={$t('config.story.artworkMedium')}
+              bind:value={artworkMedium}
+            />
+          </div>
+
           <!-- UI-reorder: Story length | Target words per chapter -->
           <div>
             <span class="field-label flex items-center gap-1">
@@ -2449,42 +2482,6 @@ function randomizeStoryParams() {
           <div>
             <span class="field-label">{$t('config.story.targetWords')}</span>
             <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} disabled={$taskRunning} />
-          </div>
-
-          <!-- UI-reorder: Story structure | Story language -->
-          <div>
-            <span class="field-label flex items-center gap-1">
-              {$t('config.story.structure')}
-            </span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={structureOpts}
-              allowCustom={true}
-              otherLabel={$t('config.story.other')}
-              placeholder={$t('config.story.structure.placeholder')}
-              emptyLabel={$t('config.story.auto')}
-              disabled={$taskRunning}
-              title={$t('config.tip.structure')}
-              ariaLabel={$t('config.story.structure')}
-              bind:value={localStoryCfg.structure}
-              on:change={onStructureChange}
-            />
-          </div>
-          <div>
-            <span class="field-label">{$t('config.story.language')}</span>
-            <!-- svelte-ignore a11y-no-redundant-roles -->
-            <SmartSelect
-              options={[
-                { value: 'en', label: 'EN — ' + $t('config.story.language.en') },
-                { value: 'es', label: 'ES — ' + $t('config.story.language.es') },
-              ]}
-              allowCustom={false}
-              emptyLabel={$t('config.story.language.auto')}
-              disabled={$taskRunning}
-              title={$t('config.tip.language')}
-              ariaLabel={$t('config.story.language')}
-              bind:value={localStoryCfg.output_language}
-            />
           </div>
 
           <div>
@@ -2842,6 +2839,23 @@ function randomizeStoryParams() {
             </div>
           </div>
         </div>
+        <!-- Author hidden agenda: a second Story appeal sub-section, separated
+             by a divider. It is a private steering note (contest jury taste,
+             niche readership, a theme carried only in subtext) injected into
+             every generation prompt through NovelParametersBlock — the prose
+             must never state it. -->
+        <div class="divider my-0 py-6 h-px"></div>
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <h3 class="card-title text-base">{$t('config.hiddenAgenda.title')}</h3>
+          <AiGenerateButton hoverReveal={true} busy={!!genBusy['author_hidden_agenda']} title={genLastError || $t('common.generate')}
+            on:click={() => generateSection('author_hidden_agenda')} />
+        </div>
+        <div>
+          <span class="field-label">{$t('config.hiddenAgenda.subtitle')}</span>
+          <EnhanceField field="author_hidden_agenda" controlClass="textarea textarea-sm w-full text-xs" bind:value={localStoryCfg.author_hidden_agenda}
+            placeholder={$t('config.hiddenAgenda.placeholder')} disabled={$taskRunning} title={$t('config.tip.hiddenAgenda')}
+            busy={!!genBusy['enhance:author_hidden_agenda']} label={$t('config.appeal.enhance')} onEnhance={enhanceField} />
+        </div>
       </div>
       <div class="flex justify-end gap-1.5">
         <button class="btn btn-primary btn-xs hover-target" on:click={saveStoryConfig} disabled={$taskRunning}>{$t('common.save')}</button>
@@ -2910,6 +2924,26 @@ function randomizeStoryParams() {
     {/if}
 
     {#if tab === 'lore'}
+  <!-- Worldbuilding aesthetic: the project-wide visual/tonal lens. It lives at
+       the top of Lore because every entity and every generation step inherits it. -->
+  <div class="card bg-base-200 group/card">
+    <div class="card-body p-12 gap-4">
+      <div class="flex justify-between items-center gap-3">
+        <div>
+          <h3 class="card-title text-base">{$t('config.aesthetic.title')}</h3>
+          <p class="text-xs text-base-content/70 mt-1">{$t('config.aesthetic.help')}</p>
+        </div>
+        <AiGenerateButton hoverReveal={true} busy={aestheticBusy} title={$t('common.generate')} on:click={generateAesthetic} />
+      </div>
+      <EnhanceField field="aesthetic" rows="4" bind:value={aesthetic} disabled={$taskRunning}
+        placeholder={$t('config.aesthetic.placeholder')}
+        busy={loreBusy('aesthetic')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+      <div class="flex justify-end">
+        <button class="btn btn-primary btn-sm hover-target" on:click={saveAesthetic} disabled={$taskRunning || aestheticBusy}>{$t('common.save')}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Characters -->
   <div class="card bg-base-200 group/card">
     <div class="card-body p-12 gap-5">
@@ -2930,6 +2964,9 @@ function randomizeStoryParams() {
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{stripNameMarks(c.name)}</div>
                   <div class="text-xs text-base-content/65 line-clamp-1">{c.personality || c.background || c.age || ''}</div>
+                  {#if (c.aliases || []).length > 0}
+                    <div class="text-[11px] text-base-content/55 line-clamp-1 mt-0.5">{$t('config.lore.aka')}: {c.aliases.join(', ')}</div>
+                  {/if}
                 </div>
                 <div class="absolute right-1.5 top-1.5 flex gap-1 rounded-lg p-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
                   <button class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} on:click={() => openCharForm(c)} disabled={$taskRunning}>
@@ -2989,6 +3026,10 @@ function randomizeStoryParams() {
               <EnhanceField field="char:notes" bind:value={charNotes} disabled={$taskRunning}
                 busy={loreBusy('char:notes')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
+            <div class="col-span-2">
+              <span class="field-label">{$t('config.lore.aliases')}</span>
+              <input class="input input-sm w-full" bind:value={charAliases} placeholder={$t('config.lore.aliases.placeholder')} disabled={$taskRunning} />
+            </div>
           </div>
 
           <!-- Protagonist arc quartet: want / need / wound / agency. -->
@@ -3020,12 +3061,57 @@ function randomizeStoryParams() {
                 busy={loreBusy('char:agency')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
           </div>
+
+          <!-- Enriched dramatic sheet: the three fixed role axes that feed the
+               Story Web and every outline prompt. -->
+          <div class="divider my-2 h-px"></div>
+          <div class="flex items-baseline justify-between gap-2 mb-1">
+            <span class="text-xs font-semibold text-base-content/70">{$t('config.char.role.title')}</span>
+            <span class="text-[11px] text-base-content/55">{$t('config.char.role.hint')}</span>
+          </div>
+          <div class="grid grid-cols-1 gap-y-2">
+            <div>
+              <span class="field-label">{$t('config.char.relevance')}</span>
+              <SmartSelect
+                options={['fundamental', 'secondary', 'contextual'].map(v => ({ value: v, label: $t('config.char.relevance.' + v) }))}
+                allowCustom={false}
+                placeholder={$t('config.char.role.none')}
+                emptyLabel={$t('config.char.role.none')}
+                disabled={$taskRunning}
+                ariaLabel={$t('config.char.relevance')}
+                bind:value={charRelevance}
+              />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.presence')}</span>
+              <SmartSelect
+                options={['main', 'recurring', 'incidental', 'shadow'].map(v => ({ value: v, label: $t('config.char.presence.' + v) }))}
+                allowCustom={false}
+                placeholder={$t('config.char.role.none')}
+                emptyLabel={$t('config.char.role.none')}
+                disabled={$taskRunning}
+                ariaLabel={$t('config.char.presence')}
+                bind:value={charPresence}
+              />
+            </div>
+            <div>
+              <span class="field-label">{$t('config.char.affiliation')}</span>
+              <SmartSelect
+                options={['protagonist', 'antagonist', 'ally', 'neutral', 'foil'].map(v => ({ value: v, label: $t('config.char.affiliation.' + v) }))}
+                allowCustom={false}
+                placeholder={$t('config.char.role.none')}
+                emptyLabel={$t('config.char.role.none')}
+                disabled={$taskRunning}
+                ariaLabel={$t('config.char.affiliation')}
+                bind:value={charAffiliation}
+              />
+            </div>
+          </div>
           <svelte:fragment slot="footer">
             <button class="btn btn-ghost btn-sm" on:click={closeCharForm}>{$t('common.cancel')}</button>
             <button class="btn btn-primary btn-sm" on:click={saveCharacter} disabled={$taskRunning}>{$t('config.char.save')}</button>
           </svelte:fragment>
         </Modal>
-
         <div class="flex items-center justify-between gap-2 min-h-[42px]">
           <button class="btn btn-primary btn-sm hover-target" on:click={requestNewChar} disabled={$taskRunning}>{$t('config.char.create')}</button>
           {#if chars.length > 0}
@@ -3063,6 +3149,9 @@ function randomizeStoryParams() {
                     <div class="flex-1 min-w-0">
                       <div class="text-sm font-medium truncate">{w.name}</div>
                       <div class="text-xs text-base-content/65 line-clamp-1">{w.description}</div>
+                      {#if (w.aliases || []).length > 0}
+                        <div class="text-[11px] text-base-content/55 line-clamp-1 mt-0.5">{$t('config.lore.aka')}: {w.aliases.join(', ')}</div>
+                      {/if}
                     </div>
                     <div class="absolute right-1.5 top-1.5 flex gap-1 rounded-lg p-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
                       <button class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} on:click={() => openWvForm(w)} disabled={$taskRunning}>
@@ -3111,6 +3200,10 @@ function randomizeStoryParams() {
               <EnhanceField type="input" field="wv:tags" controlClass="input input-sm w-full" bind:value={wvTags} placeholder={$t('config.wv.tags.placeholder')} disabled={$taskRunning}
                 busy={loreBusy('wv:tags')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
             </div>
+            <div class="col-span-2">
+              <span class="field-label">{$t('config.lore.aliases')}</span>
+              <input class="input input-sm w-full" bind:value={wvAliases} placeholder={$t('config.lore.aliases.placeholder')} disabled={$taskRunning} />
+            </div>
           </div>
           <svelte:fragment slot="footer">
             <button class="btn btn-ghost btn-sm" on:click={closeWvForm}>{$t('common.cancel')}</button>
@@ -3149,6 +3242,9 @@ function randomizeStoryParams() {
                   {#if (o.members || []).length > 0}
                     <div class="text-xs text-base-content/65 line-clamp-1 mt-0.5">{$t('config.org.membersList', { names: (o.members || []).map(id => nameById[id] || id).join(', ') })}</div>
                   {/if}
+                  {#if (o.aliases || []).length > 0}
+                    <div class="text-[11px] text-base-content/55 line-clamp-1 mt-0.5">{$t('config.lore.aka')}: {o.aliases.join(', ')}</div>
+                  {/if}
                 </div>
                 <div class="absolute right-1.5 top-1.5 flex gap-1 rounded-lg p-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-200">
                   <button class="btn row-act-btn btn-xs btn-square" title={$t('common.edit')} aria-label={$t('common.edit')} on:click={() => openOrgForm(o)} disabled={$taskRunning}>
@@ -3182,6 +3278,10 @@ function randomizeStoryParams() {
               <span class="field-label">{$t('config.org.description')}</span>
               <EnhanceField field="org:description" rows="4" bind:value={orgDescription} disabled={$taskRunning}
                 busy={loreBusy('org:description')} label={$t('config.appeal.enhance')} onEnhance={enhanceLoreText} />
+            </div>
+            <div class="col-span-2">
+              <span class="field-label">{$t('config.lore.aliases')}</span>
+              <input class="input input-sm w-full" bind:value={orgAliases} placeholder={$t('config.lore.aliases.placeholder')} disabled={$taskRunning} />
             </div>
             {#if chars.length > 0}
               <div class="col-span-2">

@@ -8,82 +8,11 @@ import (
 	"showmethestory/internal/i18n"
 )
 
-// structureDescriptions maps a novel-structure key to short beat descriptions,
-// adapted from NovelWriter's structure frameworks. Used to guide outline
-// generation when the user picks a story structure in the config.
-var structureDescriptions = map[string][2]string{ // [es, en]
-	"three_act": {
-		"Estructura en tres actos: Acto I (~25%) planteamiento e incidente incitador; Acto II (~50%) conflicto creciente, punto de giro central y punto bajo; Acto III (~25%) clímax y desenlace.",
-		"Three-act structure: Act I (~25%) setup and inciting incident; Act II (~50%) rising conflict, midpoint reversal, low point; Act III (~25%) climax and resolution.",
-	},
-	"six_act": {
-		"Estructura en seis partes: inicio (mundo ordinario), evento detonante, acción creciente, prueba/giro a mitad, crisis previa al clímax, resolución.",
-		"Six-part structure: beginning (ordinary world), trigger event, rising action, midpoint test/turn, pre-climax crisis, resolution.",
-	},
-	"fichtean": {
-		"Estructura Fichtean de cinco crisis: una cadena de crisis escalantes, cada una con planteamiento breve, conflicto creciente y momento de decisión; planifica la trama hacia atrás desde el clímax.",
-		"Fichtean five-crisis structure: a chain of escalating crises, each with brief setup, rising conflict and decision moment; plot backwards from the climax.",
-	},
-	"freytag": {
-		"Pirámide de Freytag: exposición, acción creciente, clímax en el centro, acción descendente, desenlace/catástrofe.",
-		"Freytag's pyramid: exposition, rising action, climax at the middle, falling action, denouement/catastrophe.",
-	},
-	"seven_point": {
-		"Estructura de siete puntos: gancho (0%), primer giro argumental (15%), presión 1 (35%), punto medio (50%), segundo giro (65%), presión 2 (85%), resolución (100%).",
-		"Seven-point structure: hook (0%), first plot turn (15%), pinch 1 (35%), midpoint (50%), plot turn 2 (65%), pinch 2 (85%), resolution (100%).",
-	},
-	"heros_journey": {
-		"El viaje del héroe (12 etapas): mundo ordinario, llamada a la aventura, negativa, mentor, cruce del umbral, pruebas/aliados/enemigos, aproximación, calvario, recompensa, camino de regreso, resurrección, retorno con el elixir.",
-		"Hero's journey (12 stages): ordinary world, call to adventure, refusal, mentor, crossing the threshold, tests/allies/enemies, approach, ordeal, reward, road back, resurrection, return with the elixir.",
-	},
-	"heros_journey_simple": {
-		"Viaje del héroe simplificado: partida (mundo ordinario y llamada), iniciación (pruebas y despertar), retorno (transformación y regreso a casa); adecuado para novela corta.",
-		"Simplified hero's journey: departure (ordinary world & call), initiation (trials & awakening), return (transformation & homecoming); suits novellas.",
-	},
-	"save_the_cat": {
-		"Beats de Save the Cat: imagen inicial, tema enunciado, planteamiento, catalizador, debate, entrada al mundo nuevo, historia B, diversión y juego, punto medio, se ciernen los villanos, todo está perdido, noche oscura del alma, clímax, imagen final.",
-		"Save the Cat beats: opening image, theme staked, setup, catalyst, debate, break into two, B story, fun and games, midpoint, bad guys close in, all is lost, dark night of the soul, finale, final image.",
-	},
-	"episodic": {
-		"Estructura episódica: cada capítulo (o grupo) es una unidad autocontenida (caso/aventura) unida de forma suelta por una trama general que converge con el tiempo.",
-		"Episodic structure: each chapter (or group) is a self-contained unit (case/adventure) loosely threaded by an overarching storyline that converges over time.",
-	},
-	"story_circle": {
-		"Círculo narrativo (Dan Harmon): tú → necesitas → entras → te adaptas → buscas → pagas el precio → regresas → cambias. Un bucle de ocho pasos que funciona igual en historias episódicas o serializadas.",
-		"Story circle (Dan Harmon): you → need → go → adapt → search → take → return → change. An eight-step loop that works for episodic and serialized stories alike.",
-	},
-	"kishotenketsu": {
-		"Kishōtenketsu (estructura eastasiática de cuatro actos): introducción → desarrollo → giro/sorpresa → reconciliación. El conflicto es opcional; adecuado para slice-of-life, light novels y antologías.",
-		"Kishōtenketsu (four-act East-Asian structure): introduction → development → surprise/twist → reconciliation. Conflict is optional; suits slice-of-life, light novels and anthologies.",
-	},
-	"snowflake": {
-		"Método copo de nieve: expande una premisa de una frase por capas (párrafo → lista de escenas → personajes → outline); la densidad de capítulos crece con cada iteración, ideal para epopeyas y libros multiperspectiva.",
-		"Snowflake method: expand a one-sentence premise in layers (paragraph → scene list → characters → outline); chapter density grows with each iteration, ideal for epics and multi-POV books.",
-	},
-	"quest": {
-		"Estructura de búsqueda (Quest): un objetivo claro impulsa al protagonista a través de espacios/etapas; las pruebas en el camino revelan la verdad detrás del objetivo y alcanzarlo produce una transformación.",
-		"Quest structure: a clear goal drives the protagonist across spaces/stages; trials along the way reveal the truth behind the goal, and reaching it brings transformation.",
-	},
-	"romance_arc": {
-		"Arco romántico: encuentro/atracción → cercanía y malentendidos → crisis de compromiso → separación y punto bajo → despertar y búsqueda → final feliz (o desenlace agridulce); los beats giran en torno a la relación.",
-		"Romance arc structure: meet/attract → closeness & misreading → commitment crisis → separation low point → awakening & pursuit → happy ending (or bittersweet release); beats turn on the relationship.",
-	},
-}
-
-// StructureDescriptions exposes the narrative-structure beat summaries
-// (key -> [zh, en]) so the HTTP layer can send them to the frontend for
-// tooltips. The map values are treated as read-only by callers.
-func StructureDescriptions() map[string][2]string { return structureDescriptions }
-
+// structureDescription returns the narrative-structure beat summary from the
+// shared tooltip catalog (internal/config/Tooltips_helpers.json), used both in
+// outline prompts and in the UI.
 func structureDescription(key, lang string) string {
-	d, ok := structureDescriptions[strings.TrimSpace(key)]
-	if !ok {
-		return ""
-	}
-	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return d[1]
-	}
-	return d[0]
+	return config.TooltipStructures()[strings.TrimSpace(key)].For(lang)
 }
 
 func lengthLabel(length, lang string) string {
@@ -203,6 +132,10 @@ func NovelParametersBlock(cfg *config.Config) string {
 		add("[IDEA DIFERENCIADORA] "+v+" (es el ángulo único que distingue esta obra de su estante de género: protégelo en premisa, giros y voz; evita tropos que lo diluyan)",
 			"[DIFFERENTIATING IDEA] "+v+" (this is the unique angle that sets the work apart from its genre shelf: protect it in premise, twists and voice; avoid tropes that dilute it)")
 	}
+	if v := strings.TrimSpace(sc.AuthorHiddenAgenda); v != "" {
+		add("[AGENDA OCULTA DEL AUTOR — NOTA PRIVADA DE DIRECCIÓN, NUNCA LA EXPLIQUES] "+v+" (orienta en silencio el subtexto, las imágenes, las simpatías morales, lo que la narración premia y castiga y la resonancia del final hacia esta intención; jamás la nombres, jamás hagas que un personaje la diserte y jamás sacrifiques por ella las promesas de género, la lógica de la trama ni la experiencia del lector)",
+			"[AUTHOR'S HIDDEN AGENDA — PRIVATE STEERING NOTE, NEVER STATE IT] "+v+" (quietly shape the subtext, imagery, moral sympathies, what the narrative rewards and punishes, and the resonance of the ending toward this intent; never name it, never let a character lecture it, and never sacrifice genre promises, plot logic or the reader's experience to it)")
+	}
 	if v := strings.TrimSpace(sc.InspirationalPieces); v != "" {
 		add("[OBRAS DE INSPIRACIÓN] "+v+" (úsalas como referencia de estilo/atmósfera/oficio: toma su tono y técnicas, pero nunca copies sus tramas, personajes ni configuraciones propias)",
 			"[INSPIRATIONAL PIECES] "+v+" (use them as style/atmosphere/craft reference points: borrow their tone and techniques, never copy their plots, characters or proprietary settings)")
@@ -307,7 +240,7 @@ func NovelParametersBlock(cfg *config.Config) string {
 
 func structureLabel(structure, lang string) string {
 	key := strings.TrimSpace(structure)
-	if _, ok := structureDescriptions[key]; !ok {
+	if _, ok := config.TooltipStructures()[key]; !ok {
 		return key // free-form value: pass through as-is
 	}
 	en := i18n.NormalizeLanguage(lang) == i18n.LangEN

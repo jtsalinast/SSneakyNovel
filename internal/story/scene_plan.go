@@ -254,15 +254,10 @@ func hasCliffhangerTag(desc string) bool {
 	return strings.Contains(strings.ToUpper(desc), "CLIFFHANGER")
 }
 
-// PlanChapterScenes generates (or regenerates) the scene plan for the current
-// chapter and stores it on the chapter state. Returns the normalized plan.
-func PlanChapterScenes(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, logger *sse.LogBroadcaster) (*ScenePlan, error) {
-	return planChapterScenes(ctx, apiCfg, cfg, state, idx, "", logger)
-}
-
-// planChapterScenes is the internal implementation; extraContext lets callers
-// (e.g. regeneration after user edits) add guidance to the planner prompt.
-func planChapterScenes(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, extraContext string, logger *sse.LogBroadcaster) (*ScenePlan, error) {
+// planChapterScenes generates the plan for a chapter. guidance carries the
+// author's optional pre-generation instructions (chapter writing guidance or
+// the regenerate field); it is framed as a binding block in the prompt.
+func planChapterScenes(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, idx int, guidance string, logger *sse.LogBroadcaster) (*ScenePlan, error) {
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("generación cancelada")
 	}
@@ -283,8 +278,8 @@ func planChapterScenes(ctx context.Context, apiCfg *config.APIConfig, cfg *confi
 
 	constraints := buildOutlineConstraintsForLang(state, idx, lang)
 	prompt := scenePlanPrompt(*ch, constraints, targetBlock, lang)
-	if extraContext != "" {
-		prompt += "\n\n" + extraContext
+	if block := AuthorGuidanceBlock(guidance, lang); block != "" {
+		prompt += "\n\n" + block
 	}
 
 	systemPrompt := i18n.SystemPromptFor(lang, "author_default")
@@ -386,7 +381,7 @@ func ensureScenePlanForWriting(ctx context.Context, apiCfg *config.APIConfig, cf
 	if logger != nil {
 		logger.InfoKey("log.scene_plan_generating", ch.Num)
 	}
-	plan, err := PlanChapterScenes(ctx, apiCfg, cfg, state, idx, logger)
+	plan, err := planChapterScenes(ctx, apiCfg, cfg, state, idx, ch.WritingGuidance, logger)
 	if err != nil {
 		if logger != nil {
 			logger.WarnKey("log.scene_plan_failed", err)

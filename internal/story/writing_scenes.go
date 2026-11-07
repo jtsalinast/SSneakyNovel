@@ -238,6 +238,9 @@ func buildSceneWritingPrompt(cfg *config.Config, state *Progress, idx int, setti
 	if block := formatExtraWritingConstraintsBlock(extra, lang); block != "" {
 		userPrompt += "\n\n" + block
 	}
+	if block := AuthorGuidanceBlock(state.Chapters[idx].WritingGuidance, lang); block != "" {
+		userPrompt += "\n\n" + block
+	}
 	if retryFeedback != "" {
 		userPrompt += "\n\n" + retryFeedback
 	}

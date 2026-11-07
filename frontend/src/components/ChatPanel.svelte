@@ -5,9 +5,11 @@
   import { chatSessions, currentChatSession, addToast, showConfirm, taskRunning, lastFailedTask, logEntries, currentTaskName, chatTurnEnd } from '../lib/stores.js';
   import { t, uiLocale, formatToolResult } from '../lib/i18n/index.js';
   import ICONS from '../lib/icons.js';
-  import TaskTokenBadge from './TaskTokenBadge.svelte';
 
   export let contextPage = 'config';
+  // Opening the agent panel always starts with the task log folded, so the
+  // conversation is what the author sees first.
+  export let visible = true;
 
   let chatInput = '';
   let messagesContainer;
@@ -20,7 +22,8 @@
   $: streamingText = $currentChatSession?.streaming_text || '';
   $: pendingTools = $currentChatSession?.pending_tool_calls || [];
   $: taskLogs = ($logEntries || []).slice(-20);
-  let taskStatusCollapsed = false;
+  let taskStatusCollapsed = true;
+  $: if (visible) taskStatusCollapsed = true;
 
   // Tool cards reuse the Writing mark palette (.wash-*): read = blue,
   // generate/revise = violet, create = green, update = amber, delete = red,
@@ -409,7 +412,7 @@
           <span class="text-[10px] text-gray-400 ml-auto">{$t(taskStatusCollapsed ? 'chat.task.expand' : 'chat.task.collapse')}</span>
         </div>
         {#if $taskRunning}
-          <div class="mt-1 pl-5"><TaskTokenBadge className="badge badge-xs badge-outline gap-1 font-mono whitespace-nowrap" /></div>
+          <div class="mt-1 pl-5 text-[10px] text-gray-400">{$t('app.aiThinking')}</div>
         {/if}
       </div>
       {#if !taskStatusCollapsed && taskLogs.length > 0}

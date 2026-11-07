@@ -28,6 +28,22 @@ const (
 	outlineArcPastRetrieval = 3000 // subset of outlineArcPastBudget spent on older chapters
 )
 
+// AuthorGuidanceBlock renders the author's optional pre-generation
+// instructions as a prompt block, or "" when empty. Used by every generation
+// step that accepts guidance (scene plan, batch outline, chapter prose) so the
+// instructions are framed as binding intent instead of being pasted raw after
+// the output-format rules.
+func AuthorGuidanceBlock(guidance, lang string) string {
+	g := strings.TrimSpace(guidance)
+	if g == "" {
+		return ""
+	}
+	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
+		return "[AUTHOR GUIDANCE — mandatory. Honor these instructions exactly (concrete beats, gestures, objects, staging). They outrank general style preferences but never the output format, the language or established canon.]\n" + g
+	}
+	return "[INDICACIONES DEL AUTOR — obligatorias. Respétalas al pie de la letra (beats, gestos, objetos y puesta en escena concretos). Tienen prioridad sobre las preferencias generales de estilo, pero nunca sobre el formato de salida, el idioma ni el canon establecido.]\n" + g
+}
+
 // appendArcBlock appends a standalone channel block to the arc string while
 // keeping the total under outlineArcTotalBudget. The main past/future channels
 // are always preserved; if there is no room left, the block is truncated to
@@ -514,7 +530,11 @@ func buildWorldviewContextForLang(settings *ProjectSettings, chapterOutline, lan
 	selected, _ := retrieveSettings(settings, chapterOutline, settingsContextRunes)
 	selected.Characters, selected.Relations = nil, nil
 	data, _ := json.Marshal(settingsEntities(selected))
-	return knowledgeSelectionNotice(lang) + string(data)
+	out := knowledgeSelectionNotice(lang) + string(data)
+	if aesthetic := WorldbuildingAestheticBlock(settings, lang); aesthetic != "" {
+		out += "\n" + aesthetic
+	}
+	return out
 }
 
 func chapterWorldview(settings *ProjectSettings, ch ChapterState, lang string) string {
@@ -535,7 +555,11 @@ func buildChapterSettingsContexts(settings *ProjectSettings, ch ChapterState, la
 		derived = ""
 	}
 	notice := knowledgeSelectionNotice(lang)
-	return notice + string(charData) + "\n" + derived, notice + string(worldData)
+	worldText := notice + string(worldData)
+	if aesthetic := WorldbuildingAestheticBlock(snapshot, lang); aesthetic != "" {
+		worldText += "\n" + aesthetic
+	}
+	return notice + string(charData) + "\n" + derived, worldText
 }
 
 // An explicit notice prevents a retrieved subset being mistaken for the full registry.
@@ -784,9 +808,9 @@ func settingUpdatePrompt(lang string) string {
 		schema += "Mantén los campos concisos: describe atributos duraderos y estado actual, no un registro capítulo a capítulo. Al actualizar un campo, conserva las restricciones independientes existentes. No añadas paráfrasis de hechos conocidos. El historial de eventos y la evidencia original se almacenan por separado.\n"
 	}
 	if i18n.NormalizeLanguage(lang) == i18n.LangEN {
-		return "Extract setting changes evidenced in the accepted chapter blocks. Reuse existing entity IDs; never guess identities. Supply only changed fields for existing entities, complete required fields for new entities. Mark contradictions, uncertain identities or inferences conflict=true. evolution=true only for explicit chronological developments (e.g. allies becoming enemies), never for factual contradictions. No deletions. New characters: name; worldview: name/category/description; organizations: name/type/description/members; relations: source_id/source_type/target_id/target_type/label (types character/worldview/organization). For new entities use local IDs starting with $ (e.g. $alice); list new characters/worldview first, organizations next, relations last. References may use existing IDs or earlier unambiguous new $IDs. Never link uncertain new entities. The server allocates permanent IDs. Use exact block IDs as evidence. Return changes:[] when nothing changes. Below: existing entities, then chapter blocks." + schema
+		return "Extract setting changes evidenced in the accepted chapter blocks. Reuse existing entity IDs; never guess identities. Supply only changed fields for existing entities, complete required fields for new entities. Mark contradictions, uncertain identities or inferences conflict=true. evolution=true only for explicit chronological developments (e.g. allies becoming enemies), never for factual contradictions. No deletions. New characters: name; worldview: name/category/description; organizations: name/type/description/members; relations: source_id/source_type/target_id/target_type/label (types character/worldview/organization). When the prose uses a nickname, title, short form or alias for an existing character, worldview entry or organization, add it to that entity's \"aliases\" array (existing aliases plus the new one) instead of creating a new entity. For new entities use local IDs starting with $ (e.g. $alice); list new characters/worldview first, organizations next, relations last. References may use existing IDs or earlier unambiguous new $IDs. Never link uncertain new entities. The server allocates permanent IDs. Use exact block IDs as evidence. Return changes:[] when nothing changes. Below: existing entities, then chapter blocks." + schema
 	}
-	return "Extract setting changes evidenced in the accepted chapter blocks. Reuse existing entity IDs, supplying only changed fields; provide required fields for new entities. Copy names verbatim. Mark contradictions, ambiguous identities or inference as conflict=true. Set evolution=true only for explicit chronological developments (e.g. allies becoming enemies), never for factual contradictions. No deletions. New characters: name; worldview: name/category/description; organizations: name/type/description/members; relations: source_id/source_type/target_id/target_type/label (types character/worldview/organization). For new entities use local IDs starting with $ (e.g. $alice); list characters and worldview first, then organizations, then relations; references may use existing IDs or earlier unambiguous new $IDs; never link entities that are still ambiguous. The server allocates permanent IDs. Use real evidence block IDs in block_id. Return changes:[] when there are none. Below: existing settings, then this chapter's blocks. " + schema
+	return "Extract setting changes evidenced in the accepted chapter blocks. Reuse existing entity IDs, supplying only changed fields; provide required fields for new entities. Copy names verbatim. Mark contradictions, ambiguous identities or inference as conflict=true. Set evolution=true only for explicit chronological developments (e.g. allies becoming enemies), never for factual contradictions. No deletions. New characters: name; worldview: name/category/description; organizations: name/type/description/members; relations: source_id/source_type/target_id/target_type/label (types character/worldview/organization). When the prose uses a nickname, title, short form or alias for an existing character, worldview entry or organization, add it to that entity's \"aliases\" array (existing aliases plus the new one) instead of creating a new entity. For new entities use local IDs starting with $ (e.g. $alice); list characters and worldview first, then organizations, then relations; references may use existing IDs or earlier unambiguous new $IDs; never link entities that are still ambiguous. The server allocates permanent IDs. Use real evidence block IDs in block_id. Return changes:[] when there are none. Below: existing settings, then this chapter's blocks. " + schema
 }
 
 func BookSynopsis(cfg *config.Config, state *Progress) string {

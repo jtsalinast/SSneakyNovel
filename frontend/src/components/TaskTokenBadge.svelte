@@ -1,10 +1,12 @@
 <script>
-  import { onDestroy } from 'svelte';
   import { taskTokenUsage } from '../lib/stores.js';
   import { TOKEN_POLL_INTERVAL_MS } from '../lib/tokenPoll.js';
   import { t } from '../lib/i18n/index.js';
 
+  // `usage` lets a panel pass its own request-scoped store (Brainstorm) while
+  // the ribbon/chat keep the global task tracker.
   export let className = 'badge badge-xs badge-info gap-1 font-mono';
+  export let usage = taskTokenUsage;
 
   let displayPrompt = 0;
   let displayCompletion = 0;
@@ -55,23 +57,16 @@
     rafId = requestAnimationFrame(tick);
   }
 
-  const unsub = taskTokenUsage.subscribe(v => {
-    if (v) {
-      startAnim(v.prompt_tokens, v.completion_tokens);
-    } else {
-      stopAnim();
-      displayPrompt = 0;
-      displayCompletion = 0;
-    }
-  });
-
-  onDestroy(() => {
-    unsub();
+  $: if ($usage) {
+    startAnim($usage.prompt_tokens, $usage.completion_tokens);
+  } else {
     stopAnim();
-  });
+    displayPrompt = 0;
+    displayCompletion = 0;
+  }
 </script>
 
-{#if $taskTokenUsage}
+{#if $usage}
   <span class={className}>
     {$t('task.tokens.usage', {
       prompt: displayPrompt.toLocaleString(),

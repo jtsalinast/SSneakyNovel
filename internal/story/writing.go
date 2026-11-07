@@ -1063,6 +1063,9 @@ func ConfirmChapterAction(state *Progress, progressPath string) error {
 
 	ch.Status = StatusAccepted
 	ch.KnowledgeTracked = true
+	// The guidance was consumed by this chapter's plan and prose; keeping it
+	// would silently steer a future rewrite of an accepted chapter.
+	ch.WritingGuidance = ""
 	// The fact-check issues that this chapter had to overcome are exactly the
 	// continuity pitfalls later chapters tend to repeat (a character knowing
 	// something they shouldn't yet, a location reached too early…). Record them
@@ -1159,6 +1162,9 @@ func buildChapterWritingPrompt(cfg *config.Config, state *Progress, idx int, set
 		extra = *extraWritingConstraintsOverride
 	}
 	if block := formatExtraWritingConstraintsBlock(extra, lang); block != "" {
+		userPrompt += "\n\n" + block
+	}
+	if block := AuthorGuidanceBlock(ch.WritingGuidance, lang); block != "" {
 		userPrompt += "\n\n" + block
 	}
 

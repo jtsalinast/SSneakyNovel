@@ -131,9 +131,9 @@ func putEntity(s *ProjectSettings, kind, id string, value map[string]any) error 
 }
 func validateEntity(s *ProjectSettings, kind string, e map[string]any) error {
 	fields := map[string]string{
-		"characters":    "id name age appearance personality background motivation abilities notes",
-		"worldview":     "id category name description tags",
-		"organizations": "id name type description members",
+		"characters":    "id name age appearance personality background motivation abilities notes aliases",
+		"worldview":     "id category name description tags aliases",
+		"organizations": "id name type description members aliases",
 		"relations":     "id source_id source_type target_id target_type label",
 	}
 	allowed, ok := fields[kind]
@@ -154,6 +154,10 @@ func validateEntity(s *ProjectSettings, kind string, e map[string]any) error {
 				if !ok || entityAt(s, "characters", str) == nil {
 					return fmt.Errorf("unknown member")
 				}
+			}
+		} else if k == "aliases" {
+			if _, ok := aliasStrings(v); !ok {
+				return fmt.Errorf("invalid aliases")
 			}
 		} else if _, ok := v.(string); !ok {
 			return fmt.Errorf("invalid entity value")
@@ -185,9 +189,9 @@ func validateEntity(s *ProjectSettings, kind string, e map[string]any) error {
 
 func discardUnknownEntityFields(kind string, e map[string]any) {
 	allowed := map[string]string{
-		"characters":    " id name age appearance personality background motivation abilities notes ",
-		"worldview":     " id category name description tags ",
-		"organizations": " id name type description members ",
+		"characters":    " id name age appearance personality background motivation abilities notes aliases ",
+		"worldview":     " id category name description tags aliases ",
+		"organizations": " id name type description members aliases ",
 		"relations":     " id source_id source_type target_id target_type label ",
 	}[kind]
 	for k := range e {
@@ -196,6 +200,66 @@ func discardUnknownEntityFields(kind string, e map[string]any) {
 		}
 	}
 }
+// aliasStrings accepts the JSON forms the sync model may send for aliases.
+func aliasStrings(v any) ([]string, bool) {
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return NormalizeAliases(out), true
+	case []string:
+		return NormalizeAliases(t), true
+	case string:
+		return NormalizeAliases(strings.Split(t, ",")), true
+	}
+	return nil, false
+}
+
+// mergeAliasValues unions stored and incoming aliases so a sync can only add,
+// never overwrite the author's list.
+func mergeAliasValues(existing, incoming any) []any {
+	var merged []string
+	if old, ok := aliasStrings(existing); ok {
+		merged = append(merged, old...)
+	}
+	if add, ok := aliasStrings(incoming); ok {
+		merged = append(merged, add...)
+	}
+	out := make([]any, 0, len(merged))
+	for _, a := range NormalizeAliases(merged) {
+		out = append(out, a)
+	}
+	return out
+}
+
+// entityMatchesName also accepts a stored alias, so prose that invents a
+// nickname updates the existing entity instead of creating a duplicate.
+func entityMatchesName(e map[string]any, name any) bool {
+	want, ok := name.(string)
+	if !ok {
+		return false
+	}
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	if stored, _ := e["name"].(string); stored == want {
+		return true
+	}
+	for _, alias := range entityAliasList(e) {
+		if alias == want {
+			return true
+		}
+	}
+	return false
+}
+
 func newEntityID(s *ProjectSettings, kind string) string {
 	switch kind {
 	case "characters":
@@ -214,7 +278,7 @@ func settingsAtChapter(s *ProjectSettings, num int) *ProjectSettings {
 	}
 	// Entity reads decode independent maps; putEntity replaces a slice, so the
 	// read snapshot need not clone the entire provenance history.
-	out := &ProjectSettings{Characters: s.Characters, Worldview: s.Worldview, Organizations: s.Organizations, Relations: s.Relations}
+	out := &ProjectSettings{Aesthetic: s.Aesthetic, Characters: s.Characters, Worldview: s.Worldview, Organizations: s.Organizations, Relations: s.Relations}
 	for i := len(s.StoryChanges) - 1; i >= 0; i-- {
 		c := s.StoryChanges[i]
 		if c.Status != "applied" || c.Source.Chapter <= num {
@@ -328,7 +392,7 @@ func applySettingDeltas(s *ProjectSettings, ch ChapterState, deltas []settingDel
 		if id == "" {
 			// Match exact names/edges before allocating IDs; fuzzy identity needs author review.
 			for _, e := range settingsEntities(s)[d.Kind] {
-				same := d.Kind != "relations" && e["name"] == d.Entity["name"]
+				same := d.Kind != "relations" && entityMatchesName(e, d.Entity["name"])
 				if d.Kind == "relations" {
 					same = e["source_id"] == d.Entity["source_id"] && e["target_id"] == d.Entity["target_id"] && e["label"] == d.Entity["label"]
 				}
@@ -352,6 +416,28 @@ func applySettingDeltas(s *ProjectSettings, ch ChapterState, deltas []settingDel
 		for k, v := range d.Entity {
 			after[k] = v
 		}
+		if raw, ok := d.Entity["aliases"]; ok {
+			if merged := mergeAliasValues(before["aliases"], raw); len(merged) > 0 {
+				after["aliases"] = merged
+			} else {
+				delete(after, "aliases")
+			}
+		}
+		// A delta that refers to the entity by one of its aliases only adds that
+		// alias; it must never rename the canonical entry.
+		if before != nil {
+			stored, _ := before["name"].(string)
+			incoming, _ := d.Entity["name"].(string)
+			if stored != "" && incoming != "" && incoming != stored {
+				for _, a := range entityAliasList(before) {
+					if a == incoming {
+						after["name"] = stored
+						after["aliases"] = mergeAliasValues(after["aliases"], []any{incoming})
+						break
+					}
+				}
+			}
+		}
 		after["id"] = id
 		if err := validateEntity(s, d.Kind, after); err != nil {
 			return err
@@ -369,7 +455,9 @@ func applySettingDeltas(s *ProjectSettings, ch ChapterState, deltas []settingDel
 			conflict = true
 		}
 		for k, v := range before {
-			if k == "id" || v == "" || reflect.DeepEqual(v, after[k]) {
+			if k == "id" || k == "aliases" || v == "" || reflect.DeepEqual(v, after[k]) {
+				// Aliases are unioned by mergeAliasValues: a sync can only add
+				// one, never overwrite the author's list, so it is never a conflict.
 				continue
 			}
 			owned := false

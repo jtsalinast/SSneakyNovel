@@ -8,14 +8,17 @@ import { parse } from 'svelte/compiler';
 const source = readFileSync(new URL('../App.svelte', import.meta.url), 'utf8');
 const nodes = parse(source).instance.content.body;
 const script = nodes.filter(n => n.type !== 'ImportDeclaration').map(n => source.slice(n.start, n.end)).join('\n');
-const redirect = nodes.find(n => n.type === 'LabeledStatement' && n.body.type === 'IfStatement');
+const redirect = nodes.find(n => n.type === 'LabeledStatement' && n.body.type === 'IfStatement'
+  && source.slice(n.start, n.end).includes('restoreCurrentProject'));
 const calls = [];
 let serverRunning = false;
 let mount;
 const context = vm.createContext({
   setTimeout, clearTimeout,
-  onMount: fn => { mount = fn; }, onDestroy: () => {},
+  onMount: fn => { mount = fn; }, onDestroy: () => {}, tick: () => Promise.resolve(),
   connectSSE: () => {}, setLocale: () => {},
+  derived: (stores, fn) => ({ subscribe: fn }),
+  groupLogEntries: () => [], writeLastStep: () => {},
   ICONS: { indent: { vb: '', d: '' }, outdent: { vb: '', d: '' } },
   $t: key => key, $uiLocale: 'en',
   api: async (method, url) => {
@@ -32,7 +35,8 @@ const context = vm.createContext({
 for (const [key, value] of Object.entries({
   taskRunning: false, currentProject: null, currentPage: 'writing', progress: null,
   config: null, settings: null, chatSessions: null, currentChatSession: null,
-  projectLanguage: 'zh', ribbon: null, writingToolbar: null,
+  projectLanguage: 'zh', ribbon: null, writingToolbar: null, brainstormIntent: null,
+  logEntries: [], brainstormTokens: null, taskTokenUsage: null,
 })) {
   context[`$${key}`] = value;
   context[key] = { set: value => { context[`$${key}`] = value; } };

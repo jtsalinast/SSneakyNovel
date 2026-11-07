@@ -99,6 +99,12 @@ body {
   max-width: 52rem;
   margin-inline: auto;
 }
+/* The narrow assistant panels reuse .space-y-3 for vertical rhythm only; the
+   reading width must not shrink them inside their slot. */
+.assistant-panel .space-y-3 {
+  max-width: none;
+  margin-inline: 0;
+}
 /* Page-level counterpart of the novel-parameters reading width (Lore,
    Outline, Foreshadows keep their own vertical rhythm). */
 .page-width {
@@ -838,3 +844,32 @@ body {
 .card.bg-base-200 { border-radius: 1rem; transition: box-shadow 0.2s ease; }
 .card.bg-base-200:hover { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06); }
 @media (prefers-reduced-motion: reduce) { .card.bg-base-200 { transition: none; } }
+
+/* Brainstorm composer: one line at rest, grows with the text and shows the
+   whole field on hover/focus (the panel is narrow, so the input stays pinned
+   to the bottom instead of pushing the results around). */
+.bs-grow {
+  resize: none;
+  max-height: 160px;
+  overflow-y: auto;
+  transition: max-height 0.2s ease;
+}
+.bs-grow:hover,
+.bs-grow:focus {
+  max-height: 240px;
+}
+/* The global :focus-visible ring is coral; the composer shows focus through
+   its wrapper border instead. */
+.bs-grow:focus-visible {
+  outline: none;
+}
+@media (prefers-reduced-motion: reduce) { .bs-grow { transition: none; } }
+
+/* Selection toolbar entrance: the floating pill fades in from a compact
+   blurred square, matching the supplied dark-toolbar mockup. */
+.sel-toolbar { animation: sel-toolbar-in 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform-origin: center center; }
+@keyframes sel-toolbar-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.86); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .sel-toolbar { animation: none; } }

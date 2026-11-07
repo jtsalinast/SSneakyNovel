@@ -29,10 +29,23 @@ type TaskTokenUsage struct {
 
 	logger   *sse.LogBroadcaster
 	lastEmit time.Time
+
+	// Brainstorm calls report to their own SSE channel so they never clobber
+	// the background task's token badge. requestID groups the concurrent
+	// variants; variant lets the client keep one cumulative slot per call.
+	requestID string
+	variant   int
 }
 
 func newTaskTokenUsage(logger *sse.LogBroadcaster) *TaskTokenUsage {
 	return &TaskTokenUsage{logger: logger}
+}
+
+// WithBrainstormTokens tracks one synchronous Brainstorm request. Each variant
+// call owns its tracker; the frontend sums them per requestID.
+func WithBrainstormTokens(ctx context.Context, logger *sse.LogBroadcaster, requestID string, variant int) (context.Context, *TaskTokenUsage) {
+	usage := &TaskTokenUsage{logger: logger, requestID: requestID, variant: variant}
+	return context.WithValue(ctx, taskTokenCtxKey{}, usage), usage
 }
 
 // NewTaskTokenUsage builds a standalone tracker (exported wrapper around the
@@ -159,6 +172,11 @@ func (t *TaskTokenUsage) maybeEmit(force bool) {
 	prompt := t.committedPrompt + t.pendingPrompt
 	completion := t.committedCompletion + t.pendingCompletion
 	t.lastEmit = now
+	requestID, variant := t.requestID, t.variant
 	t.mu.Unlock()
+	if requestID != "" {
+		t.logger.BrainstormTokens(requestID, variant, prompt, completion)
+		return
+	}
 	t.logger.TokenUsage(prompt, completion)
 }

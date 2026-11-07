@@ -126,6 +126,9 @@ var messageCatalog = map[string]map[string]string{
 	"log.act_analyze_cancelled": {
 
 		LangEN: "Act analysis cancelled"},
+	"log.act_analyze_deadline": {
+
+		LangEN: "Act analysis stopped at its time limit — press Re-analyze act to continue; the beta-reader session for this draft is reused"},
 	"log.act_analyze_failed": {
 
 		LangEN: "Act analysis failed: %v"},
@@ -141,6 +144,43 @@ var messageCatalog = map[string]map[string]string{
 	"log.act_analysis_cleared": {
 
 		LangEN: "Act analysis cleared"},
+	// ---- Automated beta reader panel (beta_readers.go) ----
+	"log.beta_reading_running": {
+
+		LangEN: "Simulated beta readers are reading ACT %d independently..."},
+	"log.beta_reading_reused": {
+
+		LangEN: "Act %d already has a beta-reader session for this exact draft — reusing it"},
+	"log.beta_reading_missing": {
+
+		LangEN: "No beta-reader session for ACT %d on this draft — run the Beta reader panel first to feed the expert; grading the prose alone for now"},
+	"log.beta_task_failed": {
+
+		LangEN: "Beta reader panel failed: %v"},
+	"log.beta_task_deadline": {
+
+		LangEN: "Beta reader panel stopped at its time limit — press Run beta readers again to continue"},
+	"log.beta_reading_done": {
+
+		LangEN: "Beta reader panel finished — %d individual evaluations consolidated"},
+	"log.beta_reading_failed": {
+
+		LangEN: "Beta reader panel failed; the expert review continues without it: %v"},
+	"log.beta_panel_failed": {
+
+		LangEN: "Reader panel generation failed; using the built-in diverse panel: %v"},
+	"log.beta_panel_fallback": {
+
+		LangEN: "Reader panel generation returned an unusable panel; using the built-in diverse panel"},
+	"log.beta_reader_failed": {
+
+		LangEN: "Simulated reader %q could not finish this act and was skipped: %v"},
+	"log.beta_panel_partial": {
+
+		LangEN: "Only %d of %d simulated readers completed this act; the report uses the completed evaluations"},
+	"log.beta_consolidation_partial": {
+
+		LangEN: "Beta consolidation call failed; that part of the report was assembled from the individual evaluations: %v"},
 	// ---- Chapter bestseller critique (drafted_analysis.go, chapter pass) ----
 	"log.chapter_analyze_running": {
 

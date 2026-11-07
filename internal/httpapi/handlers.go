@@ -245,7 +245,33 @@ func (h *Handlers) taskCeiling() time.Duration {
 	return time.Duration(minutes) * time.Minute
 }
 
-func (h *Handlers) tryStartTask() bool {
+// minLongTaskCeiling is the guaranteed floor for steps that run many sequential
+// model calls in one task: chapter prose (scene plan + prose + fact-check +
+// memory), scene-plan regeneration and act analysis (beta panel + editor).
+// The generic 30-minute default killed them mid-flight on slow/local models.
+const minLongTaskCeiling = 6 * time.Hour
+
+// longTaskCeiling applies minLongTaskCeiling to the configured ceiling.
+// A configured value larger than the floor still wins; -1 (no ceiling) stays
+// unlimited.
+func (h *Handlers) longTaskCeiling() time.Duration {
+	base := h.taskCeiling()
+	if base == 0 {
+		return 0
+	}
+	if base < minLongTaskCeiling {
+		return minLongTaskCeiling
+	}
+	return base
+}
+
+func (h *Handlers) tryStartTask() bool { return h.startTask(false) }
+
+// tryStartTaskLong starts a task with the long-generation floor. Use it for
+// chapter writing, scene-plan regeneration and act analysis only.
+func (h *Handlers) tryStartTaskLong() bool { return h.startTask(true) }
+
+func (h *Handlers) startTask(long bool) bool {
 	// Fresh tracker first (its own short taskMu section): the previous run's
 	// tracker is orphaned once its context is cancelled, so /api/status must
 	// snapshot the new one.
@@ -268,7 +294,11 @@ func (h *Handlers) tryStartTask() bool {
 	// or manual Stop). Per-call HTTP timeouts still bound each request either
 	// way, so a hung endpoint cannot live forever. Manual stop via
 	// taskCancel still works as before.
-	ctx, cancel := llm.NewTaskContext(context.Background(), h.taskCeiling())
+	ceiling := h.taskCeiling()
+	if long {
+		ceiling = h.longTaskCeiling()
+	}
+	ctx, cancel := llm.NewTaskContext(context.Background(), ceiling)
 	// Publish h.taskCtx WITH the tracker already attached: goroutines snapshot
 	// h.taskCtx right after tryStartTask returns, and any LLM call made through a
 	// context lacking a TaskTokenUsage reports no counts at all — the frontend
@@ -1232,9 +1262,28 @@ func asScenePlanPending(err error) (*story.ScenePlanPendingError, bool) {
 }
 
 func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
-	if !h.tryStartTask() {
+	if !h.tryStartTaskLong() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 		return
+	}
+
+	// Optional pre-generation guidance for the current chapter. Persisted on
+	// the chapter so it still applies after the scene-plan review pause and on
+	// any resume. An absent field keeps the stored value; an explicit empty
+	// string clears it (the author deleted the text).
+	var body struct {
+		Guidance *string `json:"guidance"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Guidance != nil {
+		if idx := h.state.CurrentChapterIndex; idx >= 0 && idx < len(h.state.Chapters) {
+			h.state.Chapters[idx].WritingGuidance = strings.TrimSpace(*body.Guidance)
+			if err := story.SaveProgress(h.progressPath, h.state); err != nil {
+				h.endTask()
+				h.writeErrorReq(w, r, http.StatusInternalServerError, "save_progress_failed", err)
+				return
+			}
+		}
 	}
 
 	go func() {
@@ -1636,7 +1685,7 @@ func (h *Handlers) chapterRecoveryTarget(w http.ResponseWriter, r *http.Request)
 // critic/fact-check → memory) on the draft that an interrupted generation
 // checkpointed (DraftSavedAt). The prose itself is never regenerated.
 func (h *Handlers) PostChapterResume(w http.ResponseWriter, r *http.Request) {
-	if !h.tryStartTask() {
+	if !h.tryStartTaskLong() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 		return
 	}
@@ -1805,7 +1854,7 @@ func (h *Handlers) getChapterByNum(num int) story.ChapterState {
 }
 
 func (h *Handlers) PostChapterRevise(w http.ResponseWriter, r *http.Request) {
-	if !h.tryStartTask() {
+	if !h.tryStartTaskLong() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 		return
 	}
@@ -1864,7 +1913,7 @@ func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if !h.tryStartTask() {
+	if !h.tryStartTaskLong() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 		return
 	}
@@ -2688,6 +2737,81 @@ func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, &view)
 }
 
+// PutSettingsAesthetic stores the project-level world aesthetic. It is
+// authoritative: an empty string clears the field.
+func (h *Handlers) PutSettingsAesthetic(w http.ResponseWriter, r *http.Request) {
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	var body struct {
+		Aesthetic string `json:"aesthetic"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	next := *h.settings
+	next.Aesthetic = strings.TrimSpace(body.Aesthetic)
+	if err := story.SaveProjectSettings(h.settingsPath, &next); err != nil {
+		h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err)
+		return
+	}
+	*h.settings = next
+	h.logger.SettingsUpdated()
+	h.writeJSON(w, http.StatusOK, map[string]string{"aesthetic": next.Aesthetic})
+}
+
+// PostAestheticGenerate drafts the project-level world aesthetic from the
+// novel parameters and current Lore. It returns text only (like Enhance), so
+// the author reviews it in the form and decides whether to Save.
+func (h *Handlers) PostAestheticGenerate(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	if h.rejectIfTaskRunning(w, r) {
+		return
+	}
+	if h.apiCfg == nil || strings.TrimSpace(h.apiCfg.BaseURL) == "" || strings.TrimSpace(h.apiCfg.Model) == "" {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "api_not_configured")
+		return
+	}
+	var body struct {
+		Aesthetic string `json:"aesthetic"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	en := i18n.NormalizeLanguage(h.cfg.Language) == i18n.LangEN
+	var prompt strings.Builder
+	if current := strings.TrimSpace(body.Aesthetic); current != "" {
+		prompt.WriteString(pick(en, "[ESTÉTICA ACTUAL]\n", "[CURRENT AESTHETIC]\n"))
+		prompt.WriteString(current)
+		prompt.WriteString("\n\n")
+	}
+	prompt.WriteString(story.NovelParametersBlock(h.cfg))
+	if lore := story.BrainstormLoreContext(h.settings, h.state, "world aesthetic locations characters", h.cfg.Language); lore != "" {
+		prompt.WriteString(pick(en, "\n\n[LORE DE LA NOVELA]\n", "\n\n[NOVEL LORE]\n"))
+		prompt.WriteString(lore)
+	}
+	prompt.WriteString(pick(en,
+		"\n\nEscribe la estética del mundo de esta novela: la lente visual, tonal y estilística que vestirá cada lugar, objeto, personaje y escena. "+
+			"Usa referencias concretas y reconocibles (cine, pintura, arquitectura, moda, fotografía, música) y traduce cada una a decisiones de prosa. "+
+			"Si ya hay una estética actual, consérvala y mejórala en vez de sustituirla por otra completamente distinta. "+
+			"Devuelve SOLO el texto de la estética, en 3 a 6 líneas, en el idioma del proyecto, sin título, sin viñetas numeradas y sin comentarios.",
+		"\n\nWrite this novel's world aesthetic: the visual, tonal and stylistic lens that will dress every location, object, character and scene. "+
+			"Use concrete, recognizable references (film, painting, architecture, fashion, photography, music) and translate each one into prose decisions. "+
+			"If a current aesthetic exists, keep it and improve it instead of replacing it with something completely different. "+
+			"Return ONLY the aesthetic text, in 3 to 6 lines, in the project language, with no title, no numbered list and no commentary."))
+
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	out := strings.TrimSpace(llm.CallAPIWithRetryLog(ctx, h.apiCfg, i18n.SystemPromptFor(h.cfg.Language, "author_default"), prompt.String(), h.logger))
+	if out == "" {
+		h.writeErrorReq(w, r, http.StatusBadGateway, "empty_generation", "")
+		return
+	}
+	h.writeJSON(w, http.StatusOK, map[string]string{"text": out})
+}
+
 func (h *Handlers) PostCharacter(w http.ResponseWriter, r *http.Request) {
 	if h.rejectIfTaskRunning(w, r) {
 		return
@@ -2701,6 +2825,11 @@ func (h *Handlers) PostCharacter(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "character_name_empty")
 		return
 	}
+	if !validCharacterEnum("relevance", c.Relevance) || !validCharacterEnum("presence", c.Presence) || !validCharacterEnum("affiliation", c.Affiliation) {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_character_role", "")
+		return
+	}
+	c.Aliases = story.NormalizeAliases(c.Aliases)
 
 	c.ID = h.settings.NextCharacterID()
 	h.settings.Characters = append(h.settings.Characters, c)
@@ -2722,6 +2851,10 @@ func (h *Handlers) PutCharacter(w http.ResponseWriter, r *http.Request) {
 	var req story.Character
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if !validCharacterEnum("relevance", req.Relevance) || !validCharacterEnum("presence", req.Presence) || !validCharacterEnum("affiliation", req.Affiliation) {
+		h.writeErrorReq(w, r, http.StatusBadRequest, "invalid_character_role", "")
 		return
 	}
 
@@ -2775,6 +2908,18 @@ func (h *Handlers) PutCharacter(w http.ResponseWriter, r *http.Request) {
 			if req.Agency != "" {
 				h.settings.Characters[i].Agency = req.Agency
 			}
+			if req.Relevance != "" {
+				h.settings.Characters[i].Relevance = req.Relevance
+			}
+			if req.Presence != "" {
+				h.settings.Characters[i].Presence = req.Presence
+			}
+			if req.Affiliation != "" {
+				h.settings.Characters[i].Affiliation = req.Affiliation
+			}
+			// Aliases are authoritative: the form sends the full list, so
+			// clearing an alias must persist (unlike the non-empty merges above).
+			h.settings.Characters[i].Aliases = story.NormalizeAliases(req.Aliases)
 			if len(req.Extra) > 0 {
 				if h.settings.Characters[i].Extra == nil {
 					h.settings.Characters[i].Extra = map[string]string{}
@@ -2830,6 +2975,7 @@ func (h *Handlers) PostWorldview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wv.Name, wv.Description = strings.TrimSpace(wv.Name), strings.TrimSpace(wv.Description)
+	wv.Aliases = story.NormalizeAliases(wv.Aliases)
 	if wv.Name == "" || wv.Description == "" {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "worldview_field_empty")
 		return
@@ -2877,6 +3023,8 @@ func (h *Handlers) PutWorldview(w http.ResponseWriter, r *http.Request) {
 			if req.Tags != "" {
 				next.Worldview[i].Tags = req.Tags
 			}
+			// Aliases are authoritative so the author can remove one.
+			next.Worldview[i].Aliases = story.NormalizeAliases(req.Aliases)
 
 			if err := story.SaveProjectSettings(h.settingsPath, &next); err != nil {
 				h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err)
@@ -2927,6 +3075,7 @@ func (h *Handlers) PostOrganization(w http.ResponseWriter, r *http.Request) {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "organization_name_empty")
 		return
 	}
+	o.Aliases = story.NormalizeAliases(o.Aliases)
 
 	o.ID = h.settings.NextOrganizationID()
 	h.settings.Organizations = append(h.settings.Organizations, o)
@@ -2965,6 +3114,8 @@ func (h *Handlers) PutOrganization(w http.ResponseWriter, r *http.Request) {
 			if req.Members != nil {
 				h.settings.Organizations[i].Members = req.Members
 			}
+			// Aliases are authoritative so the author can remove one.
+			h.settings.Organizations[i].Aliases = story.NormalizeAliases(req.Aliases)
 
 			if err := story.SaveProjectSettings(h.settingsPath, h.settings); err != nil {
 				h.writeErrorReq(w, r, http.StatusInternalServerError, "save_failed", err)

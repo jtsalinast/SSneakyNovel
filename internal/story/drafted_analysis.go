@@ -107,6 +107,18 @@ func draftedChapterFingerprint(ch ChapterState) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// draftedChapterContentFingerprint hashes only the graded artifact. Beta reader
+// sessions key on it so a panel run survives server restarts and is reused
+// instead of re-reading the act; the expert report keeps the salted fingerprint
+// above so an explicit re-analysis still recomputes its scores.
+func draftedChapterContentFingerprint(ch ChapterState) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d\x01%s\x01%d\x01%d", ch.Num, strings.TrimSpace(ch.Summary),
+		ch.WordCount, HashContent(ch.Content))
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
 // gradeSalt returns a per-process nonce mixed into every critique fingerprint.
 // Without it, clicking "Re-analyze" on unchanged material silently returned the
 // cached report (log.*_analyze_unchanged) and the UI showed the exact same
@@ -377,13 +389,18 @@ func finalizePillars(in []PillarAssessment, suggestions []DraftedSuggestion) []P
 	return out
 }
 
-// draftedJSONSchemaEN builds the shared strict-JSON contract for both passes.
+// draftedJSONSchema builds the shared strict-JSON contract for both passes,
+// with example values in the content language so the schema never seeds
+// English text into a Spanish report.
 // Pillar scores are DERIVED from the per-criterion checklist levels (see
 // analysis_pillars.go): the model grades concrete sub-criteria, so re-grading
 // after corrections raises exactly the items that improved instead of drifting
 // around randomized example anchors like before.
-func draftedJSONSchemaEN() string {
-	return `{"summary":"...","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"..."},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS subscene only"}]}]}`
+func draftedJSONSchema(lang string) string {
+	if normalizeLangEN(lang) {
+		return `{"summary":"...","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"..."},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the drafted text currently does and why it falls short of bestseller level","action":"concrete guidance on what to change and where","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tension","feedback":"one or two imperative sentences telling the rewriter exactly what to fix in THIS subscene only"}]}]}`
+	}
+	return `{"summary":"...","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"..."},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"titular corto e imperativo","detail":"qué hace el texto ahora y por qué no llega a nivel bestseller","action":"indicación concreta de qué cambiar y dónde","applies_to_chapters":[3],"interventions":[{"chapter_num":3,"scene_pos":2,"trope_index":1,"trope_label":"tensión","feedback":"una o dos frases imperativas que digan al reescritor exactamente qué corregir SOLO en esta subescena"}]}]}`
 }
 
 // interventionsRulesEN explains the intervention contract in the prompt.
@@ -1209,12 +1226,13 @@ func ProposeChapterInterventions(ctx context.Context, apiCfg *config.APIConfig, 
 	repairSceneSpans(ch)
 	SyncChapterBlocksSceneAware(ch, ch.Content)
 	targets := draftedTargetValidator(state, []int{ch.Num})
+	lang := ContentLanguage(cfg)
 	planBuf := strings.Builder{}
-	fmt.Fprintf(&planBuf, "%s", chapterTropeMapBlock(*ch, cfg.Language))
+	fmt.Fprintf(&planBuf, "%s", chapterTropeMapBlock(*ch, lang))
 	fmt.Fprintf(&planBuf, "[CHAPTER PROSE — excerpt]\n%s\n", draftTruncate(ch.Content, 20000))
 
-	prompt := draftedProposalPrompt(cfg, state, settings, editorPersona(cfg.Language),
-		fmt.Sprintf("ONE DRAFTED CHAPTER #%d \"%s\"", ch.Num, ch.Title), s, planBuf.String(), []int{ch.Num}, targets)
+	prompt := draftedProposalPrompt(cfg, state, settings, editorPersona(lang),
+		fmt.Sprintf("ONE DRAFTED CHAPTER #%d \"%s\"", ch.Num, ch.Title), s, planBuf.String(), []int{ch.Num}, targets, nil)
 	system := "You are a world-famous literary editor turning feedback into CONCRETE small interventions on drafted manuscript prose: each one targets exactly one subscene of one scene of the chapter. Goal: push the chapter to global-bestseller level on the pillar under discussion, changing the minimum amount of prose. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.chapter_analyze_proposing", ch.Num)
@@ -1395,6 +1413,36 @@ func actDraftedFingerprint(state *Progress, start, end int) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// actDraftedContentFingerprint is actDraftedFingerprint without the per-process
+// grade salt: the beta reader panel is keyed on it so its sessions are reused
+// across restarts for unchanged prose.
+func actDraftedContentFingerprint(state *Progress, start, end int) string {
+	var b strings.Builder
+	for _, ch := range state.Chapters {
+		if ch.Num < start || ch.Num > end {
+			continue
+		}
+		b.WriteString(draftedChapterContentFingerprint(ch))
+		b.WriteByte('\x02')
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// draftedGroundingMaterial concatenates the text a critic may legitimately
+// quote for chapters start..end: title, outline, summary and prose. It is the
+// reference for deciding whether an "evidence" excerpt is real or invented.
+func draftedGroundingMaterial(state *Progress, start, end int) string {
+	var b strings.Builder
+	for _, ch := range state.Chapters {
+		if ch.Num < start || ch.Num > end {
+			continue
+		}
+		fmt.Fprintf(&b, "%s\n%s\n%s\n%s\n\n", ch.Title, ch.Outline, ch.Summary, ch.Content)
+	}
+	return b.String()
+}
+
 // buildActEditorPrompt frames the artifact as a WHOLE DRAFTED ACT of the
 // planned structure: the editor judges whether the act delivers its planned
 // function (turning points, escalation, act-out hook) at bestseller level.
@@ -1449,6 +1497,8 @@ func buildActEditorPrompt(cfg *config.Config, state *Progress, settings *Project
 				ch.Num, ch.Title, ch.WordCount, ch.Status, draftTruncate(ch.Outline, 800), draftTruncate(ch.Summary, 800), excerpt)
 		}
 	}
+	betaReport := latestBetaReport(state, actNo, actDraftedContentFingerprint(state, start, end))
+	betaBlock := betaReportBlock(betaReport, lang) + betaReconciliationBlock(betaReport, lang)
 	var tropeMaps strings.Builder
 	for _, ch := range state.Chapters {
 		if ch.Num < start || ch.Num > end {
@@ -1475,6 +1525,7 @@ NOVEL PARAMETERS (the author's contract with the reader):
 STORY STRUCTURE FRAMEWORK IN USE: %s
 
 %s
+%s
 WRITTEN-STRUCTURE MAPS (scenes and subscenes per chapter — the ONLY valid intervention targets):
 %s
 
@@ -1500,8 +1551,8 @@ Rules:
 - DO NOT include replacement prose in this pass: return every suggestion WITHOUT an "interventions" array (interventions are drafted later, ONLY after the author clicks "Propose interventions" on a specific point).
 - applies_to_chapters may name chapters within %d–%d most affected by each point.
 - Write summary, titles, details and actions in the SAME language as the chapter prose above.`,
-			editorPersona(lang), actNo, act.Name, start, end, meta.String(), structureName,
-			buf.String(), tropeMaps.String(), structureName, draftedJSONSchemaEN(), start, end)
+			editorPersona(lang), actNo, act.Name, start, end, meta.String(), structureName, betaBlock,
+			buf.String(), tropeMaps.String(), structureName, draftedJSONSchema(lang), start, end)
 	}
 	return fmt.Sprintf(`Eres %s, un editor literario mundialmente famoso cuyas listas han producido múltiples bestsellers globales. Tu trabajo: dar al autor una pasada editorial constructiva y punto por punto sobre UN ACTO COMPLETO de su novela, con UN objetivo claro: convertir este libro en un bestseller global — cada punto debe servir a ese listón, no a la mera corrección.
 
@@ -1514,6 +1565,7 @@ PARÁMETROS DE LA NOVELA (el contrato del autor con el lector):
 %s
 MARCO DE ESTRUCTURA NARRATIVA EN USO: %s
 
+%s
 %s
 MAPAS DE ESTRUCTURA ESCRITA (escenas y subescenas por capítulo — los ÚNICOS destinos válidos de intervención):
 %s
@@ -1540,15 +1592,15 @@ Reglas:
 - NO incluyas prosa de reemplazo en esta pasada: devuelve cada sugerencia SIN array "interventions" (las intervenciones se redactan después, SOLO tras "Proponer intervenciones").
 - applies_to_chapters puede nombrar capítulos dentro de %d–%d más afectados por cada punto.
 - Escribe resumen, títulos, detalles y acciones en el MISMO idioma que la prosa de los capítulos de arriba.`,
-		editorPersona(lang), actNo, act.Name, start, end, meta.String(), structureName,
-		buf.String(), tropeMaps.String(), structureName, draftedJSONSchemaEN(), start, end)
+		editorPersona(lang), actNo, act.Name, start, end, meta.String(), structureName, betaBlock,
+		buf.String(), tropeMaps.String(), structureName, draftedJSONSchema(lang), start, end)
 }
 
 // buildActEditorPromptForPillar returns the act prompt scoped for one call of
 // the editorial sequence: pillarKey == "" is the first-impression call, any
 // pillar key is that pillar's single-pillar pass.
 func buildActEditorPromptForPillar(cfg *config.Config, state *Progress, settings *ProjectSettings, actNo int, lang, pillarKey string) string {
-	return buildActEditorPrompt(cfg, state, settings, actNo, lang) + editorialScopeOverride(lang, pillarKey)
+	return buildActEditorPrompt(cfg, state, settings, actNo, lang) + editorialScopeOverride(lang, pillarKey) + ReportLanguageRule(lang)
 }
 
 // AnalyzeFinishedAct runs the bestseller-editor pass over one pre-planning
@@ -1578,6 +1630,7 @@ func AnalyzeFinishedAct(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	}
 	loadDraftedChapterFilesInto(progressPath, state)
 	fingerprint := actDraftedFingerprint(state, start, end)
+	contentFingerprint := actDraftedContentFingerprint(state, start, end)
 	if state.ActAnalyses == nil {
 		state.ActAnalyses = map[int]*ActAnalysisReport{}
 	}
@@ -1585,13 +1638,25 @@ func AnalyzeFinishedAct(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		logger.InfoKey("log.act_analyze_unchanged", actNo)
 		return nil
 	}
-	lang := cfg.Language
+	lang := ContentLanguage(cfg)
 	settingsForPrompt := settings
 	if settings != nil {
 		if selected, _ := retrieveSettings(settings, collectAllOutlines(state), settingsContextRunes); selected != nil {
 			settingsForPrompt = selected
 		}
 	}
+
+	// The expert pass never runs the beta panel: reading and expert review are
+	// separate processes. The panel reuses its saved session for unchanged
+	// prose; when none exists the expert grades the prose alone and the UI
+	// points the author to the beta step first.
+	if latestBetaReport(state, actNo, contentFingerprint) != nil {
+		logger.InfoKey("log.beta_reading_reused", actNo)
+	} else {
+		logger.InfoKey("log.beta_reading_missing", actNo)
+	}
+	betaEmit(logger, BetaProgressEvent{ActNo: actNo, Stage: "expert"})
+
 	prompt := buildActEditorPromptForPillar(cfg, state, settingsForPrompt, actNo, lang, "")
 	system := "You are a world-famous literary editor specializing in turning novels into global bestsellers. You are reviewing ONE WHOLE ACT of a novel AS DRAFTED (chapters exist as prose). Be constructive, specific and honest. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
@@ -1602,12 +1667,15 @@ func AnalyzeFinishedAct(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 			return prompt
 		}
 		return buildActEditorPromptForPillar(cfg, state, settingsForPrompt, actNo, lang, pillarKey)
-	})
+	}, draftedGroundingMaterial(state, start, end))
 	if err != nil {
 		return err
 	}
-	if json.Unmarshal([]byte(raw), &result) != nil || (result.Summary == "" && len(result.Suggestions) == 0) {
-		return fmt.Errorf("model response is not valid act-analysis JSON")
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return fmt.Errorf("model response is not valid act-analysis JSON: %w", err)
+	}
+	if result.Summary == "" && len(result.Suggestions) == 0 {
+		return fmt.Errorf("model response is not valid act-analysis JSON: empty report")
 	}
 
 	now := time.Now().Unix()
@@ -1616,6 +1684,10 @@ func AnalyzeFinishedAct(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		result.OverallScore = 0
 	}
 	result.PillarScores = finalizePillars(result.PillarScores, result.Suggestions)
+	if missing := ungradedPillarKeys(result.PillarScores); len(missing) > 0 {
+		return fmt.Errorf("incomplete critique: no rubric grades for %s", strings.Join(missing, ", "))
+	}
+	result.PillarScores = reconcileReaderProfileWithBeta(result.PillarScores, latestBetaReport(state, actNo, contentFingerprint), lang)
 	result.Summary = strings.TrimSpace(result.Summary)
 	result.GeneratedAt = time.Now().Format(time.RFC3339)
 	result.BasedOnStructure = structureLabel(cfg.Story.Structure, lang)
@@ -1624,6 +1696,50 @@ func AnalyzeFinishedAct(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 	result.StartCh, result.EndCh = start, end
 	result.DraftFingerprint = fingerprint
 	state.ActAnalyses[actNo] = &result
+	betaEmit(logger, BetaProgressEvent{ActNo: actNo, Stage: "done"})
+	return nil
+}
+
+// AnalyzeActBeta runs ONLY the simulated beta reader pass over one drafted act.
+// It is deliberately separate from AnalyzeFinishedAct: the panel reads the act
+// once per prose version and the expert reuses that session, so re-running the
+// expert never restarts the readers.
+func AnalyzeActBeta(ctx context.Context, apiCfg *config.APIConfig, cfg *config.Config, state *Progress, settings *ProjectSettings, actNo int, progressPath string, logger *sse.LogBroadcaster) error {
+	if state.PrePlanning == nil || actNo < 1 || actNo > len(state.PrePlanning.Acts) {
+		return fmt.Errorf("act_not_found")
+	}
+	act := state.PrePlanning.Acts[actNo-1]
+	start, end := act.StartCh, act.EndCh
+	if start == 0 {
+		start = 1
+	}
+	if end == 0 {
+		end = start + max(1, act.SuggestedChapters) - 1
+	}
+	drafted := 0
+	for i := range state.Chapters {
+		ch := &state.Chapters[i]
+		if ch.Num >= start && ch.Num <= end && (ch.Status == StatusAccepted || ch.WordCount > 0) {
+			drafted++
+		}
+	}
+	if drafted == 0 {
+		return fmt.Errorf("act_not_drafted")
+	}
+	loadDraftedChapterFilesInto(progressPath, state)
+	fingerprint := actDraftedContentFingerprint(state, start, end)
+	if latestBetaReport(state, actNo, fingerprint) != nil {
+		logger.InfoKey("log.beta_reading_reused", actNo)
+		betaEmit(logger, BetaProgressEvent{ActNo: actNo, Stage: "done"})
+		return nil
+	}
+	logger.InfoKey("log.beta_reading_running", actNo)
+	rep, err := RunBetaReading(ctx, apiCfg, cfg, state, settings, actNo, start, end, fingerprint, progressPath, logger)
+	if err != nil {
+		return err
+	}
+	logger.SuccessKey("log.beta_reading_done", len(rep.Evaluations))
+	betaEmit(logger, BetaProgressEvent{ActNo: actNo, Stage: "done"})
 	return nil
 }
 
@@ -1712,9 +1828,10 @@ func draftedTargetValidator(state *Progress, allowedChapters []int) func(chapter
 
 // draftedProposalPrompt asks the editor to convert one advice-only point into
 // concrete trope interventions, sharing the phrasing between act/chapter.
-func draftedProposalPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, persona, scopeDesc string, s DraftedSuggestion, material string, allowedChapters []int, targets func(int, int, int) bool) string {
+func draftedProposalPrompt(cfg *config.Config, state *Progress, settings *ProjectSettings, persona, scopeDesc string, s DraftedSuggestion, material string, allowedChapters []int, targets func(int, int, int) bool, beta *BetaReaderReport) string {
 	sc := cfg.Story
-	lang := cfg.Language
+	lang := ContentLanguage(cfg)
+	betaBlock := betaReportBlock(beta, lang)
 	var castList string
 	if settings != nil {
 		names := make([]string, 0, len(settings.Characters))
@@ -1734,6 +1851,7 @@ YOUR ADVICE: %s
 
 NOVEL PARAMETERS: Tone: %s | Theme: %s | Structure framework: %s | Ideal reader: %s | Inspirational pieces: %s | Registered characters: %s
 
+%s
 MATERIAL (written-structure maps and prose excerpts):
 %s
 
@@ -1743,7 +1861,7 @@ Return STRICT JSON only (no markdown fences): {"interventions":[{"chapter_num":3
 Only include triplets that exist in the maps above; drop anything else.`,
 			persona, scopeDesc, s.Title, s.Detail, s.Action,
 			sc.Tone, sc.Theme, structureLabel(sc.Structure, lang), sc.AudienceProfile, sc.InspirationalPieces, castList,
-			material, chapRangeEN)
+			betaBlock, material, chapRangeEN) + ReportLanguageRule(lang)
 	}
 	return fmt.Sprintf(`Eres %s. Previamente diste al autor este punto editorial sobre %s de su novela (PROSA BORRONEADA — el texto existe):
 
@@ -1753,6 +1871,7 @@ TU CONSEJO: %s
 
 PARÁMETROS DE LA NOVELA: Tono: %s | Tema: %s | Marco estructural: %s | Lector ideal: %s | Obras inspiracionales: %s | Personajes registrados: %s
 
+%s
 MATERIAL (mapas de estructura escrita y extractos de prosa):
 %s
 
@@ -1762,7 +1881,7 @@ Devuelve SOLO JSON estricto (sin cercas markdown): {"interventions":[{"chapter_n
 Incluye solo tripletes que existan en los mapas de arriba; descarta todo lo demás.`,
 		persona, scopeDesc, s.Title, s.Detail, s.Action,
 		sc.Tone, sc.Theme, structureLabel(sc.Structure, lang), sc.AudienceProfile, sc.InspirationalPieces, castList,
-		material, chapRangeES)
+		betaBlock, material, chapRangeES) + ReportLanguageRule(lang)
 }
 
 // requestInterventions calls the LLM and keeps only interventions whose
@@ -1942,6 +2061,7 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 	loadDraftedChapterFilesInto(progressPath, state)
 	targets := draftedTargetValidator(state, chapterNums)
 
+	lang := ContentLanguage(cfg)
 	var material strings.Builder
 	for _, ch := range state.Chapters {
 		if ch.Num < start || ch.Num > end {
@@ -1951,15 +2071,16 @@ func ProposeActInterventions(ctx context.Context, apiCfg *config.APIConfig, cfg 
 			continue
 		}
 		fmt.Fprintf(&material, "[Chapter #%d \"%s\"]\nOutline: %s\n%s", ch.Num, ch.Title,
-			draftTruncate(ch.Outline, 800), chapterTropeMapBlock(ch, cfg.Language))
+			draftTruncate(ch.Outline, 800), chapterTropeMapBlock(ch, lang))
 		fmt.Fprintf(&material, "[Prose excerpt] %s\n\n", draftTruncate(ch.Content, 6000))
 	}
 
 	scope := fmt.Sprintf("ACT %d (%s), chapters %d-%d", actNo, act.Name, start, end)
-	if !normalizeLangEN(cfg.Language) {
+	if !normalizeLangEN(lang) {
 		scope = fmt.Sprintf("el ACTO %d (%s), capítulos %d-%d", actNo, act.Name, start, end)
 	}
-	prompt := draftedProposalPrompt(cfg, state, settings, editorPersona(cfg.Language), scope, s, material.String(), chapterNums, targets)
+	beta := latestBetaReport(state, actNo, actDraftedContentFingerprint(state, start, end))
+	prompt := draftedProposalPrompt(cfg, state, settings, editorPersona(lang), scope, s, material.String(), chapterNums, targets, beta)
 	system := "You are a world-famous literary editor turning feedback into CONCRETE small interventions on drafted manuscript prose across an act of chapters: each one targets exactly one subscene of one scene of one chapter. Goal: push the act to global-bestseller level on the pillar under discussion, changing the minimum amount of prose. Output strict JSON exactly as requested — no extra prose, no markdown code fences."
 
 	logger.InfoKey("log.act_analyze_proposing", actNo)

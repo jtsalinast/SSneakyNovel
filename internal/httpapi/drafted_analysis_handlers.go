@@ -347,7 +347,7 @@ func (h *Handlers) PostActAnalyze(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.tryStartTask() {
+	if !h.tryStartTaskLong() {
 		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
 		return
 	}
@@ -361,7 +361,11 @@ func (h *Handlers) PostActAnalyze(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				h.logger.WarnKey("log.act_analyze_cancelled")
+				if h.TaskStoppedByUser() {
+					h.logger.WarnKey("log.act_analyze_cancelled")
+				} else {
+					h.logger.ErrorKey("log.act_analyze_deadline")
+				}
 			} else {
 				h.logger.ErrorKey("log.act_analyze_failed", err)
 			}
@@ -370,6 +374,52 @@ func (h *Handlers) PostActAnalyze(w http.ResponseWriter, r *http.Request) {
 		}
 		h.logger.SuccessKey("log.act_analyze_done", len(h.state.ActAnalyses[actNo].Suggestions))
 		h.logger.TaskEnd("act_analyze", true)
+		h.broadcastProgress()
+	}()
+	h.writeJSON(w, http.StatusAccepted, map[string]any{"status": "started", "act_no": actNo})
+}
+
+// PostActBeta runs ONLY the simulated beta reader panel over one drafted act.
+// It is a separate task from PostActAnalyze so re-running the expert never
+// restarts the readers; the expert reuses the saved session.
+func (h *Handlers) PostActBeta(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w, r) {
+		return
+	}
+	var body struct {
+		ActNo int `json:"act_no"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	actNo, ok := h.actAnalyzeTarget(w, r, body.ActNo)
+	if !ok {
+		return
+	}
+	if !h.tryStartTaskLong() {
+		h.writeErrorReq(w, r, http.StatusConflict, "task_running_wait")
+		return
+	}
+	go func() {
+		defer h.endTask()
+		ctx := h.ensureTaskTokens(h.taskCtx)
+		h.logger.TaskStart("act_beta")
+		err := story.AnalyzeActBeta(ctx, h.apiCfg, h.cfg, h.state, h.settings, actNo, h.progressPath, h.logger)
+		if err == nil {
+			err = story.SaveProgress(h.progressPath, h.state)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				if h.TaskStoppedByUser() {
+					h.logger.WarnKey("log.act_analyze_cancelled")
+				} else {
+					h.logger.ErrorKey("log.beta_task_deadline")
+				}
+			} else {
+				h.logger.ErrorKey("log.beta_task_failed", err)
+			}
+			h.logger.TaskEnd("act_beta", false)
+			return
+		}
+		h.logger.TaskEnd("act_beta", true)
 		h.broadcastProgress()
 	}()
 	h.writeJSON(w, http.StatusAccepted, map[string]any{"status": "started", "act_no": actNo})
@@ -1084,7 +1134,7 @@ func (h *Handlers) startActAnalysisForChapter(num int) {
 }
 
 func (h *Handlers) startActAnalysis(actNo int) {
-	if !h.tryStartTask() {
+	if !h.tryStartTaskLong() {
 		return // another task owns the pipeline; skip silently
 	}
 	go func() {
@@ -1097,7 +1147,11 @@ func (h *Handlers) startActAnalysis(actNo int) {
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				h.logger.WarnKey("log.act_analyze_cancelled")
+				if h.TaskStoppedByUser() {
+					h.logger.WarnKey("log.act_analyze_cancelled")
+				} else {
+					h.logger.ErrorKey("log.act_analyze_deadline")
+				}
 			} else {
 				h.logger.WarnKey("log.act_analyze_failed", err)
 			}

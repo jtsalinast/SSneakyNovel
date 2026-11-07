@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import {
-    progress, taskRunning, addToast, showConfirm,
+    progress, taskRunning, addToast, showConfirm, currentProject,
     foreshadowSuggestions, foreshadowShowSuggestions
   } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
@@ -11,8 +11,10 @@
   import SmartSelect from '../lib/components/SmartSelect.svelte';
   import InfoTip from '../lib/components/InfoTip.svelte';
   import { setRibbon } from '../lib/ribbon.js';
+  import { readLastStep } from '../lib/lastPage.js';
 
-  let viewMode = 'list'; // list | timeline | markdown
+  const savedView = readLastStep($currentProject, 'foreshadows');
+  let viewMode = ['list', 'timeline', 'markdown'].includes(savedView) ? savedView : 'list'; // list | timeline | markdown
   // Section steps (rendered by the shell ribbon): Overview → Timeline →
   // Roadmap doc. The ids double as view modes.
   const fsTabDefs = [

@@ -93,6 +93,8 @@ func buildChapterPlanEditorPrompt(cfg *config.Config, state *Progress, settings 
 
 	schemaEN := `{"summary":"2-4 paragraph editorial letter to the author, warm but honest, in LANGUAGE","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"one-sentence verdict in LANGUAGE"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"short imperative headline","detail":"what the chapter currently does and why it falls short of bestseller level","action":"concrete guidance on which passages/scenes to change and how","applies_to_chapters":[N]}]}`
 
+	schemaES := `{"summary":"carta editorial de 2-4 párrafos al autor, cálida pero honesta, en español","overall_score":75,"pillar_scores":[{"key":"reader_profile","score":0,"criteria_levels":[{"key":"genre_promise","level":0},{"key":"reader_hooks","level":0},{"key":"tropes_freshness","level":0},{"key":"emotional_payoff","level":0},{"key":"comp_distance","level":0}],"note":"veredicto en una frase en español"},{"key":"inspirational_pieces","score":0,"criteria_levels":[...],"note":"..."},{"key":"tone","score":0,"criteria_levels":[...],"note":"..."},{"key":"story_structure","score":0,"criteria_levels":[...],"note":"..."}],"suggestions":[{"category":"hook|pacing|scene_economy|stakes|structure|emotion|pov|budget|other","pillar":"reader_profile|inspirational_pieces|tone|story_structure","criteria":[{"key":"checklist_key_it_repairs"}],"score_impact":10,"title":"titular corto e imperativo","detail":"qué hace el capítulo ahora y por qué no llega a nivel bestseller","action":"indicación concreta de qué pasajes/escenas cambiar y cómo","applies_to_chapters":[N]}]}`
+
 	if normalizeLangEN(lang) {
 		return fmt.Sprintf(`You are %s, a world-famous literary editor whose lists have produced multiple global bestsellers. Your job: give the author a constructive, point-by-point editorial pass over ONE DRAFTED CHAPTER of their novel in progress, with ONE clear goal: turn this book into a global bestseller — every point you make must serve that bar, not mere competence.
 
@@ -141,7 +143,7 @@ Rules:
 - Write summary, titles, details and actions in the SAME language as the chapter prose above.`,
 			editorPersona(lang), whereEn, meta.String(), structureName, history, prevChecklist,
 			strings.TrimSpace(ch.Outline), tropeMap, ch.WordCount, content,
-			structureName, strings.ReplaceAll(schemaEN, "LANGUAGE", lang), ch.Num)
+			structureName, strings.ReplaceAll(schemaEN, "LANGUAGE", ContentLanguageName(lang)), ch.Num)
 	}
 	return fmt.Sprintf(`Eres %s, un editor literario mundialmente famoso cuyas listas han producido múltiples bestsellers globales. Tu trabajo: dar al autor una pasada editorial constructiva y punto por punto sobre UN CAPÍTULO BORRONEADO de su novela en curso, con UN objetivo claro: convertir este libro en un bestseller global — cada punto que plantees debe servir a ese listón, no a la mera corrección.
 
@@ -190,14 +192,14 @@ Reglas:
 - Escribe resumen, títulos, detalles y acciones en el MISMO idioma que la prosa del capítulo de arriba.`,
 		editorPersona(lang), whereEs, meta.String(), structureName, history, prevChecklist,
 		strings.TrimSpace(ch.Outline), tropeMap, ch.WordCount, content,
-		structureName, strings.ReplaceAll(schemaEN, "LANGUAGE", "español"), ch.Num)
+		structureName, schemaES, ch.Num)
 }
 
 // buildChapterPlanEditorPromptForPillar returns the chapter prompt scoped for
 // one call of the editorial sequence: pillarKey == "" is the first-impression
 // call, any pillar key is that pillar's single-pillar pass.
 func buildChapterPlanEditorPromptForPillar(cfg *config.Config, state *Progress, settings *ProjectSettings, idx int, lang, pillarKey string) string {
-	return buildChapterPlanEditorPrompt(cfg, state, settings, idx, lang) + editorialScopeOverride(lang, pillarKey)
+	return buildChapterPlanEditorPrompt(cfg, state, settings, idx, lang) + editorialScopeOverride(lang, pillarKey) + ReportLanguageRule(lang)
 }
 
 // AnalyzeChapterPlan runs the bestseller-editor pass over ONE drafted chapter
@@ -232,7 +234,7 @@ func AnalyzeChapterPlan(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 		logger.InfoKey("log.chapter_analyze_unchanged", ch.Num)
 		return nil
 	}
-	lang := cfg.Language
+	lang := ContentLanguage(cfg)
 	settingsForPrompt := settings
 	if settings != nil {
 		if selected, _ := retrieveSettings(settings, collectAllOutlines(state), settingsContextRunes); selected != nil {
@@ -249,7 +251,7 @@ func AnalyzeChapterPlan(ctx context.Context, apiCfg *config.APIConfig, cfg *conf
 			return prompt
 		}
 		return buildChapterPlanEditorPromptForPillar(cfg, state, settingsForPrompt, idx, lang, pillarKey)
-	})
+	}, draftedGroundingMaterial(state, ch.Num, ch.Num))
 	if err != nil {
 		return err
 	}

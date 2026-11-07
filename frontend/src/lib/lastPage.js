@@ -12,3 +12,17 @@ export function writeLastPage(project, page) {
   if (!project || !page) return;
   try { localStorage.setItem(KEY + project, page); } catch (_) {}
 }
+
+// The ribbon step inside a page is remembered too, so reopening a project
+// returns to the same subsection (Historic Memory vs Progression, etc.).
+const STEP_KEY = 'lastStep:';
+
+export function readLastStep(project, page) {
+  if (!project || !page) return null;
+  try { return localStorage.getItem(STEP_KEY + project + ':' + page); } catch (_) { return null; }
+}
+
+export function writeLastStep(project, page, step) {
+  if (!project || !page || !step) return;
+  try { localStorage.setItem(STEP_KEY + project + ':' + page, step); } catch (_) {}
+}

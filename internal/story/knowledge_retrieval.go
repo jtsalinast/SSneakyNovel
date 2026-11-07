@@ -15,6 +15,7 @@ const memoryContextRunes = 8000
 
 type knowledgeDocument struct {
 	id, name, text string
+	aliases        []string
 	priority       float64
 }
 
@@ -118,6 +119,36 @@ func knowledgeNameMatch(query, name string) bool {
 	return false
 }
 
+// knowledgeEntityMatch treats an alias as a first-class name for retrieval.
+func knowledgeEntityMatch(query, name string, aliases []string) bool {
+	if knowledgeNameMatch(query, name) {
+		return true
+	}
+	for _, alias := range aliases {
+		if knowledgeNameMatch(query, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+// entityAliasList decodes the aliases field of a JSON-map entity.
+func entityAliasList(entity map[string]any) []string {
+	switch v := entity["aliases"].(type) {
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return NormalizeAliases(out)
+	case []string:
+		return NormalizeAliases(v)
+	}
+	return nil
+}
+
 // BM25 ranks original records. Stable ties preserve deterministic prompts.
 // ponytail: rebuild the in-memory term index per request; cache by revision only
 // if profiling shows indexing dominates model latency on very large projects.
@@ -133,7 +164,7 @@ func rankKnowledge(docs []knowledgeDocument, query string) []int {
 	df := map[string]int{}
 	total := 0
 	for i, doc := range docs {
-		frequencies[i] = knowledgeTerms(doc.name + " " + doc.text)
+		frequencies[i] = knowledgeTerms(doc.name + " " + strings.Join(doc.aliases, " ") + " " + doc.text)
 		for term, count := range frequencies[i] {
 			lengths[i] += count
 			if queryTerms[term] > 0 {
@@ -147,7 +178,7 @@ func rankKnowledge(docs []knowledgeDocument, query string) []int {
 	order := []int{}
 	for i, doc := range docs {
 		score := doc.priority
-		if knowledgeNameMatch(query, doc.name) {
+		if knowledgeEntityMatch(query, doc.name, doc.aliases) {
 			score += 1000
 		}
 		for _, term := range terms {
@@ -208,11 +239,12 @@ func retrieveSettings(settings *ProjectSettings, query string, budget int) (*Pro
 		for _, entity := range entities[kind] {
 			id, _ := entity["id"].(string)
 			name, _ := entity["name"].(string)
+			aliases := entityAliasList(entity)
 			data, complete := settingExcerpt(entity, query, min(2400, max(0, budget-100)))
-			docs = append(docs, knowledgeDocument{id: id, name: name, text: data})
+			docs = append(docs, knowledgeDocument{id: id, name: name, aliases: aliases, text: data})
 			full = append(full, complete)
 			kinds = append(kinds, kind)
-			if knowledgeNameMatch(query, name) {
+			if knowledgeEntityMatch(query, name, aliases) {
 				direct[id] = true
 			}
 		}

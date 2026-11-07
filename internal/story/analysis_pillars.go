@@ -372,7 +372,7 @@ func finalizePillarReport(in []PillarAssessment, suggestions []FinalizableSugges
 		if !valid || graded[k] != nil {
 			continue
 		}
-		g := &pillarGrades{levels: map[string]int{}, note: strings.TrimSpace(p.Note), hasScore: true}
+		g := &pillarGrades{levels: map[string]int{}, note: strings.TrimSpace(p.Note), hasScore: p.Score > 0 || len(p.CriteriaLevels) > 0}
 		g.score = p.Score
 		if g.score < 0 || g.score > 100 {
 			g.score = 0
@@ -406,13 +406,19 @@ func finalizePillarReport(in []PillarAssessment, suggestions []FinalizableSugges
 				if v, ok := g.levels[c.Key]; ok {
 					lv = v
 					levels = append(levels, v)
+				} else if g.hasScore {
+					// The model returned a pillar score but skipped this item:
+					// keep the rubric fully graded by distributing its own score
+					// instead of persisting an "ungraded" (-1) sub-criterion.
+					lv = g.score
+					levels = append(levels, g.score)
 				}
 			}
 			checklist[i].Level = lv
 		}
 		pa.Checklist = checklist
 		switch {
-		case g == nil:
+		case g == nil || !g.hasScore:
 			pa.Score = strongPillarScore - 1 // ungraded pillar: never claim "strong"
 		case len(levels) > 0:
 			pa.Score = deriveScoreFromCriteria(levels) // rubric-derived score
@@ -450,6 +456,22 @@ func finalizePillarReport(in []PillarAssessment, suggestions []FinalizableSugges
 		sanitized[i] = s
 	}
 	return out, sanitized
+}
+
+// ungradedPillarKeys lists pillars whose checklist still has an ungraded item
+// after finalization (the model returned no usable grade at all). Callers that
+// promise a fully graded rubric must refuse to persist such a report.
+func ungradedPillarKeys(in []PillarAssessment) []string {
+	var out []string
+	for _, p := range in {
+		for _, c := range p.Checklist {
+			if c.Level < 0 {
+				out = append(out, p.Key)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // pillarContractPromptBlockEN renders the grading-rubric instructions added

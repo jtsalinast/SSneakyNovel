@@ -25,10 +25,10 @@
   import { createEventDispatcher } from 'svelte';
   import { get } from 'svelte/store';
   import { uiLocale, translate } from '../i18n/index.js';
-  import { CONFLICT_TERMS_EN, PROTAGONIST_TERMS_EN } from '../termDescriptions.js';
+  import { projectLanguage } from '../stores.js';
   import { GENRES, SUBGENRE_DATA, genreBucketKeys } from '../novelwriterGenres.js';
   import {
-    buildSubgenreIndex, subgenresForKeys, resolveParent, norm, cascadeForSelection,
+    buildSubgenreIndex, subgenresForKeys, resolveParent, norm, tooltipKey, cascadeForSelection,
     splitSubgenreText, subgenreBelongsToAny, normalizeBuckets,
   } from '../subgenreTaxonomy.js';
 
@@ -74,38 +74,31 @@
 
   // —— Rich item lists (round 24) ——————————————————————————————————————
   // Secondary description lines exactly like the legacy comboboxes had:
-  //  * Genre rows        -> GENRE_BLURBS (static, EN/ZH, keyed by GENRES key)
-  //  * Subgenre rows     -> backend subgenre_hints (`hints` prop)
-  //  * Conflict/Protag   -> term-family blurbs (EN/ES), keyword-resolved
-  //  * Length/Structure  -> LENGTH_BLURBS / backend structure_hints
-  const GENRE_BLURBS = {
-    en: {
-      fantasy: 'Imaginative worlds with magic, mythical creatures or supernatural rules — from epic secondary worlds to urban hidden societies.',
-      scifi: 'Speculative fiction grounded in technology, science or future societies: space opera, cyberpunk, dystopia, first contact…',
-      mystery: 'Crime and puzzles at the center: an investigation drives the plot, from cozy village whodunits to hard-boiled noir and heists.',
-      romance: 'The love story is the main plot — emotional arcs, relationship obstacles and a satisfying ending are promised to the reader.',
-      thriller: 'Pace, danger and suspense: chases, conspiracies and high stakes, whether espionage, legal, domestic or action-driven.',
-      horror: 'Designed to frighten and unsettle: supernatural dread, cosmic insignificance, body terror or the monsters next door.',
-      historical: 'Fiction anchored in a real period, with period-authentic settings, customs and events shaping the characters’ lives.',
-      western: 'Frontier stories of lawlessness, honor codes and open land — classic, spaghetti, weird or transplanted to space.',
-      drama: 'Character-first literary fiction: family sagas, coming-of-age, psychorealism, metafiction, existentialist and philosophical stories.',
-      comedy: 'Fiction whose primary promise is laughter — parody, farce, sitcom ensembles, dark and absurdist humor, workplace and paranormal comedy.',
-      adventure: 'Movement-driven fiction: quests, exploration, survival and treasure hunts where the journey and its dangers are the plot.',
-      mystery_thriller: 'Crime, puzzles and suspense: investigations from cozy whodunits to hard-boiled noir, plus chases, conspiracies and high-stakes thrillers.',
-    },
-  };
-  const LENGTH_BLURBS = {
-    en: {
-      flash: 'Flash fiction: a single continuous piece (under ~1,500 words). One moment, one turn — chapters here are micro-units.',
-      short: 'Short story (~1,500–7,500 words): one arc, few characters, immediate resolution. Compact pacing.',
-      novelette: 'Novelette (7,500–17,500 words): a fuller arc with one subplot; more room for character growth than a short.',
-      novella: 'Novella (17,500–40,000 words): focused plot, limited cast, novelistic depth without epic breadth.',
-      light_novel: 'Light Novel: Japanese-style serial prose — short punchy chapters (~3,500 words), dialogue-heavy, arc-driven.',
-      anthology: 'Anthology: a collection of self-contained stories linked by theme or world; each entry has its own arc.',
-      novel: 'Standard novel (~60k–90k words): full multi-chapter arc; ~4,000-word chapters balance pace and depth.',
-      epic: 'Epic novel (100k+ words): multiple POVs/subplots and world-scale stakes; longer ~5,000-word chapters.',
-    },
-  };
+  //  * Genre / Subgenre / Length / Structure / Conflict / Protagonist
+  //    -> /api/novel-params hints, resolved by the backend from
+  //       internal/config/Tooltips_helpers.json in the story language.
+  //  * Family blurbs below are only the fallback for free-text terms.
+  //
+  // The exact tables are reactive so the UI follows the live Story language
+  // selection without a reload; Config refetches the payload after saving.
+  $: genreHints = (paramsPayload && paramsPayload.genre_hints) || {};
+  $: lengthHints = (paramsPayload && paramsPayload.length_hints) || {};
+  $: settingHints = (paramsPayload && paramsPayload.setting_hints) || hints || {};
+  $: conflictHints = (paramsPayload && paramsPayload.conflict_hints) || {};
+  $: protagonistHints = (paramsPayload && paramsPayload.protagonist_hints) || {};
+  // Family blurbs ship EN + ES only; pick by the story language (not the UI
+  // language) so a Spanish story reads Spanish tooltips.
+  $: storyLang = (() => {
+    const pinned = String(cfg?.output_language || '').toLowerCase();
+    if (pinned === 'es') return 'es';
+    if (pinned === 'en') return 'en';
+    return $projectLanguage === 'es' ? 'es' : 'en';
+  })();
+
+  function settingHint(token) {
+    return settingHints[tooltipKey(token)] || '';
+  }
+
   const CONFLICT_FAMILIES = {
     en: {
       personal: 'Private stakes lived close to the ground: one relationship, one conscience, one promise at a time. Intimate scope, few people affected.',
@@ -163,13 +156,10 @@
   // Conflict-scale / Protagonist-type vocabularies shipped by the backend
   // (config.GenreConflictScales / GenreProtagonistTypes) contain hundreds of
   // specific terms ("Heavenly Tribulation", "Netrunner", "Dungeon Economy"…)
-  // that matched no family and therefore rendered WITHOUT any second-line
-  // description. CONFLICT_TERMS_EN / PROTAGONIST_TERMS_EN (lib/termDescriptions.js)
-  // now cover every term in those catalogs verbatim (case-insensitive exact
-  // lookup), so each combobox row always shows its own explanation.
-
-  const CONFLICT_TERMS = { en: CONFLICT_TERMS_EN, es: CONFLICT_TERMS_EN };
-  const PROTAGONIST_TERMS = { en: PROTAGONIST_TERMS_EN, es: PROTAGONIST_TERMS_EN };
+  // that matched no family. The exact tables now come from
+  // /api/novel-params (internal/config/Tooltips_helpers.json), already
+  // resolved to the story language, so each combobox row shows its own
+  // explanation.
 
   function famKey(text) {
     const t = String(text || '').toLowerCase();
@@ -201,23 +191,11 @@
     if (has('trickster', 'con ', 'con-artist', 'grifter', 'bard', 'schemer', 'impostor', 'jester', 'charmer')) return 'trickster';
     return '';
   }
-  function itemDesc(text, fams, keyFn, exactTable) {
-    const lang = get(uiLocale) === 'zh' ? 'es' : 'en'; // family catalogs ship EN + ES
-    const tbl = exactTable ? (exactTable[lang] || exactTable.en) : null;
-    if (tbl) {
-      const k = String(text || '').trim().toLowerCase();
-      if (tbl[k]) return tbl[k];
-    }
-    const k = keyFn(text);
-    return k ? (fams[lang] || fams.en)[k] || '' : '';
-  }
-  function genreBlurb(key) {
-    const lang = get(uiLocale) === 'zh' ? 'zh' : 'en';
-    return (GENRE_BLURBS[lang] || GENRE_BLURBS.en)[key] || '';
-  }
-  function lengthBlurb(k) {
-    const lang = get(uiLocale) === 'zh' ? 'zh' : 'en';
-    return (LENGTH_BLURBS[lang] || LENGTH_BLURBS.en)[k] || '';
+  function itemDesc(text, fams, keyFn, exactTable, lang) {
+    const k = tooltipKey(text);
+    if (exactTable && exactTable[k]) return exactTable[k];
+    const fk = keyFn(text);
+    return fk ? (fams[lang] || fams.en)[fk] || '' : '';
   }
   // Localized option labels for length/structure. Resolved directly through
   // the i18n catalog (reactive on uiLocale) — same keys the legacy comboboxes
@@ -230,15 +208,14 @@
   }
 
   // —— Specific-settings tooltip map (round 24) ———————————————————————————
-  // Backend subgenre_hints also carries a blurb per SETTING token (e.g.
-  // "magic_school") alongside the subgenre ones — exact-key lookup only, so
-  // tokens that have no hint simply show no tooltip.
+  // setting_hints carries one blurb per SETTING token (e.g. "magic_school")
+  // from the shared catalog; exact-key lookup only, so tokens without an entry
+  // simply show no tooltip.
   $: settingsHintMap = (() => {
     const m = {};
-    const src = hints || {};
     for (const s of settingOpts) {
-      const k = String(s).toLowerCase();
-      if (src[k]) m[s] = src[k];
+      const hint = settingHint(s);
+      if (hint) m[s] = hint;
     }
     return m;
   })();
@@ -247,7 +224,7 @@
   // Options come from the STATIC GENRES table, so they render immediately even
   // before /api/novel-params arrives. Multi-select chips, exactly like the
   // legacy Genre field; free text becomes "Other".
-  $: genreOpts = GENRES.map((g) => ({ value: g.label, label: g.label, desc: genreBlurb(g.key) }));
+  $: genreOpts = GENRES.map((g) => ({ value: g.label, label: g.label, desc: genreHints[g.key] || '' }));
   // Reactive local selection keys, synced from cfg.type (so editing either
   // block keeps both in sync — same storage format).
   $: myGenreKeys = (() => {
@@ -315,24 +292,11 @@
   // when none of them belongs to the new selection anymore — see onGenreChange).
   $: index = buildSubgenreIndex(paramsPayload);
   $: filteredLabels = subgenresForKeys(index, effectiveKeys);
-  // Round 27 hint lookup: the backend ships SubgenreHints keyed by display
-  // label ("cozy mystery") AND — since this round — a snake_case alias
-  // ("cozy_mystery"). Free-text chips may arrive in any spelling, so we try
-  // every normalization here instead of relying on the server alone.
+  // Hint lookup: /api/novel-params ships subgenre_hints keyed by the shared
+  // catalog's snake_case token, so free-text chips in any spelling resolve
+  // through the same normalizer as the backend.
   function hintFor(text) {
-    const src = hints || {};
-    const raw = String(text || '');
-    const flat = raw.toLowerCase().replace(/\s+/g, ' ').trim(); // collapse spaces
-    const cands = [
-      norm(raw),                        // "cozy mystery" (spaces, lowercase)
-      flat,                             // "road-trip comedy" (hyphens kept, spaces collapsed)
-      flat.replace(/-+/g, ' '),         // "road trip comedy" (hyphens -> spaces)
-      flat.replace(/-+/g, '_'),         // "road_trip_comedy"
-      norm(raw).replace(/ +/g, '_'),    // "cozy_mystery"
-      raw.trim().toLowerCase().replace(/[ -]+/g, '_'),
-    ];
-    for (const k of cands) { if (src[k]) return src[k]; }
-    return '';
+    return (hints || {})[tooltipKey(text)] || '';
   }
   $: subOpts = (() => {
     const opts = filteredLabels.map((s) => ({
@@ -371,8 +335,8 @@
     cfg.subgenre,
     effectiveKeys,
   );
-  $: conflictOpts = (cascade.conflicts || []).map((c) => ({ value: c, label: c, desc: itemDesc(c, CONFLICT_FAMILIES, famKey, CONFLICT_TERMS) }));
-  $: protagOpts = (cascade.protagonists || []).map((p) => ({ value: p, label: p, desc: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey, PROTAGONIST_TERMS) }));
+  $: conflictOpts = (cascade.conflicts || []).map((c) => ({ value: c, label: c, desc: itemDesc(c, CONFLICT_FAMILIES, famKey, conflictHints, storyLang) }));
+  $: protagOpts = (cascade.protagonists || []).map((p) => ({ value: p, label: p, desc: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey, protagonistHints, storyLang) }));
   $: settingOpts = cascade.settings || [];
 
   // Checked-state helpers over cfg.specific_settings (newline-separated tokens,
@@ -551,7 +515,7 @@
   const protagItem = (p) => ({
     id: 'pt:' + p,
     label: p,
-    description: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey, PROTAGONIST_TERMS),
+    description: itemDesc(p, PROTAGONIST_FAMILIES, protagFamKey, protagonistHints, storyLang),
   });
   $: smartProtagGroups = (() => {
     const gs = [];
@@ -657,7 +621,7 @@
   const conflictItem = (c) => ({
     id: 'cf:' + c,
     label: c,
-    description: itemDesc(c, CONFLICT_FAMILIES, famKey, CONFLICT_TERMS),
+    description: itemDesc(c, CONFLICT_FAMILIES, famKey, conflictHints, storyLang),
   });
   $: smartConflictGroups = (() => {
     const gs = [];
@@ -800,7 +764,7 @@
   // same comma-separated format the real Genre field stores. PoC only.
   $: smartGenreGroups = [{
     label: 'Géneros',
-    items: GENRES.map((g) => ({ id: 'gn:' + g.key, label: g.label, description: genreBlurb(g.key) })),
+    items: GENRES.map((g) => ({ id: 'gn:' + g.key, label: g.label, description: genreHints[g.key] || '' })),
   }];
   function onSmartGenreChange(e) {
     // Primary path: the keys come from e.detail.ids ('gn:<key>' per chip, 'cx:'
@@ -901,7 +865,7 @@
     // NOTE: the key is `description`, not `desc` — SmartCombobox and
     // SmartSelect read item.description for their two-line dropdown rows and
     // summary popovers; a misnamed field silently drops every second line.
-    return vals.map((k) => ({ value: k, label: locLabel(k, 'length.', String(k).replaceAll('_', ' ')), description: lengthBlurb(k) }));
+    return vals.map((k) => ({ value: k, label: locLabel(k, 'length.', String(k).replaceAll('_', ' ')), description: lengthHints[k] || '' }));
   })();
   function onLengthChange(e) {
     const v = String(e.detail.value || '').trim();
@@ -1135,7 +1099,7 @@
                spans ceil(count/3) rows), so chips never stretch to full width. -->
           <div class="chips-columns mt-1" style="--chip-count: {modifierGroups.length}">
             {#each modifierGroups as grp}
-              <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+              <label class="chip-selectable chip-pop" title={grp.settings.map(settingHint).filter(Boolean).join(' ') || grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
                 <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
                 <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
@@ -1382,7 +1346,7 @@
         <!-- Modifiers in 3 content-width columns (see .chips-columns in app.css). -->
         <div class="chips-columns mt-1" style="--chip-count: {modifierGroups.length}">
           {#each modifierGroups as grp}
-            <label class="chip-selectable chip-pop" title={grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
+            <label class="chip-selectable chip-pop" title={grp.settings.map(settingHint).filter(Boolean).join(' ') || grp.settings.map((x) => x.replaceAll('_', ' ')).join(', ')}>
               <input type="checkbox" checked={modifierChecked(grp.name)} on:change={() => toggleModifier(grp.name)} disabled={disabled} />
               <svg class="chip-check-icon" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
